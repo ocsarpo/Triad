@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const context = {};
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../Resources/queue.js'), 'utf8'), context);
-const { positionFor, nextIndex } = context.TriadQueue;
+const { positionFor, nextIndex, canRemoveMessage } = context.TriadQueue;
 
 const queue = [
   { id: 'c1', kind: 'agent', agent: 'codex' },
@@ -26,4 +26,15 @@ test('대상 AI의 가장 오래된 항목을 찾는다', () => {
   assert.equal(nextIndex(queue, 'agent', 'claude'), 1);
   assert.equal(nextIndex(queue, 'collaboration'), 3);
   assert.equal(nextIndex(queue, 'agent', 'missing'), -1);
+});
+
+test('마지막 대기 작업 취소 시 실행 전 사용자 메시지를 제거한다', () => {
+  const removed = { id: 'q1', kind: 'agent', agent: 'codex', messageId: 'm1' };
+  assert.equal(canRemoveMessage([], removed, { id: 'm1', workStarted: false }), true);
+});
+
+test('같은 메시지의 다른 대기 작업이나 시작된 작업이 있으면 메시지를 유지한다', () => {
+  const removed = { id: 'q1', kind: 'agent', agent: 'codex', messageId: 'm1' };
+  assert.equal(canRemoveMessage([{ id: 'q2', kind: 'agent', agent: 'claude', messageId: 'm1' }], removed, { id: 'm1' }), false);
+  assert.equal(canRemoveMessage([], removed, { id: 'm1', workStarted: true }), false);
 });

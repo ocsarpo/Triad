@@ -797,14 +797,17 @@
       addTrace(agent,'info','명령 전달',{model:config.model,effort:config.effort,speed:config.speedMode,workspace:config.workspacePath,writableRoots:config.writableRoots||'',networkAccess:!!config.networkAccess,allowLocalBinding:!!config.allowLocalBinding,session:state.sessions[agent]?'resume':'new',mode:state.orchestration?.mode||'independent'});
       post({action:'run',agent,prompt,config:state.settings[agent],agentConfigs:state.settings,collaboration:state.collaboration,mcpEnabled:state.orchestration?.mode==='agent',session:state.sessions[agent]});return true;
     }
-    function enqueueAgent(agent,prompt,sourceText) {
-      const item={id:id(),kind:'agent',agent,prompt,sourceText,createdAt:Date.now()};
+    function markMessageWorkStarted(messageId) {
+      const message=state.messages.find(item=>item.id===messageId);if(message)message.workStarted=true;
+    }
+    function enqueueAgent(agent,prompt,sourceText,messageId) {
+      const item={id:id(),kind:'agent',agent,prompt,sourceText,messageId,createdAt:Date.now()};
       state.queue.push(item);renderQueue();
       addTrace(agent,'info','순차 대기열 등록',{position:window.TriadQueue.positionFor(state.queue,item),characters:prompt.length});
       return item;
     }
-    function enqueueCollaboration(objective,sourceText) {
-      const item={id:id(),kind:'collaboration',objective,sourceText,collaboration:clone(state.collaboration),createdAt:Date.now()};
+    function enqueueCollaboration(objective,sourceText,messageId) {
+      const item={id:id(),kind:'collaboration',objective,sourceText,messageId,collaboration:clone(state.collaboration),createdAt:Date.now()};
       state.queue.push(item);renderQueue();
       addTrace(state.collaboration.lead,'info','협업 순차 대기열 등록',{position:window.TriadQueue.positionFor(state.queue,item),mode:state.collaboration.mode});
       return item;
@@ -824,13 +827,15 @@
     function cancelQueued(itemId) {
       const index=state.queue.findIndex(item=>item.id===itemId);if(index<0)return;
       const [item]=state.queue.splice(index,1);const agent=item.kind==='collaboration'?(item.collaboration?.lead||state.collaboration.lead):item.agent;
-      addTrace(agent,'info','대기 작업 취소',{target:item.kind==='collaboration'?'협업':names[item.agent]});renderQueue();
+      const message=state.messages.find(candidate=>candidate.id===item.messageId);
+      if(window.TriadQueue.canRemoveMessage(state.queue,item,message))state.messages=state.messages.filter(candidate=>candidate.id!==item.messageId);
+      addTrace(agent,'info','대기 작업 취소',{target:item.kind==='collaboration'?'협업':names[item.agent]});renderQueue();renderMessages();
       setTimeout(drainQueues,0);
     }
     function drainAgentQueue(agent) {
       if(state.orchestration||state.running[agent])return false;
       const index=window.TriadQueue.nextIndex(state.queue,'agent',agent);if(index<0)return false;
-      const [item]=state.queue.splice(index,1);renderQueue();
+      const [item]=state.queue.splice(index,1);markMessageWorkStarted(item.messageId);renderQueue();
       addTrace(agent,'info','대기 작업 시작',{remaining:state.queue.filter(candidate=>candidate.kind==='agent'&&candidate.agent===agent).length});
       return dispatchAgent(agent,item.prompt);
     }
@@ -840,7 +845,7 @@
       const firstAgentIndex=state.queue.findIndex(item=>item.kind==='agent');
       if(collaborationIndex>=0&&(firstAgentIndex<0||collaborationIndex<firstAgentIndex)){
         if(agents.some(agent=>state.running[agent]))return;
-        const [item]=state.queue.splice(collaborationIndex,1);state.collaboration=clone(item.collaboration);renderQueue();renderCollaboration();
+        const [item]=state.queue.splice(collaborationIndex,1);markMessageWorkStarted(item.messageId);state.collaboration=clone(item.collaboration);renderQueue();renderCollaboration();
         addTrace(state.collaboration.lead,'info','대기 협업 시작',{remaining:state.queue.filter(candidate=>candidate.kind==='collaboration').length});startCollaboration(item.objective);return;
       }
       agents.forEach(drainAgentQueue);
@@ -931,15 +936,15 @@
         const title=original.replace(/(?:#|@)(?:codex|코덱스|claude|클로드|all|모두)(?=$|[\s,.:;!?])/giu,'').replace(/@"[^"]+"/g,'').replace(/\s+/g,' ').trim();
         if(title)active.title=title.slice(0,36)+(title.length>36?'…':'');
       }
-      addMessage('user',original);
+      const userMessageId=addMessage('user',original);
       if(state.collaboration.mode==='independent'){
         routed.targets.forEach(agent=>{
           const alreadyQueued=state.queue.some(item=>item.kind==='agent'&&item.agent===agent);
-          if(state.orchestration||state.running[agent]||alreadyQueued)enqueueAgent(agent,routed.prompts[agent],original);
-          else dispatchAgent(agent,routed.prompts[agent]);
+          if(state.orchestration||state.running[agent]||alreadyQueued)enqueueAgent(agent,routed.prompts[agent],original,userMessageId);
+          else {markMessageWorkStarted(userMessageId);dispatchAgent(agent,routed.prompts[agent]);}
         });
-      } else if(state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length)enqueueCollaboration(routed.prompt,original);
-      else startCollaboration(routed.prompt);
+      } else if(state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length)enqueueCollaboration(routed.prompt,original,userMessageId);
+      else {markMessageWorkStarted(userMessageId);startCollaboration(routed.prompt);}
       setTimeout(()=>{state.forceMessageBottom=false;drainQueues();},0);
     }
 

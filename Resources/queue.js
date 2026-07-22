@@ -14,7 +14,12 @@
     return queue.findIndex(item => item.kind === kind && (kind === 'collaboration' || item.agent === agent));
   }
 
-  const api = { targetKey, positionFor, nextIndex };
+  function canRemoveMessage(queue, removedItem, message) {
+    if (!removedItem?.messageId || !message || message.workStarted) return false;
+    return !queue.some(item => item.messageId === removedItem.messageId);
+  }
+
+  const api = { targetKey, positionFor, nextIndex, canRemoveMessage };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.TriadQueue = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="background" x1="110" y1="80" x2="914" y2="950" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#29243F"/>
+      <stop offset="0.52" stop-color="#1D1D2A"/>
+      <stop offset="1" stop-color="#15171F"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="350" y1="40" x2="55" y2="455" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8BBAFF"/>
+      <stop offset="1" stop-color="#3E7EF2"/>
+    </linearGradient>
+    <linearGradient id="orange" x1="674" y1="40" x2="969" y2="455" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFB086"/>
+      <stop offset="1" stop-color="#DC693D"/>
+    </linearGradient>
+    <linearGradient id="violet" x1="190" y1="980" x2="834" y2="710" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B8A0F5"/>
+      <stop offset="1" stop-color="#795AD1"/>
+    </linearGradient>
+    <clipPath id="squircle">
+      <rect x="62" y="62" width="900" height="900" rx="210"/>
+    </clipPath>
+  </defs>
+
+  <rect x="62" y="62" width="900" height="900" rx="210" fill="url(#background)"/>
+
+  <!-- Filled sectors: the square edges form each straight side and the curves face the center. -->
+  <g clip-path="url(#squircle)">
+    <path d="M 62 62 H 350 C 350 236, 260 350, 62 456 Z" fill="url(#blue)"/>
+    <path d="M 674 62 H 962 V 456 C 764 350, 674 236, 674 62 Z" fill="url(#orange)"/>
+    <path d="M 188 962 C 230 700, 794 700, 836 962 Z" fill="url(#violet)"/>
+  </g>
+
+  <rect x="72" y="72" width="880" height="880" rx="200" fill="none" stroke="#FFFFFF" stroke-opacity="0.075" stroke-width="4"/>
+</svg>

@@ -1,0 +1,1375 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Triad</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f4f4f2;
+      --panel: rgba(255,255,255,.78);
+      --card: #fff;
+      --text: #1a1b1e;
+      --muted: #74777e;
+      --line: rgba(20,24,32,.12);
+      --codex: #306fe8;
+      --claude: #c35b30;
+      --all: #7656c8;
+      --danger: #c33131;
+      --shadow: 0 10px 35px rgba(28,35,48,.08);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #151619;
+        --panel: rgba(30,31,35,.88);
+        --card: #24262b;
+        --text: #f3f4f6;
+        --muted: #9a9da5;
+        --line: rgba(255,255,255,.11);
+        --shadow: 0 10px 35px rgba(0,0,0,.22);
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body {
+      font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif;
+      color: var(--text); background: var(--bg); user-select: none;
+    }
+    button, input, select, textarea { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    .app { display: grid; grid-template-columns: 230px minmax(520px, 1fr) 310px 350px; width: 100%; height: 100%; min-height: 0; overflow: hidden; }
+    .conversation-panel { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0,1fr); border-right: 1px solid var(--line); background: var(--panel); }
+    .conversation-head { display: flex; align-items: center; gap: 8px; padding: 17px 14px 12px; }
+    .conversation-head h2 { margin: 0 auto 0 0; font-size: 15px; }
+    .new-chat { border: 0; border-radius: 8px; padding: 5px 9px; background: var(--all); color: white; font-size: 11px; font-weight: 700; }
+    .conversation-search { margin: 0 12px 9px; width: calc(100% - 24px); height: 31px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); outline: none; }
+    .conversation-list { min-height: 0; overflow-y: auto; padding: 2px 8px 14px; }
+    .conversation-item { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 5px; width: 100%; margin-bottom: 3px; padding: 9px 7px 9px 10px; border: 1px solid transparent; border-radius: 10px; background: transparent; text-align: left; }
+    .conversation-item:hover { background: color-mix(in srgb, var(--card), transparent 35%); }
+    .conversation-item.active { border-color: color-mix(in srgb, var(--all), transparent 65%); background: color-mix(in srgb, var(--all), transparent 88%); }
+    .conversation-main { min-width: 0; cursor: pointer; }
+    .conversation-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
+    .conversation-time { display: block; margin-top: 2px; color: var(--muted); font-size: 9px; }
+    .conversation-rename { width: 100%; min-width: 0; height: 25px; padding: 3px 6px; outline: none; border: 1px solid var(--all); border-radius: 6px; background: var(--card); color: var(--text); font: 650 11px/1.3 -apple-system, BlinkMacSystemFont, sans-serif; box-shadow: 0 0 0 2px color-mix(in srgb, var(--all), transparent 84%); }
+    .conversation-actions { display: flex; align-items: flex-start; gap: 1px; opacity: 0; }
+    .conversation-item:hover .conversation-actions, .conversation-item.active .conversation-actions { opacity: 1; }
+    .conversation-action { width: 21px; height: 21px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 11px; }
+    .conversation-action:hover { background: var(--card); color: var(--text); }
+    .conversation-action.confirm-delete { width: auto; padding: 0 6px; background: color-mix(in srgb, var(--danger), transparent 88%); color: var(--danger); }
+    .chat { position: relative; min-width: 0; min-height: 0; height: 100%; overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+    header {
+      height: 76px; padding: 14px 20px; display: flex; align-items: center; gap: 18px;
+      border-bottom: 1px solid var(--line); background: var(--panel); backdrop-filter: blur(18px);
+    }
+    .brand { margin-right: auto; }
+    .brand h1 { margin: 0; font-size: 21px; letter-spacing: -.5px; }
+    .brand p { margin: 1px 0 0; color: var(--muted); font-size: 12px; }
+    .agent-pill {
+      display: flex; align-items: center; gap: 8px; min-width: 174px; padding: 7px 10px;
+      border: 1px solid var(--line); border-radius: 12px; background: var(--card);
+    }
+    .agent-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #37a862; flex: none; }
+    .agent-pill.running .dot { background: #e69a2e; box-shadow: 0 0 0 4px rgba(230,154,46,.15); }
+    .agent-pill strong { display: block; font-size: 12px; line-height: 1.2; }
+    .agent-pill small { display: block; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; }
+    .agent-pill .usage-summary { margin-top: 1px; color: color-mix(in srgb, var(--text), var(--muted) 45%); font-size: 9px; }
+    .usage-refresh { width: 28px; height: 28px; flex: none; padding: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--muted); }
+    .usage-refresh.loading { animation: spin .8s linear infinite; }
+    .trace-toggle { height: 28px; flex: none; padding: 0 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--muted); white-space: nowrap; font-size: 10px; }
+    .chat-workspace { min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0,1fr); overflow: hidden; }
+    .chat.diff-open .chat-workspace { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+    .message-pane { position: relative; min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(0,1fr); overflow: hidden; }
+    .diff-pane { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0,1fr); overflow: hidden; border-left: 1px solid var(--line); background: var(--card); }
+    .diff-pane[hidden] { display: none; }
+    .diff-head { display: flex; align-items: center; gap: 9px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+    .diff-head h2 { margin: 0 4px 0 0; font-size: 13px; }
+    .diff-head select { height: 28px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 10px; }
+    .diff-workspace { min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 9px; }
+    .diff-body { min-width: 0; min-height: 0; display: grid; grid-template-columns: 145px minmax(0,1fr); overflow: hidden; }
+    .diff-file-list { min-width: 0; min-height: 0; overflow-y: auto; padding: 7px 6px 18px; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--panel), var(--bg) 20%); }
+    .diff-file { width: 100%; margin-bottom: 3px; padding: 7px 7px; overflow: hidden; border: 1px solid transparent; border-radius: 7px; background: transparent; text-align: left; }
+    .diff-file:hover { background: var(--card); }
+    .diff-file.active { border-color: color-mix(in srgb, var(--codex), transparent 65%); background: color-mix(in srgb, var(--codex), transparent 88%); }
+    .diff-file-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .diff-file-meta { display: flex; gap: 5px; margin-top: 3px; font-size: 8px; }
+    .diff-additions { color: #238636; } .diff-deletions { color: #cf3f4f; }
+    .diff-content { min-height: 0; overflow: auto; margin: 0; padding: 15px 17px 30px; background: color-mix(in srgb, var(--bg), #000 3%); user-select: text; white-space: pre; tab-size: 2; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .diff-file-section { display: block; box-sizing: border-box; width: max-content; min-width: 100%; scroll-margin-top: 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); box-shadow: 0 1px 3px rgba(20,24,32,.04); }
+    .diff-file-section + .diff-file-section { margin-top: 24px; }
+    .diff-section-header { position: sticky; z-index: 2; top: -15px; display: flex; align-items: center; gap: 7px; min-height: 37px; padding: 7px 10px; border-bottom: 1px solid var(--line); border-radius: 8px 8px 0 0; background: color-mix(in srgb, var(--panel), var(--bg) 12%); white-space: normal; }
+    .diff-section-icon { color: var(--muted); font: 12px/1 sans-serif; }
+    .diff-section-title { min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; font: 800 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .diff-section-status { flex: none; padding: 1px 5px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); font: 8px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; }
+    .diff-section-stats { display: flex; flex: none; gap: 5px; font: 9px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; }
+    .diff-code-body { display: block; width: max-content; min-width: 100%; padding: 7px 0; }
+    .diff-line { display: block; box-sizing: border-box; width: 100%; min-height: 1.5em; padding: 0 10px; }
+    .diff-line.add { color: #238636; background: rgba(46,160,67,.09); }
+    .diff-line.remove { color: #cf3f4f; background: rgba(248,81,73,.09); }
+    .diff-line.hunk { color: #7a57d1; }
+    .diff-empty { color: var(--muted); }
+    .app.trace-hidden { grid-template-columns: 230px minmax(520px,1fr) 310px; }
+    .app.trace-hidden .trace-panel { display: none; }
+    .messages { min-height: 0; overflow-y: auto; padding: 22px max(22px, calc((100% - 800px)/2)); }
+    .scroll-bottom {
+      position: absolute; z-index: 8; right: 20px; padding: 7px 11px; border: 1px solid var(--line);
+      border-radius: 18px; background: var(--card); box-shadow: 0 7px 22px rgba(20,24,32,.18);
+      color: var(--text); font-size: 11px; font-weight: 700;
+    }
+    .scroll-bottom[hidden] { display: none; }
+    .message { display: flex; margin-bottom: 18px; }
+    .message.user { justify-content: flex-end; }
+    .bubble-wrap { max-width: min(82%, 760px); }
+    .who { display: flex; align-items: center; gap: 7px; margin: 0 2px 5px; font-size: 11px; font-weight: 700; }
+    .user .who { justify-content: flex-end; color: var(--all); }
+    .codex .who { color: var(--codex); }
+    .claude .who { color: var(--claude); }
+    .system .who { color: var(--muted); }
+    .bubble {
+      padding: 11px 14px; border: 1px solid var(--line); border-radius: 15px;
+      background: var(--card); box-shadow: 0 2px 8px rgba(20,24,32,.03);
+      white-space: pre-wrap; word-break: break-word; user-select: text;
+    }
+    .bubble a { color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; cursor: pointer; }
+    .bubble strong { font-weight: 800; }
+    .bubble em { font-style: italic; }
+    .bubble code:not(.markdown-code-body) { padding: 1px 5px; border: 1px solid var(--line); border-radius: 5px; background: color-mix(in srgb, var(--bg), transparent 15%); font: .9em/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .markdown-heading { margin: 14px 0 7px; line-height: 1.3; letter-spacing: -.015em; }
+    .markdown-heading:first-child { margin-top: 0; }
+    .markdown-heading.level-1 { font-size: 1.35em; }
+    .markdown-heading.level-2 { font-size: 1.22em; }
+    .markdown-heading.level-3 { font-size: 1.1em; }
+    .markdown-heading.level-4, .markdown-heading.level-5, .markdown-heading.level-6 { font-size: 1em; }
+    .markdown-paragraph { margin: 0 0 9px; white-space: pre-wrap; }
+    .markdown-paragraph:last-child { margin-bottom: 0; }
+    .markdown-table-wrap { max-width: 100%; margin: 8px 0 11px; overflow-x: auto; border: 1px solid var(--line); border-radius: 9px; background: var(--card); }
+    .markdown-table { width: 100%; min-width: 580px; border-collapse: collapse; white-space: normal; font-size: 11px; line-height: 1.5; }
+    .markdown-table th, .markdown-table td { min-width: 62px; padding: 8px 10px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+    .markdown-table th { background: color-mix(in srgb, var(--bg), transparent 20%); font-weight: 800; text-align: left; }
+    .markdown-table tr:last-child td { border-bottom: 0; }
+    .markdown-table th:last-child, .markdown-table td:last-child { border-right: 0; }
+    .markdown-code { position: relative; margin: 9px 0; padding: 12px 13px; overflow-x: auto; border: 1px solid var(--line); border-radius: 9px; background: color-mix(in srgb, var(--bg), #000 4%); white-space: pre; }
+    .markdown-code-language { display: block; margin: -5px 0 7px; color: var(--muted); font: 9px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .markdown-code-body { font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .user .bubble a { color: white; }
+    .user .bubble { background: var(--all); border-color: transparent; color: white; }
+    .codex .bubble { border-color: color-mix(in srgb, var(--codex), transparent 75%); }
+    .claude .bubble { border-color: color-mix(in srgb, var(--claude), transparent 75%); }
+    .spinner { width: 11px; height: 11px; border: 2px solid var(--line); border-top-color: currentColor; border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .composer { position: sticky; z-index: 5; bottom: 0; flex: none; padding: 12px 18px 16px; border-top: 1px solid var(--line); background: var(--panel); backdrop-filter: blur(18px); }
+    .collab-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+    .collab-controls label { color: var(--muted); font-size: 10px; }
+    .collab-controls select { height: 27px; padding: 2px 25px 2px 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); font-size: 10px; }
+    .collab-controls [hidden] { display: none; }
+    .collab-modes { display: inline-flex; min-width: 0; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); }
+    .collab-mode-btn { height: 23px; padding: 2px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); white-space: nowrap; font-size: 10px; }
+    .collab-mode-btn:hover:not(:disabled) { color: var(--text); }
+    .collab-mode-btn.active { background: var(--card); color: var(--all); box-shadow: 0 1px 4px rgba(20,24,32,.12); font-weight: 750; }
+    .collab-mode-btn:disabled { cursor: default; opacity: .55; }
+    .collab-state { margin-left: auto; color: var(--muted); font-size: 10px; }
+    .collab-state.live { color: var(--all); font-weight: 700; }
+    .queue-list { display: grid; gap: 6px; max-height: 112px; margin-bottom: 8px; padding: 7px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--bg), transparent 18%); }
+    .queue-list[hidden] { display: none; }
+    .queue-item { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 5px 7px; border-radius: 7px; background: var(--card); font-size: 10px; }
+    .queue-target { flex: none; font-weight: 800; }
+    .queue-target.codex { color: var(--codex); } .queue-target.claude { color: var(--claude); } .queue-target.collaboration { color: var(--all); }
+    .queue-preview { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+    .queue-cancel { flex: none; margin-left: auto; padding: 2px 7px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--danger); font-size: 10px; }
+    .compose-tools { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
+    .tag {
+      padding: 4px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--card);
+      font-size: 11px; font-weight: 700;
+    }
+    .tag.codex { color: var(--codex); } .tag.claude { color: var(--claude); } .tag.all { color: var(--all); }
+    .hint { color: var(--muted); font-size: 10px; }
+    .spacer { flex: 1; }
+    .stop { color: var(--danger); background: transparent; border: 0; font-size: 11px; }
+    textarea {
+      width: 100%; min-height: 78px; max-height: 150px; resize: vertical; outline: none;
+      padding: 11px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card);
+    }
+    textarea:focus { border-color: var(--all); box-shadow: 0 0 0 3px color-mix(in srgb, var(--all), transparent 84%); }
+    .compose-input { position: relative; }
+    .autocomplete {
+      position: absolute; z-index: 20; left: 0; bottom: calc(100% + 7px); width: 260px;
+      padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--card);
+      box-shadow: 0 14px 40px rgba(20,24,32,.2);
+    }
+    .autocomplete[hidden] { display: none; }
+    .autocomplete-item {
+      display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 9px;
+      border: 0; border-radius: 8px; background: transparent; text-align: left;
+    }
+    .autocomplete-item.selected { background: color-mix(in srgb, var(--all), transparent 86%); }
+    .autocomplete-item .symbol { width: 20px; font-weight: 800; color: var(--all); }
+    .autocomplete-item strong { display: block; font-size: 12px; }
+    .autocomplete-item small { display: block; color: var(--muted); font-size: 9px; }
+    .autocomplete.file-mode { width: min(460px, 100%); }
+    .autocomplete-item .file-symbol { width: 38px; flex: none; color: var(--muted); font-size: 9px; font-weight: 750; text-align: center; }
+    .autocomplete-item .file-main { min-width: 0; flex: 1; }
+    .autocomplete-item .file-main strong, .autocomplete-item .file-main small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .autocomplete-item .file-status { flex: none; min-width: 14px; color: #c17b22; font: 800 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .routing-preview { margin-top: 7px; border: 1px solid var(--line); border-radius: 9px; background: color-mix(in srgb, var(--card), transparent 18%); }
+    .routing-preview[hidden] { display: none; }
+    .routing-preview.invalid { border-color: color-mix(in srgb, var(--danger), transparent 45%); }
+    .routing-preview-toggle { display: flex; align-items: center; width: 100%; padding: 6px 9px; border: 0; background: transparent; text-align: left; color: var(--muted); font-size: 10px; }
+    .routing-preview.invalid .routing-preview-toggle { color: var(--danger); }
+    .routing-preview-details { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; padding: 0 8px 8px; }
+    .routing-preview-details[hidden] { display: none; }
+    .routing-preview-card { min-width: 0; padding: 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); }
+    .routing-preview-card strong { display: block; margin-bottom: 3px; font-size: 10px; }
+    .routing-preview-card pre { margin: 0; max-height: 130px; overflow: auto; white-space: pre-wrap; word-break: break-word; user-select: text; color: var(--muted); font: 9px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .compose-foot { min-height: 32px; display: flex; align-items: center; gap: 10px; padding-top: 8px; }
+    .error { color: var(--danger); font-size: 11px; }
+    .send {
+      border: 0; border-radius: 9px; padding: 7px 15px; background: var(--all); color: white; font-weight: 700;
+    }
+    .send:disabled { opacity: .45; cursor: default; }
+    aside { min-height: 0; overflow-y: auto; border-left: 1px solid var(--line); background: var(--panel); padding: 18px; }
+    .settings-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; }
+    .settings-title h2 { margin: 0; font-size: 15px; }
+    .clear { border: 0; background: transparent; color: var(--muted); font-size: 11px; }
+    .settings-card { padding: 14px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); box-shadow: var(--shadow); }
+    .settings-head { display: flex; align-items: center; margin-bottom: 11px; }
+    .settings-head h3 { margin: 0 auto 0 0; font-size: 14px; }
+    .health { width: 8px; height: 8px; border-radius: 50%; background: #37a862; }
+    .settings-group { border-top: 1px solid var(--line); }
+    .settings-group:last-child { border-bottom: 1px solid var(--line); }
+    .settings-group summary { display: flex; align-items: center; gap: 7px; padding: 10px 2px; color: var(--text); font-size: 11px; font-weight: 650; cursor: pointer; list-style: none; user-select: none; }
+    .settings-group summary::-webkit-details-marker { display: none; }
+    .settings-group summary::before { content: '›'; color: var(--muted); font-size: 16px; line-height: 1; transform: rotate(0deg); transition: transform .15s ease; }
+    .settings-group[open] summary::before { transform: rotate(90deg); }
+    .settings-group-summary { margin-left: auto; min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+    .settings-group-body { padding: 0 2px 11px; }
+    .settings-group-body > .field:first-child, .settings-group-body > .row:first-child .field { margin-top: 1px; }
+    .field { margin-top: 9px; }
+    .field label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 10px; font-weight: 600; }
+    .field input, .field select {
+      width: 100%; height: 31px; padding: 4px 7px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); outline: none;
+    }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .path-row { display: flex; gap: 6px; }
+    .path-row input { min-width: 0; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .small-btn { border: 1px solid var(--line); border-radius: 7px; padding: 3px 8px; background: var(--bg); white-space: nowrap; font-size: 10px; }
+    .fast-note { margin: 6px 0 0; color: #c17b22; font-size: 9px; line-height: 1.4; }
+    .token-row { display: flex; gap: 5px; margin-top: 6px; }
+    .token-status { color: var(--muted); font-size: 9px; margin-top: 4px; }
+    .token-status.saved { color: #279455; }
+    .branch-row { display: flex; align-items: center; gap: 6px; margin-top: 5px; min-width: 0; color: var(--muted); font: 9px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .branch-row .branch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .branch-row.active { color: #279455; }
+    .branch-row.detached { color: #c47a27; }
+    .branch-refresh { margin-left: auto; padding: 0 4px; border: 0; background: transparent; color: inherit; font-size: 10px; }
+    .session-row { display: flex; align-items: center; gap: 6px; margin-top: 11px; padding-top: 9px; border-top: 1px solid var(--line); color: var(--muted); font-size: 9px; }
+    .session-row button { margin-left: auto; }
+    .trace-panel { display: grid; grid-template-rows: auto auto 1fr; padding: 0; overflow: hidden; background: color-mix(in srgb, var(--panel), var(--bg) 30%); }
+    .trace-header { padding: 16px 15px 10px; border-bottom: 1px solid var(--line); }
+    .trace-title { display: flex; align-items: center; gap: 8px; }
+    .trace-title h2 { margin: 0; font-size: 15px; }
+    .trace-live { width: 7px; height: 7px; border-radius: 50%; background: #37a862; box-shadow: 0 0 0 4px rgba(55,168,98,.12); }
+    .trace-note { margin: 6px 0 0; color: var(--muted); font-size: 9px; line-height: 1.4; }
+    .trace-filters { display: flex; gap: 5px; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+    .trace-filter { border: 1px solid var(--line); border-radius: 7px; padding: 3px 8px; background: transparent; color: var(--muted); font-size: 10px; }
+    .trace-filter.active { color: var(--text); background: var(--card); }
+    .trace-list { min-height: 0; overflow-y: auto; padding: 10px 12px 18px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .trace-empty { padding: 24px 8px; color: var(--muted); text-align: center; font: 11px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; }
+    .trace-entry { position: relative; padding: 0 0 13px 18px; border-left: 1px solid var(--line); }
+    .trace-entry::before { content: ''; position: absolute; left: -4px; top: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+    .trace-entry.codex::before { background: var(--codex); }
+    .trace-entry.claude::before { background: var(--claude); }
+    .trace-entry.error::before { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger), transparent 82%); }
+    .trace-meta { display: flex; gap: 6px; color: var(--muted); font-size: 9px; }
+    .trace-entry strong { display: block; margin-top: 2px; font: 600 11px/1.35 -apple-system, BlinkMacSystemFont, sans-serif; }
+    .trace-detail { margin: 4px 0 0; color: var(--muted); font-size: 9px; white-space: pre-wrap; word-break: break-word; user-select: text; }
+    .trace-detail summary { cursor: pointer; color: var(--muted); }
+    .trace-detail pre { margin: 5px 0 0; max-height: 180px; overflow: auto; white-space: pre-wrap; }
+    @media (max-width: 1480px) { .app { grid-template-columns: 210px minmax(500px, 1fr) 320px; } .app.trace-hidden { grid-template-columns: 210px minmax(500px,1fr); } .settings-panel { display: none; } .agent-pill { min-width: 125px; } }
+    @media (max-width: 1080px) { .app { grid-template-columns: 170px minmax(430px,1fr) 300px; } .app.trace-hidden { grid-template-columns: 170px minmax(430px,1fr); } }
+    @media (max-height: 700px) {
+      header { height: 64px; padding-top: 9px; padding-bottom: 9px; }
+      .composer { padding-top: 9px; padding-bottom: 10px; }
+      textarea { min-height: 54px; max-height: 90px; }
+      .messages { padding-top: 14px; padding-bottom: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <nav class="conversation-panel" aria-label="대화 목록">
+      <div class="conversation-head"><h2>대화</h2><button class="new-chat" id="new-conversation">＋ 새 대화</button></div>
+      <input class="conversation-search" id="conversation-search" type="search" placeholder="대화 검색">
+      <div class="conversation-list" id="conversation-list"></div>
+    </nav>
+    <section class="chat">
+      <header>
+        <div class="brand"><h1>Triad</h1><p>나 · Codex · Claude — 멘션 기반 AI 작업방</p></div>
+        <div class="agent-pill" id="pill-codex"><span class="dot"></span><div><strong>Codex</strong><small id="summary-codex"></small><small class="usage-summary" id="usage-codex"></small></div></div>
+        <div class="agent-pill" id="pill-claude"><span class="dot"></span><div><strong>Claude</strong><small id="summary-claude"></small><small class="usage-summary" id="usage-claude"></small></div></div>
+        <button class="usage-refresh" id="refresh-usage" title="사용량 새로고침">↻</button>
+        <button class="trace-toggle" id="diff-toggle">변경 사항</button>
+        <button class="trace-toggle" id="trace-toggle">실행 과정 숨기기</button>
+      </header>
+      <div class="chat-workspace">
+        <div class="message-pane"><main class="messages" id="messages"></main><button class="scroll-bottom" id="scroll-bottom" hidden>↓ 맨 아래</button></div>
+        <section class="diff-pane" id="diff-pane" aria-label="프로젝트 변경 사항" hidden>
+          <div class="diff-head"><h2 id="diff-title">변경 사항</h2><select id="diff-agent"><option value="codex">Codex 폴더</option><option value="claude">Claude 폴더</option></select><span class="diff-workspace" id="diff-workspace"></span><span class="spacer"></span><button class="small-btn" id="diff-refresh">↻</button><button class="small-btn" id="diff-close">닫기</button></div>
+          <div class="diff-body"><nav class="diff-file-list" id="diff-file-list" aria-label="변경 파일 목록"></nav><pre class="diff-content" id="diff-content"></pre></div>
+        </section>
+      </div>
+      <footer class="composer">
+        <div class="collab-controls">
+          <label>진행 방식</label>
+          <div class="collab-modes" role="radiogroup" aria-label="진행 방식">
+            <button type="button" class="collab-mode-btn" data-collab-mode="independent" role="radio">독립 실행</button>
+            <button type="button" class="collab-mode-btn" data-collab-mode="agent" role="radio">에이전트 협업</button>
+            <button type="button" class="collab-mode-btn" data-collab-mode="debate" role="radio">상호 토론</button>
+            <button type="button" class="collab-mode-btn" data-collab-mode="review" role="radio">교차 검토</button>
+          </div>
+          <label for="collab-lead" id="collab-lead-label">첫 발언</label>
+          <select id="collab-lead"><option value="codex">Codex</option><option value="claude">Claude</option></select>
+          <span id="collab-rounds-wrap"><label for="collab-rounds" id="collab-rounds-label">라운드</label> <select id="collab-rounds"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></span>
+          <span id="collab-finalizer-wrap"><label for="collab-finalizer">최종 종합</label> <select id="collab-finalizer"><option value="none">없음</option><option value="codex">Codex</option><option value="claude" selected>Claude</option></select></span>
+          <span class="collab-state" id="collab-state">각 AI가 독립적으로 응답</span>
+        </div>
+        <div class="queue-list" id="queue-list" aria-label="순차 대기열" hidden></div>
+        <div class="compose-tools">
+          <button class="tag codex" data-tag="#codex">#codex</button>
+          <button class="tag claude" data-tag="#claude">#claude</button>
+          <button class="tag all" data-tag="#all">#all</button>
+          <button class="tag" id="block-template">블록 지시</button>
+          <button class="tag" id="attach-file">@ 문서</button>
+          <span class="hint"># AI 지정 · @ 문서 참조 · 미지정 시 둘 다</span><span class="spacer"></span>
+          <button class="stop" id="stop-codex" hidden>■ Codex 중지</button>
+          <button class="stop" id="stop-claude" hidden>■ Claude 중지</button>
+        </div>
+        <div class="compose-input">
+          <div class="autocomplete" id="agent-autocomplete" hidden></div>
+          <textarea id="draft" placeholder="그냥 보내면 둘 다 · #으로 AI 선택 · 긴 개별 명령은 ‘블록 지시’ 사용"></textarea>
+        </div>
+        <div class="routing-preview" id="routing-preview" hidden><button class="routing-preview-toggle" id="routing-preview-toggle"></button><div class="routing-preview-details" id="routing-preview-details" hidden></div></div>
+        <div class="compose-foot"><span class="hint" id="compose-hint">Enter 전송 · Shift+Enter 줄바꿈 · 태그가 없으면 두 AI에게 동시에 전달</span><span class="error" id="routing-error"></span><span class="spacer"></span><button class="send" id="send">보내기</button></div>
+      </footer>
+    </section>
+    <aside class="settings-panel">
+      <div class="settings-title"><h2>에이전트 설정</h2><button class="clear" id="clear">대화 비우기</button></div>
+      <div id="settings"></div>
+    </aside>
+    <aside class="trace-panel">
+      <div class="trace-header">
+        <div class="trace-title"><span class="trace-live"></span><h2>실행 과정</h2><span class="spacer"></span><button class="clear" id="clear-traces">비우기</button></div>
+        <p class="trace-note">내부 사고 원문이 아닌 실행 이벤트·도구·명령·오류를 실시간 표시합니다.</p>
+      </div>
+      <div class="trace-filters">
+        <button class="trace-filter active" data-trace-filter="all">전체</button>
+        <button class="trace-filter" data-trace-filter="codex">Codex</button>
+        <button class="trace-filter" data-trace-filter="claude">Claude</button>
+      </div>
+      <div class="trace-list" id="trace-list"></div>
+    </aside>
+  </div>
+  <script src="router.js"></script>
+  <script src="collaboration.js"></script>
+  <script src="linkify.js"></script>
+  <script src="diff.js"></script>
+  <script src="queue.js"></script>
+  <script src="usage.js"></script>
+  <script src="file-search.js"></script>
+  <script>
+    const agents = ['codex', 'claude'];
+    const names = { codex: 'Codex', claude: 'Claude' };
+    const colors = { codex: 'codex', claude: 'claude' };
+    const state = {
+      messages: JSON.parse(localStorage.getItem('triad.messages') || '[]'),
+      settings: JSON.parse(localStorage.getItem('triad.settings') || 'null'),
+      sessions: JSON.parse(localStorage.getItem('triad.sessions') || '{"codex":null,"claude":null}'),
+      traces: JSON.parse(localStorage.getItem('triad.traces') || '[]'), traceFilter:'all',
+      conversations: [], activeConversationId: localStorage.getItem('triad.activeConversationId'),
+      storageReady: false, saveTimer: null, conversationSearch: '',
+      collaboration: {mode:'independent',lead:'codex',rounds:3,finalizer:'claude'}, orchestration:null,
+      queue: [],
+      usage: JSON.parse(localStorage.getItem('triad.usage')||'{"codex":{"windows":[]},"claude":{"windows":[]}}'), usageRefreshing:false, usageTimer:null, lastUsageRefresh:0,
+      forceMessageBottom:false,routingPreviewOpen:false,
+      traceVisible:localStorage.getItem('triad.traceVisible')!=='false',
+      running: { codex: false, claude: false },
+      responseIds: {}, lineBuffers: { codex: '', claude: '' }, stderr: { codex: '', claude: '' },
+      pending: {}, retryOnTermination: { codex:false, claude:false },
+      tokenStatus: { codex: false, claude: false },
+      accountStatus: {codex:{checking:false,connected:false,message:''},claude:{checking:false,connected:false,message:''}}, codexModels: [], claudeModels: [],
+      branchStatus:{codex:{loading:false,kind:'unknown',label:'확인 전',workspace:''},claude:{loading:false,kind:'unknown',label:'확인 전',workspace:''}},
+      projectFiles:{codex:{workspace:'',files:[],loading:false,error:''},claude:{workspace:'',files:[],loading:false,error:''}},
+      settingsOpen:{codex:{model:true,environment:false,account:false,session:false},claude:{model:true,environment:false,account:false,session:false}},
+      diff:{visible:false,agent:'codex',loading:false,text:'',error:'',workspace:'',truncated:false,selectedFileId:null}
+    };
+    const defaults = home => ({
+      codex: { model:'gpt-5.6-sol', effort:'medium', speedMode:'standard', permissionMode:'workspace-write', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'codex', authMode:'existing' },
+      claude: { model:'sonnet', effort:'medium', speedMode:'standard', permissionMode:'acceptEdits', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'claude', authMode:'existing' }
+    });
+    const post = payload => window.webkit?.messageHandlers?.triad?.postMessage(payload);
+    const id = () => crypto.randomUUID();
+    const clone = value => JSON.parse(JSON.stringify(value));
+    function conversationSnapshot() {
+      const existing=state.conversations.find(item=>item.id===state.activeConversationId);
+      const now=Date.now();
+      return {
+        id:state.activeConversationId, title:existing?.title||'새 대화',
+        createdAt:existing?.createdAt||now, updatedAt:now,
+        messages:clone(state.messages.slice(-300)), settings:clone(state.settings), collaboration:clone(state.collaboration),
+        sessions:clone(state.sessions), traces:clone(state.traces.slice(-500))
+      };
+    }
+    function persistConversation(immediate=false) {
+      if(!state.storageReady||!state.activeConversationId||!state.settings)return;
+      const write=()=>{
+        state.saveTimer=null;const snapshot=conversationSnapshot();
+        const index=state.conversations.findIndex(item=>item.id===snapshot.id);
+        if(index>=0)state.conversations[index]=snapshot;else state.conversations.unshift(snapshot);
+        post({action:'saveConversation',conversation:snapshot});localStorage.setItem('triad.migratedToSQLite','1');renderConversations();
+      };
+      clearTimeout(state.saveTimer);
+      if(immediate) write(); else state.saveTimer=setTimeout(write,250);
+    }
+    const save = () => {
+      localStorage.setItem('triad.messages', JSON.stringify(state.messages.slice(-300)));
+      localStorage.setItem('triad.settings', JSON.stringify(state.settings));
+      localStorage.setItem('triad.sessions', JSON.stringify(state.sessions));
+      localStorage.setItem('triad.traces', JSON.stringify(state.traces.slice(-500)));
+      if(state.activeConversationId)localStorage.setItem('triad.activeConversationId',state.activeConversationId);
+      persistConversation();
+    };
+
+    function loadConversation(conversation) {
+      state.activeConversationId=conversation.id;
+      state.messages=clone(conversation.messages||[]);
+      state.settings=clone(conversation.settings||state.settings);
+      state.collaboration=clone(conversation.collaboration||{mode:'independent',lead:'codex',rounds:3,finalizer:'claude'});
+      state.sessions=clone(conversation.sessions||{codex:null,claude:null});
+      state.traces=clone(conversation.traces||[]);
+      localStorage.setItem('triad.activeConversationId',conversation.id);
+      renderAll();setTimeout(()=>{refreshBranches();refreshProjectFiles();},0);
+    }
+    function newConversation(skipPersist=false) {
+      if(agents.some(agent=>state.running[agent])||state.queue.length)return;
+      if(!skipPersist)persistConversation(true);
+      const now=Date.now();
+      const conversation={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:[],settings:clone(state.settings),collaboration:clone(state.collaboration),sessions:{codex:null,claude:null},traces:[]};
+      state.conversations.unshift(conversation);loadConversation(conversation);addWelcome();persistConversation(true);
+      document.getElementById('draft').focus();
+    }
+    function selectConversation(conversationId) {
+      if(conversationId===state.activeConversationId||agents.some(agent=>state.running[agent])||state.queue.length)return;
+      const target=state.conversations.find(item=>item.id===conversationId);if(!target)return;
+      persistConversation(true);loadConversation(target);
+    }
+    function conversationTime(timestamp) {
+      const date=new Date(timestamp);const today=new Date();
+      if(date.toDateString()===today.toDateString())return date.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
+      return date.toLocaleDateString('ko-KR',{month:'short',day:'numeric'});
+    }
+    function renderConversations() {
+      const root=document.getElementById('conversation-list');if(!root)return;
+      const query=state.conversationSearch.trim().toLowerCase();root.innerHTML='';
+      const items=[...state.conversations].sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0)).filter(item=>!query||(item.title||'').toLowerCase().includes(query));
+      for(const item of items){
+        const row=document.createElement('div');row.className=`conversation-item ${item.id===state.activeConversationId?'active':''}`;
+        row.dataset.conversationId=item.id;
+        const main=document.createElement('div');main.className='conversation-main';main.onclick=()=>selectConversation(item.id);
+        const title=document.createElement('span');title.className='conversation-name';title.textContent=item.title||'새 대화';
+        const time=document.createElement('span');time.className='conversation-time';time.textContent=conversationTime(item.updatedAt||item.createdAt);
+        main.append(title,time);
+        const actions=document.createElement('div');actions.className='conversation-actions';
+        const rename=document.createElement('button');rename.className='conversation-action';rename.title='이름 변경';rename.textContent='✎';rename.onclick=()=>renameConversation(item.id);
+        const remove=document.createElement('button');remove.className='conversation-action';remove.title='삭제';remove.textContent='×';remove.onclick=()=>deleteConversation(item.id);
+        actions.append(rename,remove);row.append(main,actions);root.appendChild(row);
+      }
+    }
+    function renameConversation(conversationId) {
+      const conversation=state.conversations.find(item=>item.id===conversationId);if(!conversation)return;
+      const row=[...document.querySelectorAll('.conversation-item')].find(item=>item.dataset.conversationId===conversationId);const main=row?.querySelector('.conversation-main');if(!main)return;
+      const input=document.createElement('input');input.className='conversation-rename';input.value=conversation.title||'새 대화';input.setAttribute('aria-label','대화 이름');
+      let finished=false;const finish=saveTitle=>{
+        if(finished)return;finished=true;const title=input.value.trim();
+        if(saveTitle&&title){conversation.title=title.slice(0,80);conversation.updatedAt=Date.now();if(conversationId===state.activeConversationId)persistConversation(true);else post({action:'saveConversation',conversation});}
+        renderConversations();
+      };
+      main.onclick=null;main.innerHTML='';main.appendChild(input);
+      input.onclick=event=>event.stopPropagation();input.onmousedown=event=>event.stopPropagation();
+      input.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();finish(true);}else if(event.key==='Escape'){event.preventDefault();finish(false);}};
+      input.onblur=()=>finish(true);input.focus();input.select();
+    }
+    function deleteConversation(conversationId) {
+      if(agents.some(agent=>state.running[agent])||state.queue.length)return;
+      const conversation=state.conversations.find(item=>item.id===conversationId);if(!conversation)return;
+      const button=[...document.querySelectorAll('.conversation-item')].find(item=>item.dataset.conversationId===conversationId)?.querySelector('button[title="삭제"]');
+      if(button&&!button.classList.contains('confirm-delete')){button.classList.add('confirm-delete');button.textContent='삭제?';button.title='한 번 더 누르면 삭제';setTimeout(()=>{if(button.isConnected){button.classList.remove('confirm-delete');button.textContent='×';button.title='삭제';}},2500);return;}
+      state.conversations=state.conversations.filter(item=>item.id!==conversationId);post({action:'deleteConversation',id:conversationId});
+      if(conversationId===state.activeConversationId){
+        const next=[...state.conversations].sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0))[0];
+        if(next)loadConversation(next);else {state.activeConversationId=null;newConversation(true);}
+      }else renderConversations();
+    }
+
+    const route = window.TriadRouter.route;
+    const collaborationLeadFor = window.TriadRouter.collaborationLeadFor;
+
+    function saveUsage(){localStorage.setItem('triad.usage',JSON.stringify(state.usage));}
+    function setUsage(agent,normalized,raw=null){
+      state.usage[agent]={...normalized,raw,updatedAt:Date.now(),error:null};saveUsage();renderUsage();
+    }
+    function usageTooltip(agent){
+      const usage=state.usage[agent]||{};const lines=(usage.windows||[]).map(limit=>{
+        const reset=window.TriadUsage.formatReset(limit.resetsAt);return `${limit.label}: ${limit.remainingPercent}% 남음${reset?` · ${reset} 초기화`:''}`;
+      });
+      if(usage.updatedAt)lines.push(`마지막 확인: ${new Date(usage.updatedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}`);
+      if(agent==='claude')lines.push('Claude는 작업 중 수신한 최신 한도 정보를 표시합니다.');
+      if(usage.error)lines.push(`오류: ${usage.error}`);return lines.join('\n');
+    }
+    function renderUsage(){
+      for(const agent of agents){
+        const element=document.getElementById(`usage-${agent}`);if(!element)continue;const usage=state.usage[agent]||{};
+        if(agent==='codex'&&state.usageRefreshing)element.textContent='잔여량 조회 중…';
+        else if(usage.error&&!usage.windows?.length)element.textContent='조회 실패 · ↻ 재시도';
+        else if(agent==='claude'&&!usage.windows?.length)element.textContent='잔여량 정보 미제공';
+        else element.textContent=window.TriadUsage.summary(usage);
+        element.title=usageTooltip(agent);
+      }
+      const button=document.getElementById('refresh-usage');if(button){button.classList.toggle('loading',state.usageRefreshing);button.disabled=state.usageRefreshing;}
+    }
+    function refreshUsage(force=false){
+      if(!state.settings||state.usageRefreshing)return;
+      const now=Date.now();if(!force&&now-state.lastUsageRefresh<60000)return;
+      state.lastUsageRefresh=now;state.usageRefreshing=true;renderUsage();post({action:'refreshUsage',config:state.settings.codex});
+    }
+    function startUsagePolling(){
+      clearInterval(state.usageTimer);refreshUsage(true);state.usageTimer=setInterval(()=>refreshUsage(),5*60*1000);
+    }
+    function recordTurnUsage(agent,usage){
+      if(!usage)return;
+      const input=usage.input_tokens??usage.inputTokens??0;const output=usage.output_tokens??usage.outputTokens??0;
+      if(input||output)addTrace(agent,'info','이번 요청 토큰 사용량',{input_tokens:input,output_tokens:output,total_tokens:input+output});
+    }
+
+    function detailText(value) {
+      if (value == null || value === '') return '';
+      const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+      return text.length > 8000 ? text.slice(0, 8000) + '\n… (생략)' : text;
+    }
+    function addTrace(agent, level, title, detail='') {
+      state.traces.push({id:id(),agent,level,title,detail:detailText(detail),createdAt:Date.now()});
+      state.traces=state.traces.slice(-500); save(); renderTraces();
+    }
+    function renderTraces() {
+      const root=document.getElementById('trace-list'); if(!root)return;
+      const items=state.traces.filter(item=>state.traceFilter==='all'||item.agent===state.traceFilter);
+      root.innerHTML='';
+      if(!items.length){const empty=document.createElement('div');empty.className='trace-empty';empty.textContent='명령을 보내면 실행 과정과 오류가 여기에 표시됩니다.';root.appendChild(empty);return;}
+      for(const item of items){
+        const entry=document.createElement('div');entry.className=`trace-entry ${item.agent} ${item.level}`;
+        const meta=document.createElement('div');meta.className='trace-meta';
+        const time=new Date(item.createdAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        meta.textContent=`${time} · ${names[item.agent]||item.agent}`;
+        const title=document.createElement('strong');title.textContent=item.title;
+        entry.append(meta,title);
+        if(item.detail){
+          const details=document.createElement('details');details.className='trace-detail';
+          const summary=document.createElement('summary');summary.textContent=item.level==='error'?'오류 원문':'상세 보기';
+          const pre=document.createElement('pre');pre.textContent=item.detail;details.append(summary,pre);entry.appendChild(details);
+        }
+        root.appendChild(entry);
+      }
+      requestAnimationFrame(()=>root.scrollTop=root.scrollHeight);
+    }
+    function renderTraceVisibility(){
+      const app=document.querySelector('.app');const button=document.getElementById('trace-toggle');if(!app||!button)return;
+      app.classList.toggle('trace-hidden',!state.traceVisible);button.textContent=state.traceVisible?'실행 과정 숨기기':'실행 과정 보기';button.title=state.traceVisible?'오른쪽 실행 과정 패널 숨기기':'오른쪽 실행 과정 패널 보기';
+      requestAnimationFrame(()=>{updateScrollButton();window.dispatchEvent(new Event('resize'));});
+    }
+    function refreshProjectDiff(agent=state.diff.agent) {
+      if(!state.settings?.[agent])return;state.diff.agent=agent;state.diff.loading=true;state.diff.error='';renderDiff();
+      post({action:'projectDiff',agent,workspace:state.settings[agent].workspacePath});
+    }
+    function renderDiff() {
+      const pane=document.getElementById('diff-pane');const content=document.getElementById('diff-content');const fileList=document.getElementById('diff-file-list');const chat=document.querySelector('.chat');if(!pane||!content||!fileList||!chat)return;
+      pane.hidden=!state.diff.visible;chat.classList.toggle('diff-open',state.diff.visible);document.getElementById('diff-agent').value=state.diff.agent;
+      const toggle=document.getElementById('diff-toggle');if(toggle)toggle.textContent=state.diff.visible?'변경 사항 닫기':'변경 사항';
+      document.getElementById('diff-workspace').textContent=state.diff.workspace||state.settings?.[state.diff.agent]?.workspacePath||'';
+      const previousFileScroll=fileList.scrollTop;content.innerHTML='';fileList.innerHTML='';document.getElementById('diff-title').textContent='변경 사항';
+      if(state.diff.loading){const line=document.createElement('span');line.className='diff-line diff-empty';line.textContent='변경 사항을 불러오는 중…';content.appendChild(line);return;}
+      if(state.diff.error){const line=document.createElement('span');line.className='diff-line diff-empty';line.textContent=`⚠️ ${state.diff.error}`;content.appendChild(line);return;}
+      if(!state.diff.text){const line=document.createElement('span');line.className='diff-line diff-empty';line.textContent='변경된 파일이 없습니다.';content.appendChild(line);return;}
+      const files=window.TriadDiff.filesFor(state.diff.text);let selected=files.find(file=>file.id===state.diff.selectedFileId)||files[0];
+      state.diff.selectedFileId=selected?.id||null;document.getElementById('diff-title').textContent=`변경 사항 · ${files.length}`;
+      for(const file of files){
+        const button=document.createElement('button');button.className=`diff-file ${file.id===selected?.id?'active':''}`;button.title=file.name;
+        button.dataset.diffFileId=file.id;
+        const name=document.createElement('span');name.className='diff-file-name';name.textContent=file.name;
+        const meta=document.createElement('span');meta.className='diff-file-meta';
+        const additions=document.createElement('span');additions.className='diff-additions';additions.textContent=`+${file.additions}`;
+        const deletions=document.createElement('span');deletions.className='diff-deletions';deletions.textContent=`−${file.deletions}`;
+        meta.append(additions,deletions);button.append(name,meta);button.onclick=()=>scrollToDiffFile(file.id,true);fileList.appendChild(button);
+      }
+      fileList.scrollTop=previousFileScroll;
+      for(const file of files){
+        const section=document.createElement('span');section.className='diff-file-section';section.dataset.diffFileId=file.id;
+        const header=document.createElement('span');header.className='diff-section-header';
+        const icon=document.createElement('span');icon.className='diff-section-icon';icon.textContent='▱';
+        const heading=document.createElement('span');heading.className='diff-section-title';heading.textContent=file.name;heading.title=file.name;
+        const status=document.createElement('span');status.className='diff-section-status';status.textContent={new:'추가',deleted:'삭제',renamed:'이름 변경',modified:'수정'}[file.status]||file.status;
+        const stats=document.createElement('span');stats.className='diff-section-stats';
+        const additions=document.createElement('span');additions.className='diff-additions';additions.textContent=`+${file.additions}`;
+        const deletions=document.createElement('span');deletions.className='diff-deletions';deletions.textContent=`−${file.deletions}`;
+        stats.append(additions,deletions);header.append(icon,heading,status,stats);section.appendChild(header);
+        const body=document.createElement('span');body.className='diff-code-body';
+        const displayLines=window.TriadDiff.displayLinesFor(file.text);
+        for(const value of displayLines){
+          const line=document.createElement('span');line.className='diff-line';
+          if(value.startsWith('@@'))line.classList.add('hunk');
+          else if(value.startsWith('+'))line.classList.add('add');
+          else if(value.startsWith('-'))line.classList.add('remove');
+          line.textContent=value;body.appendChild(line);
+        }
+        if(!displayLines.length){const line=document.createElement('span');line.className='diff-line diff-empty';line.textContent='내용 변경 없이 파일 메타데이터만 변경되었습니다.';body.appendChild(line);}
+        section.appendChild(body);
+        content.appendChild(section);
+      }
+      if(state.diff.truncated){const line=document.createElement('span');line.className='diff-line diff-empty';line.textContent='\n… diff가 커서 2MB까지만 표시했습니다.';content.appendChild(line);}
+    }
+    function setActiveDiffFile(fileId,keepVisible=true) {
+      if(!fileId||fileId===state.diff.selectedFileId)return;state.diff.selectedFileId=fileId;
+      const buttons=[...document.querySelectorAll('#diff-file-list .diff-file')];
+      for(const button of buttons)button.classList.toggle('active',button.dataset.diffFileId===fileId);
+      if(keepVisible)buttons.find(button=>button.dataset.diffFileId===fileId)?.scrollIntoView({block:'nearest'});
+    }
+    function scrollToDiffFile(fileId,smooth=false) {
+      const content=document.getElementById('diff-content');const section=[...content.querySelectorAll('.diff-file-section')].find(item=>item.dataset.diffFileId===fileId);if(!section)return;
+      setActiveDiffFile(fileId);const top=section.getBoundingClientRect().top-content.getBoundingClientRect().top+content.scrollTop;
+      content.scrollTo({top,behavior:smooth?'smooth':'auto'});
+    }
+    function syncDiffFileFromScroll() {
+      const content=document.getElementById('diff-content');if(!state.diff.visible||!content)return;
+      const rootTop=content.getBoundingClientRect().top;const offsets=[...content.querySelectorAll('.diff-file-section')].map(section=>({id:section.dataset.diffFileId,top:section.getBoundingClientRect().top-rootTop+content.scrollTop-18}));
+      setActiveDiffFile(window.TriadDiff.activeFileIdForOffsets(offsets,content.scrollTop));
+    }
+    function openDiff(){if(state.diff.visible){closeDiff();return;}state.diff.visible=true;renderDiff();refreshProjectDiff(state.diff.agent);requestAnimationFrame(updateScrollButton);}
+    function closeDiff(){state.diff.visible=false;renderDiff();requestAnimationFrame(updateScrollButton);}
+    function traceProviderEvent(agent, data, rawLine) {
+      if(agent==='codex'){
+        if(data.type==='thread.started') addTrace(agent,'info','세션 시작',data.thread_id);
+        else if(data.type==='turn.started') addTrace(agent,'info','작업 처리 시작');
+        else if(data.type==='item.started') {
+          const item=data.item||{};
+          if(item.type==='command_execution') addTrace(agent,'info','명령 실행',item.command||item);
+          else if(item.type==='mcp_tool_call') addTrace(agent,'info',`도구 호출 · ${item.server||''} ${item.tool||item.name||''}`.trim(),item);
+          else if(item.type!=='agent_message') addTrace(agent,'info',`단계 시작 · ${item.type||'event'}`,item);
+        } else if(data.type==='item.completed') {
+          const item=data.item||{};
+          if(item.type==='agent_message') addTrace(agent,'success','응답 생성 완료');
+          else if(item.type==='command_execution') addTrace(agent,item.exit_code===0?'success':'error',`명령 종료${item.exit_code!=null?` · code ${item.exit_code}`:''}`,item);
+          else if(item.type==='mcp_tool_call') addTrace(agent,item.status==='failed'?'error':'success',`도구 완료 · ${item.tool||item.name||''}`.trim(),item);
+          else addTrace(agent,'success',`단계 완료 · ${item.type||'event'}`,item);
+        } else if(data.type==='turn.completed') {addTrace(agent,'success','작업 완료',data.usage||data);recordTurnUsage(agent,data.usage);}
+        else if(data.type==='error') addTrace(agent,'error','Codex 오류',data.error?.message||data.message||rawLine);
+      } else {
+        if(data.type==='system'&&data.subtype==='init') addTrace(agent,'info',`세션 시작 · ${data.model||'Claude'}`,{session_id:data.session_id,permissionMode:data.permissionMode,mcp_servers:data.mcp_servers});
+        else if(data.type==='system'&&data.subtype==='status') addTrace(agent,'info',`상태 · ${data.status||data.subtype}`,data);
+        else if(data.type==='rate_limit_event') {const normalized=window.TriadUsage.normalizeClaude(data.rate_limit_info||data);if(normalized.windows.length)setUsage('claude',normalized,data.rate_limit_info||data);addTrace(agent,data.rate_limit_info?.status==='allowed'?'info':'error','사용량 한도 상태',data.rate_limit_info);}
+        else if(data.type==='stream_event') {
+          const event=data.event||{};
+          if(event.type==='message_start') addTrace(agent,'info',`응답 생성 시작 · ${event.message?.model||'Claude'}`,event.message?.usage||'');
+          else if(event.type==='content_block_start'&&event.content_block?.type==='tool_use') addTrace(agent,'info',`도구 호출 · ${event.content_block.name||'tool'}`,event.content_block.input||event.content_block);
+          else if(event.type==='content_block_start'&&event.content_block?.type==='thinking') addTrace(agent,'info','추론 단계 시작 · 내용 비공개');
+          else if(event.type==='message_stop') addTrace(agent,'success','응답 스트림 완료');
+        } else if(data.type==='assistant') {addTrace(agent,'success','응답 메시지 완료',data.message?.usage||'');recordTurnUsage(agent,data.message?.usage);}
+        else if(data.type==='result') {recordTurnUsage(agent,data.usage);addTrace(agent,data.is_error?'error':'success',data.is_error?'Claude 실행 오류':'작업 완료',data.is_error?(data.errors||data):{duration_ms:data.duration_ms,usage:data.usage,modelUsage:data.modelUsage});}
+      }
+    }
+
+    function addMessage(author, text, streaming=false) {
+      const message = { id:id(), author, text, streaming, createdAt:Date.now() };
+      state.messages.push(message); save(); renderMessages(); return message.id;
+    }
+    function updateMessage(messageId, updater) {
+      const message = state.messages.find(m => m.id === messageId); if (!message) return;
+      updater(message); save(); renderMessages();
+    }
+    function messagesNearBottom(root=document.getElementById('messages')) {
+      return !root || root.scrollHeight-root.scrollTop-root.clientHeight<=56;
+    }
+    function updateScrollButton() {
+      const root=document.getElementById('messages');const button=document.getElementById('scroll-bottom');const composer=document.querySelector('.composer');
+      if(!root||!button||!composer)return;
+      button.hidden=messagesNearBottom(root);button.style.bottom='12px';
+    }
+    function renderMessages() {
+      const root=document.getElementById('messages');const followBottom=state.forceMessageBottom||messagesNearBottom(root);const previousScrollTop=root.scrollTop;root.innerHTML='';
+      if (!state.messages.length) addWelcome();
+      for (const m of state.messages) {
+        const el = document.createElement('div'); el.className = `message ${m.author}`;
+        const label = m.author === 'user' ? '나' : m.author === 'system' ? '회의실' : names[m.author];
+        const wrap = document.createElement('div'); wrap.className = 'bubble-wrap';
+        const who = document.createElement('div'); who.className = 'who'; who.textContent = label;
+        if (m.streaming) { const spin = document.createElement('span'); spin.className='spinner'; who.appendChild(spin); }
+        const bubble = document.createElement('div'); bubble.className='bubble'; renderMarkdownText(bubble,m.text || '생각 중…');
+        wrap.append(who,bubble); el.appendChild(wrap); root.appendChild(el);
+      }
+      requestAnimationFrame(()=>{root.scrollTop=followBottom?root.scrollHeight:previousScrollTop;updateScrollButton();});
+    }
+    function addWelcome() {
+      state.messages.push({ id:id(), author:'system', text:'독립 실행에서는 태그 없이 보내면 두 AI가 응답합니다. 에이전트 협업에서는 시작 AI가 필요할 때 상대 AI에게 질문하고 답을 돌려받아 작업을 계속합니다. 상호 토론과 교차 검토도 사용할 수 있습니다. @문서로 프로젝트 파일을 참조할 수 있습니다.', streaming:false, createdAt:Date.now() }); save();
+    }
+
+    function renderLinkedText(element,text) {
+      for(const token of window.TriadLinkify.tokensFor(text||'')){
+        if(token.type==='text')element.appendChild(document.createTextNode(token.text));
+        else if(token.type==='link') {
+          const link=document.createElement('a');link.href=token.url;link.textContent=token.text;link.title=token.url;
+          link.onclick=event=>{event.preventDefault();post({action:'openURL',url:token.url});};element.appendChild(link);
+        }
+        else if(token.type==='bold'){const strong=document.createElement('strong');renderLinkedText(strong,token.text);element.appendChild(strong);}
+        else if(token.type==='italic'){const em=document.createElement('em');renderLinkedText(em,token.text);element.appendChild(em);}
+        else if(token.type==='strike'){const strike=document.createElement('s');renderLinkedText(strike,token.text);element.appendChild(strike);}
+        else if(token.type==='code'){const code=document.createElement('code');code.textContent=token.text;element.appendChild(code);}
+        else if(token.type==='code_block'){
+          const pre=document.createElement('pre');pre.className='markdown-code';
+          if(token.language){const language=document.createElement('span');language.className='markdown-code-language';language.textContent=token.language;pre.appendChild(language);}
+          const code=document.createElement('code');code.className='markdown-code-body';code.textContent=token.text;pre.appendChild(code);element.appendChild(pre);
+        }
+      }
+    }
+
+    function renderMarkdownText(element,text) {
+      for(const block of window.TriadLinkify.blocksFor(text||'')) {
+        if(block.type==='heading') {
+          const heading=document.createElement(`h${block.level}`);heading.className=`markdown-heading level-${block.level}`;renderLinkedText(heading,block.text);element.appendChild(heading);
+        } else if(block.type==='table') {
+          const wrap=document.createElement('div');wrap.className='markdown-table-wrap';
+          const table=document.createElement('table');table.className='markdown-table';
+          const head=document.createElement('thead');const headRow=document.createElement('tr');
+          block.header.forEach((cell,index)=>{const th=document.createElement('th');if(block.alignments[index])th.style.textAlign=block.alignments[index];renderLinkedText(th,cell);headRow.appendChild(th);});
+          head.appendChild(headRow);table.appendChild(head);
+          const body=document.createElement('tbody');
+          block.rows.forEach(row=>{const tr=document.createElement('tr');row.forEach((cell,index)=>{const td=document.createElement('td');if(block.alignments[index])td.style.textAlign=block.alignments[index];renderLinkedText(td,cell);tr.appendChild(td);});body.appendChild(tr);});
+          table.appendChild(body);wrap.appendChild(table);element.appendChild(wrap);
+        } else if(block.type==='code_block') {
+          const pre=document.createElement('pre');pre.className='markdown-code';
+          if(block.language){const language=document.createElement('span');language.className='markdown-code-language';language.textContent=block.language;pre.appendChild(language);}
+          const code=document.createElement('code');code.className='markdown-code-body';code.textContent=block.text;pre.appendChild(code);element.appendChild(pre);
+        } else {
+          const paragraph=document.createElement('div');paragraph.className='markdown-paragraph';renderLinkedText(paragraph,block.text);element.appendChild(paragraph);
+        }
+      }
+    }
+
+    function dispatchAgent(agent,prompt) {
+      if(state.running[agent])return false;
+      state.running[agent]=true;state.stderr[agent]='';state.lineBuffers[agent]='';
+      state.pending[agent]={prompt,retried:false};state.responseIds[agent]=addMessage(agent,'',true);renderStatus();
+      const config=state.settings[agent];
+      addTrace(agent,'info','명령 전달',{model:config.model,effort:config.effort,speed:config.speedMode,workspace:config.workspacePath,writableRoots:config.writableRoots||'',networkAccess:!!config.networkAccess,allowLocalBinding:!!config.allowLocalBinding,session:state.sessions[agent]?'resume':'new',mode:state.orchestration?.mode||'independent'});
+      post({action:'run',agent,prompt,config:state.settings[agent],session:state.sessions[agent]});return true;
+    }
+    function enqueueAgent(agent,prompt,sourceText) {
+      const item={id:id(),kind:'agent',agent,prompt,sourceText,createdAt:Date.now()};
+      state.queue.push(item);renderQueue();
+      addTrace(agent,'info','순차 대기열 등록',{position:window.TriadQueue.positionFor(state.queue,item),characters:prompt.length});
+      return item;
+    }
+    function enqueueCollaboration(objective,sourceText) {
+      const item={id:id(),kind:'collaboration',objective,sourceText,collaboration:clone(state.collaboration),createdAt:Date.now()};
+      state.queue.push(item);renderQueue();
+      addTrace(state.collaboration.lead,'info','협업 순차 대기열 등록',{position:window.TriadQueue.positionFor(state.queue,item),mode:state.collaboration.mode});
+      return item;
+    }
+    function renderQueue() {
+      const root=document.getElementById('queue-list');if(!root)return;
+      root.innerHTML='';root.hidden=state.queue.length===0;
+      for(const item of state.queue){
+        const row=document.createElement('div');row.className='queue-item';
+        const target=document.createElement('span');const key=item.kind==='collaboration'?'collaboration':item.agent;
+        target.className=`queue-target ${key}`;target.textContent=`${item.kind==='collaboration'?'협업':names[item.agent]} 대기 ${window.TriadQueue.positionFor(state.queue,item)}번`;
+        const preview=document.createElement('span');preview.className='queue-preview';preview.textContent=item.sourceText||item.prompt||item.objective||'';
+        const cancel=document.createElement('button');cancel.className='queue-cancel';cancel.textContent='취소';cancel.title='실행 전 대기 항목 취소';cancel.onclick=()=>cancelQueued(item.id);
+        row.append(target,preview,cancel);root.appendChild(row);
+      }
+    }
+    function cancelQueued(itemId) {
+      const index=state.queue.findIndex(item=>item.id===itemId);if(index<0)return;
+      const [item]=state.queue.splice(index,1);const agent=item.kind==='collaboration'?(item.collaboration?.lead||state.collaboration.lead):item.agent;
+      addTrace(agent,'info','대기 작업 취소',{target:item.kind==='collaboration'?'협업':names[item.agent]});renderQueue();
+      setTimeout(drainQueues,0);
+    }
+    function drainAgentQueue(agent) {
+      if(state.orchestration||state.running[agent])return false;
+      const index=window.TriadQueue.nextIndex(state.queue,'agent',agent);if(index<0)return false;
+      const [item]=state.queue.splice(index,1);renderQueue();
+      addTrace(agent,'info','대기 작업 시작',{remaining:state.queue.filter(candidate=>candidate.kind==='agent'&&candidate.agent===agent).length});
+      return dispatchAgent(agent,item.prompt);
+    }
+    function drainQueues() {
+      if(state.orchestration)return;
+      const collaborationIndex=window.TriadQueue.nextIndex(state.queue,'collaboration');
+      const firstAgentIndex=state.queue.findIndex(item=>item.kind==='agent');
+      if(collaborationIndex>=0&&(firstAgentIndex<0||collaborationIndex<firstAgentIndex)){
+        if(agents.some(agent=>state.running[agent]))return;
+        const [item]=state.queue.splice(collaborationIndex,1);state.collaboration=clone(item.collaboration);renderQueue();renderCollaboration();
+        addTrace(state.collaboration.lead,'info','대기 협업 시작',{remaining:state.queue.filter(candidate=>candidate.kind==='collaboration').length});startCollaboration(item.objective);return;
+      }
+      agents.forEach(drainAgentQueue);
+      if(!agents.some(agent=>state.running[agent])){
+        const nextCollaboration=window.TriadQueue.nextIndex(state.queue,'collaboration');
+        if(nextCollaboration>=0)setTimeout(drainQueues,0);
+      }
+    }
+    function collaborationTasks() {
+      return window.TriadCollaboration.tasksFor(state.collaboration);
+    }
+    function buildCollaborationPrompt(task) {
+      const flow=state.orchestration;const transcript=flow.transcript.map((turn,index)=>`[발언 ${index+1} · ${names[turn.agent]} · ${turn.label}]\n${turn.text}`).join('\n\n').slice(-18000);
+      const common=`사용자의 원래 의제:\n${flow.objective}\n\n${transcript?`지금까지의 공유 회의록:\n${transcript}\n\n`:''}`;
+      if(task.kind==='draft')return `${common}교차 검토의 초안을 작성하세요. 실행 가능한 완성안을 제시하되, 이후 다른 AI가 검토할 예정입니다.`;
+      if(task.kind==='critique')return `${common}당신은 교차 검토자입니다. 직전 결과의 오류, 누락, 위험과 개선안을 구체적으로 검토하세요. 동의만 하지 말고 검증 가능한 지적을 우선하세요.`;
+      if(task.kind==='revise')return `${common}당신은 원 작성자입니다. 검토 의견 중 타당한 내용을 반영해 결과를 수정하세요. 최종 사용 가능한 결과를 제시하고 반영하지 않은 의견은 이유를 짧게 밝히세요.`;
+      if(task.kind==='synthesize')return `${common}당신은 최종 종합자입니다. 양측 논의를 비교해 합의점과 쟁점을 정리하고, 사용자가 바로 실행할 수 있는 하나의 최종 결론을 작성하세요. 새로운 토론은 시작하지 마세요.`;
+      return `${common}상호 토론 ${task.round}/${state.collaboration.rounds} 라운드입니다. 다른 참여자의 논지를 검토하고, 동의·반론·보완을 명확히 하며 의제를 더 나은 결론으로 진전시키세요. 같은 내용을 반복하지 마세요.`;
+    }
+    function agentHandoffProtocol(agent, disabled=false) {
+      if(disabled)return '위임 한도에 도달했습니다. 상대 AI에게 추가 질문을 요청하지 말고 현재 정보로 사용자에게 줄 최선의 결과를 완성하세요.';
+      const other=agent==='codex'?'claude':'codex';
+      return `상대 AI의 정보, MCP, 코드 분석 또는 검증이 꼭 필요할 때만 답변 맨 끝에 아래 형식으로 요청하세요. JSON 밖의 마커 문구를 바꾸지 마세요.\n[[TRIAD_HANDOFF]]\n{"to":"${other}","question":"상대가 수행할 구체적인 단일 질문","reason":"위임이 필요한 이유"}\n[[/TRIAD_HANDOFF]]\n상대가 필요하지 않으면 마커 없이 작업 결과를 완성하세요.`;
+    }
+    function buildAgentPrompt(task) {
+      const flow=state.orchestration;
+      const transcript=flow.transcript.map((turn,index)=>`[협업 ${index+1} · ${names[turn.agent]} · ${turn.label}]\n${turn.text}`).join('\n\n').slice(-18000);
+      const context=`사용자의 원래 작업:\n${flow.objective}\n\n${transcript?`지금까지의 협업 기록:\n${transcript}\n\n`:''}`;
+      if(task.kind==='agent_answer'){
+        return `${context}${names[task.requester]}가 당신에게 다음 작업을 요청했습니다.\n질문: ${task.question}\n${task.reason?`요청 이유: ${task.reason}\n`:''}\n연결된 MCP나 작업 도구가 필요하면 실제로 사용해 확인하세요. 추측으로 조회 결과를 만들지 말고, 실패하면 실제 오류를 설명하세요. 질문에 답하면 앱이 그 답을 ${names[task.requester]}에게 자동으로 돌려줍니다.\n\n${agentHandoffProtocol(task.agent,task.noHandoff)}`;
+      }
+      if(task.received){
+        return `${context}${names[task.from]}에게 요청했던 답변이 도착했습니다.\n\n[${names[task.from]}의 답변]\n${task.received}\n\n이 정보를 반영하여 원래 작업을 계속하고 사용자에게 줄 결과를 완성하세요.\n\n${agentHandoffProtocol(task.agent,task.noHandoff)}`;
+      }
+      return `${context}당신이 이 작업의 시작 담당입니다. 직접 작업을 진행하고 사용자에게 줄 결과를 완성하세요.\n\n${agentHandoffProtocol(task.agent,task.noHandoff)}`;
+    }
+    function runAgentTurn(task) {
+      const flow=state.orchestration;if(!flow||flow.cancelled)return;
+      flow.current=task;task.label=task.kind==='agent_answer'?`${names[task.requester]} 질문 응답`:task.received?'답변 반영 후 작업 재개':'작업 시작';
+      addTrace(task.agent,'info',task.label,{handoffs:flow.handoffs,maxHandoffs:flow.maxHandoffs,from:task.from||task.requester||null});
+      dispatchAgent(task.agent,buildAgentPrompt(task));renderCollaboration();
+    }
+    function finishAgentCollaboration(flow, agent, message='에이전트 협업이 완료되었습니다.') {
+      addTrace(agent,'success','에이전트 협업 완료',{handoffs:flow.handoffs});
+      state.orchestration=null;addMessage('system',message);renderCollaboration();setTimeout(drainQueues,0);
+    }
+    function runNextCollaborationTurn() {
+      const flow=state.orchestration;if(!flow||flow.cancelled)return;
+      if(flow.index>=flow.tasks.length){
+        addTrace(flow.lastAgent||state.collaboration.lead,'success',flow.mode==='debate'?'상호 토론 완료':'교차 검토 완료');
+        state.orchestration=null;addMessage('system',flow.mode==='debate'?'상호 토론이 완료되었습니다.':'교차 검토가 완료되었습니다.');renderCollaboration();setTimeout(drainQueues,0);return;
+      }
+      const task=flow.tasks[flow.index++];flow.current=task;
+      const labels={draft:'초안 작성',critique:`${task.round}차 검토`,revise:`${task.round}차 수정`,debate:`${task.round}라운드 발언`,synthesize:'최종 종합'};
+      task.label=labels[task.kind];addTrace(task.agent,'info',`${task.label} 시작`,{turn:flow.index,total:flow.tasks.length});
+      dispatchAgent(task.agent,buildCollaborationPrompt(task));renderCollaboration();
+    }
+    function startCollaboration(objective) {
+      if(state.collaboration.mode==='agent'){
+        state.orchestration={mode:'agent',objective,tasks:[],index:0,current:null,transcript:[],cancelled:false,lastAgent:null,handoffs:0,maxHandoffs:state.collaboration.rounds};
+        addTrace(state.collaboration.lead,'info','에이전트 협업 시작',{lead:names[state.collaboration.lead],maxHandoffs:state.collaboration.rounds});
+        addMessage('system',`${names[state.collaboration.lead]}가 작업을 시작합니다. 필요한 경우 상대 AI에게 질문하고 답을 받아 계속 진행합니다.`);
+        runAgentTurn({agent:state.collaboration.lead,kind:'agent_work'});return;
+      }
+      const tasks=collaborationTasks();state.orchestration={mode:state.collaboration.mode,objective,tasks,index:0,current:null,transcript:[],cancelled:false,lastAgent:null};
+      addTrace(state.collaboration.lead,'info',state.collaboration.mode==='debate'?'상호 토론 시작':'교차 검토 시작',{rounds:state.collaboration.rounds,lead:names[state.collaboration.lead],finalizer:state.collaboration.finalizer});
+      runNextCollaborationTurn();
+    }
+    function cancelCollaboration(reason='사용자가 중지함') {
+      if(!state.orchestration)return;
+      const agent=state.orchestration.current?.agent||state.collaboration.lead;state.orchestration.cancelled=true;state.orchestration=null;
+      addTrace(agent,'error','협업 흐름 중단',reason);addMessage('system',`협업 흐름을 중단했습니다. ${reason}`);renderCollaboration();
+    }
+    function send() {
+      const draft=document.getElementById('draft');const original=draft.value.trim();if(!original)return;
+      const routed=route(original);if(!routed){document.getElementById('routing-error').textContent='작업 내용을 입력해주세요.';return;}
+      if(routed.errors?.length){document.getElementById('routing-error').textContent=routed.errors[0];return;}
+      if(state.collaboration.mode==='agent'){
+        const lead=collaborationLeadFor(routed,state.collaboration.lead);
+        if(!lead){document.getElementById('routing-error').textContent='에이전트 협업에서는 #codex 또는 #claude 중 하나만 호출해주세요.';return;}
+        if(lead!==state.collaboration.lead){state.collaboration.lead=lead;save();renderCollaboration();}
+      }
+      document.getElementById('routing-error').textContent='';draft.value='';updateRoutingPreview();
+      state.forceMessageBottom=true;
+      const active=state.conversations.find(item=>item.id===state.activeConversationId);
+      if(active?.title==='새 대화'){
+        const title=original.replace(/(?:#|@)(?:codex|코덱스|claude|클로드|all|모두)(?=$|[\s,.:;!?])/giu,'').replace(/@"[^"]+"/g,'').replace(/\s+/g,' ').trim();
+        if(title)active.title=title.slice(0,36)+(title.length>36?'…':'');
+      }
+      addMessage('user',original);
+      if(state.collaboration.mode==='independent'){
+        routed.targets.forEach(agent=>{
+          const alreadyQueued=state.queue.some(item=>item.kind==='agent'&&item.agent===agent);
+          if(state.orchestration||state.running[agent]||alreadyQueued)enqueueAgent(agent,routed.prompts[agent],original);
+          else dispatchAgent(agent,routed.prompts[agent]);
+        });
+      } else if(state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length)enqueueCollaboration(routed.prompt,original);
+      else startCollaboration(routed.prompt);
+      setTimeout(()=>{state.forceMessageBottom=false;drainQueues();},0);
+    }
+
+    function parseLine(agent, line) {
+      if (!line.trim()) return; let data;
+      try { data=JSON.parse(line); } catch { addTrace(agent,'info','비정형 출력',line); return; }
+      traceProviderEvent(agent,data,line);
+      if (agent==='codex') {
+        if (data.type==='thread.started' && data.thread_id) { state.sessions.codex=data.thread_id; save(); renderSettings(); }
+        if (data.type==='item.completed' && data.item?.type==='agent_message' && data.item.text) appendAgentText(agent,data.item.text);
+        if (data.type==='error') failAgent(agent,data.error?.message || data.message || 'Codex 실행 오류');
+      } else {
+        const delta=data.type==='stream_event' && data.event?.type==='content_block_delta' && data.event?.delta?.type==='text_delta' ? data.event.delta.text : null;
+        if (data.session_id && (delta || data.type==='assistant' || (data.type==='result'&&!data.is_error))) {
+          state.sessions.claude=data.session_id; save(); renderSettings();
+        }
+        if (delta) appendAgentText(agent,delta);
+        if (data.type==='result' && !currentText(agent) && data.result) appendAgentText(agent,data.result);
+        if (data.is_error) {
+          const message=data.errors?.join('\n') || data.error?.message || data.message || data.result || 'Claude 실행 오류';
+          if (/No conversation found with session ID/i.test(message) && !state.pending[agent]?.retried) {
+            state.sessions[agent]=null; state.pending[agent].retried=true; state.retryOnTermination[agent]=true; save(); renderSettings();
+          } else failAgent(agent,message);
+        }
+      }
+    }
+    function appendAgentText(agent, text) { updateMessage(state.responseIds[agent], m => m.text += text); }
+    function currentText(agent) { return state.messages.find(m=>m.id===state.responseIds[agent])?.text || ''; }
+    function friendlyError(message) {
+      if (typeof message !== 'string') return '알 수 없는 실행 오류';
+      try { const parsed=JSON.parse(message); return parsed.error?.message || parsed.message || message; } catch {}
+      const match=message.match(/\{[\s\S]*\}/);
+      if (match) { try { const parsed=JSON.parse(match[0]); return parsed.error?.message || parsed.message || message; } catch {} }
+      return message;
+    }
+    function failAgent(agent, message) {
+      message=friendlyError(message);
+      addTrace(agent,'error','실행 실패',message);
+      updateMessage(state.responseIds[agent], m => { m.text += (m.text?'\n\n':'') + '⚠️ ' + message; m.streaming=false; });
+      state.running[agent]=false; renderStatus();
+      if(state.orchestration){state.orchestration=null;addMessage('system','AI 실행 오류로 협업 흐름을 중단했습니다. 오른쪽 실행 과정에서 오류 원문을 확인할 수 있습니다.');renderCollaboration();}
+    }
+    function finishAgent(agent, exitCode) {
+      if (!state.running[agent]) return;
+      const err=friendlyError(state.stderr[agent].trim());
+      updateMessage(state.responseIds[agent], m => {
+        if (exitCode!==0) m.text += (m.text?'\n\n':'') + '⚠️ ' + (err || `프로세스 종료 코드 ${exitCode}`);
+        if (!m.text) m.text='응답 없이 종료되었습니다.'; m.streaming=false;
+      });
+      state.running[agent]=false; renderStatus();
+      addTrace(agent,exitCode===0?'success':'error',exitCode===0?'프로세스 정상 종료':`프로세스 비정상 종료 · code ${exitCode}`,exitCode===0?'':err);
+      if(agent==='codex'&&exitCode===0)refreshUsage(true);
+      if(exitCode===0){requestBranch(agent);requestProjectFiles(agent);}
+      if(exitCode===0&&state.diff.visible&&state.diff.agent===agent)refreshProjectDiff(agent);
+      if(state.orchestration){
+        if(exitCode===0)advanceCollaboration(agent);
+        else cancelCollaboration(`프로세스 종료 코드 ${exitCode}`);
+      } else if(exitCode===0)setTimeout(()=>drainAgentQueue(agent),0);
+    }
+    function advanceCollaboration(agent) {
+      const flow=state.orchestration;const task=flow?.current;if(!flow||flow.cancelled||task?.agent!==agent)return;
+      if(flow.mode==='agent'){
+        const parsed=window.TriadCollaboration.extractHandoff(currentText(agent),agent);
+        if(parsed.text!==currentText(agent))updateMessage(state.responseIds[agent],message=>{message.text=parsed.text||'상대 AI에게 협업을 요청했습니다.';});
+        flow.transcript.push({agent,label:task.label,text:parsed.text||'(협업 요청)'});flow.lastAgent=agent;flow.current=null;
+        if(parsed.error){
+          addTrace(agent,'error','협업 인계 형식 오류',parsed.error);cancelCollaboration(parsed.error);return;
+        }
+        if(parsed.handoff){
+          if(task.noHandoff){
+            addTrace(agent,'error','마무리 단계에서 추가 위임 요청',parsed.handoff);
+            finishAgentCollaboration(flow,agent,'추가 위임 한도 이후에도 협업 요청이 발생해 흐름을 종료했습니다. 마지막 AI 응답과 실행 과정을 확인하세요.');return;
+          }
+          if(flow.handoffs>=flow.maxHandoffs){
+            addTrace(agent,'error','최대 위임 횟수 도달',{maxHandoffs:flow.maxHandoffs,question:parsed.handoff.question});
+            addMessage('system',`최대 위임 ${flow.maxHandoffs}회에 도달해 ${names[agent]}가 현재 정보로 작업을 마무리합니다.`);
+            setTimeout(()=>runAgentTurn({agent,kind:'agent_work',received:'추가 위임 한도에 도달했습니다. 지금까지 확보한 정보로 최종 결과를 작성하세요.',from:parsed.handoff.to,noHandoff:true}),0);return;
+          }
+          flow.handoffs+=1;
+          const reason=parsed.handoff.reason?`\n이유: ${parsed.handoff.reason}`:'';
+          addMessage('system',`${names[agent]} → ${names[parsed.handoff.to]} · 협업 요청 ${flow.handoffs}/${flow.maxHandoffs}\n${parsed.handoff.question}${reason}`);
+          addTrace(agent,'info',`${names[parsed.handoff.to]}에게 질문 전달`,parsed.handoff);
+          setTimeout(()=>runAgentTurn({agent:parsed.handoff.to,kind:'agent_answer',requester:agent,question:parsed.handoff.question,reason:parsed.handoff.reason}),0);return;
+        }
+        if(task.kind==='agent_answer'){
+          const answer=parsed.text||'(응답 없음)';
+          addMessage('system',`${names[agent]} → ${names[task.requester]} · 답변을 전달하고 원래 작업을 재개합니다.`);
+          addTrace(agent,'success',`${names[task.requester]}에게 답변 반환`,{characters:answer.length});
+          setTimeout(()=>runAgentTurn({agent:task.requester,kind:'agent_work',received:answer,from:agent}),0);return;
+        }
+        finishAgentCollaboration(flow,agent);return;
+      }
+      flow.transcript.push({agent,label:task.label,text:currentText(agent)||'(응답 없음)'});flow.lastAgent=agent;flow.current=null;
+      setTimeout(runNextCollaborationTurn,0);
+    }
+    function retryAgent(agent) {
+      state.retryOnTermination[agent]=false; state.stderr[agent]=''; state.lineBuffers[agent]='';
+      const pending=state.pending[agent];
+      if (!pending) { finishAgent(agent,1); return; }
+      addTrace(agent,'info','저장된 세션을 찾지 못해 새 세션으로 자동 재시도');
+      post({action:'run',agent,prompt:pending.prompt,config:state.settings[agent],session:null});
+    }
+
+    window.nativeEvent = event => {
+      if (event.type==='boot') {
+        state.codexModels=event.codexModels || [];
+        state.claudeModels=event.claudeModels || [];
+        const loaded=Array.isArray(event.conversations)?event.conversations:[];
+        state.conversations=loaded;
+        if(loaded.length){
+          const selected=loaded.find(item=>item.id===state.activeConversationId)||loaded[0];
+          state.activeConversationId=selected.id;state.messages=clone(selected.messages||[]);
+          state.settings=clone(selected.settings||defaults(event.home));state.collaboration=clone(selected.collaboration||{mode:'independent',lead:'codex',rounds:3,finalizer:'claude'});state.sessions=clone(selected.sessions||{codex:null,claude:null});state.traces=clone(selected.traces||[]);
+        }else{
+          if(!state.settings)state.settings=defaults(event.home);
+          const now=Date.now();const migrated={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:clone(state.messages),settings:clone(state.settings),collaboration:clone(state.collaboration),sessions:clone(state.sessions),traces:clone(state.traces)};
+          const firstUser=state.messages.find(message=>message.author==='user')?.text?.replace(/\s+/g,' ').trim();
+          if(firstUser)migrated.title=firstUser.slice(0,36)+(firstUser.length>36?'…':'');
+          state.conversations=[migrated];state.activeConversationId=migrated.id;
+        }
+        const base=defaults(event.home);
+        state.settings={codex:{...base.codex,...(state.settings?.codex||{})},claude:{...base.claude,...(state.settings?.claude||{})}};
+        state.messages.forEach(message=>{if(message.streaming){message.streaming=false;if(!message.text)message.text='이전 앱 종료로 작업이 중단되었습니다.';}});
+        state.settings.codex.executablePath ||= event.codexPath;
+        state.settings.claude.executablePath ||= event.claudePath;
+        if (state.settings.codex.executablePath==='codex') state.settings.codex.executablePath=event.codexPath;
+        if (state.settings.claude.executablePath==='claude') state.settings.claude.executablePath=event.claudePath;
+        const available=state.codexModels.map(model=>model.slug);
+        if (state.settings.codex.authMode==='existing' && available.length && !available.includes(state.settings.codex.model)) {
+          state.settings.codex.model=available[0];
+          state.settings.codex.effort=state.codexModels[0].defaultEffort || 'medium';
+        }
+        state.tokenStatus=event.tokenStatus;state.storageReady=true;save();renderAll();startUsagePolling();refreshAuthStatuses();refreshBranches();refreshProjectFiles();
+      } else if (event.type==='raw') {
+        state.lineBuffers[event.agent]+=event.chunk;
+        const parts=state.lineBuffers[event.agent].split('\n'); state.lineBuffers[event.agent]=parts.pop(); parts.forEach(line=>parseLine(event.agent,line));
+      } else if (event.type==='stderr') {
+        state.stderr[event.agent]+=event.chunk;
+        if(event.chunk.trim()) addTrace(event.agent,/error|failed|invalid/i.test(event.chunk)?'error':'info','표준 오류 출력',event.chunk.trim());
+      }
+      else if (event.type==='terminated') {
+        const rest=state.lineBuffers[event.agent]; if(rest)parseLine(event.agent,rest);
+        if(state.retryOnTermination[event.agent]) retryAgent(event.agent); else finishAgent(event.agent,event.exitCode);
+      }
+      else if (event.type==='error') failAgent(event.agent,event.message);
+      else if (event.type==='session') { state.sessions[event.agent]=event.session; save(); renderSettings(); }
+      else if (event.type==='directory') { state.settings[event.agent].workspacePath=event.path; save(); renderSettings(); renderStatus();requestBranch(event.agent);requestProjectFiles(event.agent); }
+      else if (event.type==='files') {
+        const draft=document.getElementById('draft');
+        const refs=event.paths.map(path=>`@"${path.replaceAll('"','\\"')}"`).join(' ');
+        draft.value=`${draft.value}${draft.value.trim()?' ':''}${refs} `; draft.focus();updateRoutingPreview();
+      }
+      else if(event.type==='projectFiles') {
+        state.projectFiles[event.agent]={workspace:event.workspace||state.settings?.[event.agent]?.workspacePath||'',files:event.files||[],loading:false,error:event.error||'',truncated:!!event.truncated};
+        if(autocomplete.open&&autocomplete.type==='file')updateAutocomplete();
+      }
+      else if (event.type==='tokenStatus') { state.tokenStatus=event.status; renderSettings(); }
+      else if (event.type==='tokenError') alert(event.message);
+      else if(event.type==='authProgress') {state.accountStatus[event.agent]={...state.accountStatus[event.agent],checking:false,busy:true,operation:event.operation};renderSettings();}
+      else if(event.type==='authStatus') {
+        state.accountStatus[event.agent]={checking:false,busy:false,connected:!!event.connected,message:event.message||''};renderSettings();
+        addTrace(event.agent,event.connected?'success':'info',event.connected?'CLI 계정 연결 확인':'CLI 계정 연결 필요',safeAccountDetail(event.agent,event.message));
+      }
+      else if(event.type==='authResult') {
+        if(!event.success){state.accountStatus[event.agent]={...state.accountStatus[event.agent],checking:false,busy:false,connected:false,message:event.message||'인증 작업 실패'};renderSettings();addTrace(event.agent,'error','계정 인증 실패',event.message||'');alert(event.message||'계정 인증에 실패했습니다.');}
+        else addTrace(event.agent,'success',event.operation==='logout'?'CLI 계정 로그아웃':'CLI 계정 연결 완료');
+      }
+      else if(event.type==='diffResult') {state.diff={...state.diff,loading:false,agent:event.agent||state.diff.agent,text:event.text||'',error:event.error||'',workspace:event.workspace||'',truncated:!!event.truncated,selectedFileId:null};renderDiff();}
+      else if(event.type==='branchResult') {
+        if(state.settings?.[event.agent]?.workspacePath===event.workspace){state.branchStatus[event.agent]={loading:false,kind:event.kind||'unknown',label:event.label||'확인 불가',workspace:event.workspace};renderSettings();}
+      }
+      else if (event.type==='linkError') alert(event.message);
+      else if (event.type==='usage') {state.usageRefreshing=false;const normalized=window.TriadUsage.normalizeCodex(event.data);if(normalized.windows.length){setUsage('codex',normalized,event.data);addTrace('codex','success','계정 잔여량 갱신',normalized.windows);}else {state.usage.codex={...(state.usage.codex||{}),error:'계정 한도 정보가 제공되지 않았습니다.',updatedAt:Date.now()};saveUsage();renderUsage();}}
+      else if (event.type==='usageError') {state.usageRefreshing=false;state.usage.codex={...(state.usage.codex||{}),error:event.message||'사용량 조회 실패'};saveUsage();renderUsage();addTrace('codex','error','사용량 조회 실패',event.message||'응답 없음');}
+    };
+
+    function renderStatus() {
+      if (!state.settings) return;
+      for (const agent of agents) {
+        document.getElementById(`pill-${agent}`).classList.toggle('running',state.running[agent]);
+        const c=state.settings[agent]; document.getElementById(`summary-${agent}`).textContent=`${c.model} · ${c.effort} · ${c.speedMode}`;
+        document.getElementById(`stop-${agent}`).hidden=!state.running[agent];
+      }
+      renderCollaboration();
+    }
+    function renderCollaboration() {
+      const c=state.collaboration;const modeButtons=[...document.querySelectorAll('[data-collab-mode]')];if(!modeButtons.length)return;
+      modeButtons.forEach(button=>{const active=button.dataset.collabMode===c.mode;button.classList.toggle('active',active);button.setAttribute('aria-checked',String(active));});
+      document.getElementById('collab-lead').value=c.lead;document.getElementById('collab-rounds').value=String(c.rounds);document.getElementById('collab-finalizer').value=c.finalizer;
+      const independent=c.mode==='independent';const review=c.mode==='review';const agentMode=c.mode==='agent';
+      document.getElementById('collab-lead-label').hidden=independent;document.getElementById('collab-lead').hidden=independent;
+      document.getElementById('collab-rounds-wrap').hidden=independent;document.getElementById('collab-finalizer-wrap').hidden=independent||review;
+      document.getElementById('collab-finalizer-wrap').hidden=independent||review||agentMode;
+      document.getElementById('collab-lead-label').textContent=agentMode?'작업 시작':review?'초안 작성':'첫 발언';
+      document.getElementById('collab-rounds-label').textContent=agentMode?'최대 위임':'라운드';
+      const status=document.getElementById('collab-state');
+      if(state.orchestration){const task=state.orchestration.current;status.textContent=task?(state.orchestration.mode==='agent'?`${names[task.agent]} · ${task.label} · 위임 ${state.orchestration.handoffs}/${state.orchestration.maxHandoffs}`:`${names[task.agent]} · ${task.label} (${state.orchestration.index}/${state.orchestration.tasks.length})`):'다음 작업 준비 중';status.classList.add('live');}
+      else {status.textContent=independent?'각 AI가 독립적으로 응답':agentMode?'필요할 때 서로 질문하고 답을 돌려받아 작업':review?'작성 → 검토 → 수정':'두 AI가 번갈아 토론';status.classList.remove('live');}
+      document.querySelectorAll('[data-tag]').forEach(button=>button.disabled=!independent&&!(agentMode&&button.dataset.tag!=='#all'));
+      document.getElementById('block-template').disabled=!independent;
+      document.getElementById('compose-hint').textContent=independent?'Enter 전송 · 작업 중 추가 전송은 AI별 순차 대기 · 태그가 없으면 둘 다':agentMode?'#codex·#claude로 이번 작업의 시작 AI 지정 · 태그가 없으면 선택값 사용':'Enter 전송 · 작업 중 추가 전송은 순차 대기 · 협업 순서에 따라 자동 중계';
+      const controlsLocked=!!state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length>0;
+      document.querySelectorAll('.collab-controls select, .collab-mode-btn').forEach(control=>control.disabled=controlsLocked);
+      requestAnimationFrame(updateScrollButton);
+      updateRoutingPreview();
+    }
+    function optionList(values, selected) { return values.map(v=>`<option value="${v}" ${v===selected?'selected':''}>${v}</option>`).join(''); }
+    function modelOptionList(agent, selected) {
+      const discovered=agent==='codex'
+        ? (state.codexModels.length?state.codexModels:[
+            {slug:'gpt-5.6-sol',name:'GPT-5.6 Sol'}, {slug:'gpt-5.6-terra',name:'GPT-5.6 Terra'},
+            {slug:'gpt-5.6-luna',name:'GPT-5.6 Luna'}, {slug:'gpt-5.5',name:'GPT-5.5'}, {slug:'gpt-5.4',name:'GPT-5.4'}
+          ])
+        : (state.claudeModels.length?state.claudeModels:[
+            {slug:'default',name:'Default (계정 권장)'}, {slug:'best',name:'Best'},
+            {slug:'sonnet',name:'Sonnet'}, {slug:'opus',name:'Opus'}, {slug:'haiku',name:'Haiku'},
+            {slug:'sonnet[1m]',name:'Sonnet · 1M'}, {slug:'opus[1m]',name:'Opus · 1M'},
+            {slug:'opusplan',name:'Opus Plan'}, {slug:'fable',name:'Fable'}
+          ]);
+      const models=discovered.some(model=>model.slug===selected)?discovered:[{slug:selected,name:`${selected} · 현재 설정`},...discovered];
+      return models.map(model=>`<option value="${escapeAttr(model.slug)}" ${model.slug===selected?'selected':''}>${model.name}</option>`).join('');
+    }
+    function escapeAttr(value='') { return value.replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;'); }
+    function accountLabel(agent,status) {
+      if(status.busy)return status.operation==='logout'?'로그아웃 중…':status.operation==='connect'?'브라우저 로그인 대기 중…':'연결 확인 중…';
+      if(status.checking)return '연결 확인 중…';
+      if(!status.connected)return '연결 필요';
+      const raw=String(status.message||'');
+      if(agent==='codex')return /api key/i.test(raw)?'✓ API 계정 연결됨':/chatgpt/i.test(raw)?'✓ ChatGPT 연결됨':'✓ Codex 계정 연결됨';
+      try {
+        const value=JSON.parse(raw);const method=value.subscriptionType||value.subscription_type||value.authMethod||value.auth_method;
+        if(method)return `✓ Claude ${String(method).replaceAll('_',' ')} 연결됨`;
+      } catch {}
+      return '✓ Claude 계정 연결됨';
+    }
+    function safeAccountDetail(agent,raw) {
+      if(agent!=='claude')return String(raw||'').trim();
+      try {const value=JSON.parse(String(raw||''));return JSON.stringify({loggedIn:!!value.loggedIn,authMethod:value.authMethod||null,subscriptionType:value.subscriptionType||null});} catch {return String(raw||'').trim();}
+    }
+    function requestAuthStatus(agent) {
+      if(!state.settings?.[agent]||state.settings[agent].authMode!=='existing')return;
+      state.accountStatus[agent]={...state.accountStatus[agent],checking:true,busy:false};renderSettings();
+      post({action:'authAccount',operation:'status',agent,config:state.settings[agent]});
+    }
+    function refreshAuthStatuses(){agents.forEach(requestAuthStatus);}
+    function requestBranch(agent) {
+      if(!state.settings?.[agent])return;const workspace=state.settings[agent].workspacePath;
+      state.branchStatus[agent]={loading:true,kind:'unknown',label:'브랜치 확인 중…',workspace};renderSettings();
+      post({action:'gitBranch',agent,workspace});
+    }
+    function refreshBranches(){agents.forEach(requestBranch);}
+    function requestProjectFiles(agent) {
+      const workspace=state.settings?.[agent]?.workspacePath;if(!workspace)return;
+      state.projectFiles[agent]={...state.projectFiles[agent],loading:true,error:''};
+      post({action:'projectFiles',agent,workspace});
+    }
+    function refreshProjectFiles(){agents.forEach(requestProjectFiles);}
+    function renderSettings() {
+      if (!state.settings) return;
+      const root=document.getElementById('settings'); root.innerHTML='';
+      for (const agent of agents) {
+        const c=state.settings[agent];const account=state.accountStatus[agent]||{}; const card=document.createElement('div'); card.className='settings-card';
+        const activeCodexModel=state.codexModels.find(model=>model.slug===c.model);
+        const efforts=agent==='codex'?(activeCodexModel?.efforts?.length?activeCodexModel.efforts:['low','medium','high','xhigh','max','ultra']):['low','medium','high','xhigh','max'];
+        const permissionOptions=agent==='codex'
+          ? [
+              ['read-only','읽기 전용'],
+              ['workspace-write','작업 폴더 쓰기 (권장)'],
+              ['danger-full-access','샌드박스 밖 실행 (Gradle·로컬 서버)']
+            ]
+          : [
+              ['manual','매번 확인'],
+              ['acceptEdits','파일 수정 자동 허용 (권장)'],
+              ['auto','자동'],
+              ['dontAsk','추가 권한 요청 안 함'],
+              ['plan','계획 전용'],
+              ['bypassPermissions','샌드박스 밖 실행 (Gradle·로컬 서버)']
+            ];
+        const permissionOptionList=permissionOptions.map(([value,label])=>`<option value="${value}" ${value===c.permissionMode?'selected':''}>${label}</option>`).join('');
+        const unrestricted=(agent==='codex'&&c.permissionMode==='danger-full-access')||(agent==='claude'&&c.permissionMode==='bypassPermissions');
+        const open=state.settingsOpen[agent];
+        card.innerHTML=`
+          <div class="settings-head"><h3>${names[agent]}</h3><span class="health"></span></div>
+          <details class="settings-group" data-section="model" ${open.model?'open':''}>
+            <summary>모델 · 응답 <span class="settings-group-summary">${escapeAttr(c.model)} · ${escapeAttr(c.effort)}</span></summary>
+            <div class="settings-group-body">
+              <div class="field"><label>언어 모델</label><select data-key="model">${modelOptionList(agent,c.model)}</select></div>
+              <div class="row"><div class="field"><label>추론 강도</label><select data-key="effort">${optionList(efforts,c.effort)}</select></div><div class="field"><label>응답 속도</label><select data-key="speedMode">${optionList(['standard','fast'],c.speedMode)}</select></div></div>
+              ${c.speedMode==='fast'?`<p class="fast-note">${agent==='codex'&&activeCodexModel&&!activeCodexModel.supportsFast?'선택한 Codex 모델은 Fast 티어를 제공하지 않습니다. ':''}Fast 모드는 지원 모델/계정에서만 동작하며 더 높은 비용 또는 크레딧을 사용할 수 있습니다.</p>`:''}
+            </div>
+          </details>
+          <details class="settings-group" data-section="environment" ${open.environment?'open':''}>
+            <summary>실행 환경 <span class="settings-group-summary">${unrestricted?'샌드박스 밖':escapeAttr(state.branchStatus[agent]?.label||'브랜치 확인 전')}</span></summary>
+            <div class="settings-group-body">
+              <div class="field"><label>작업 권한</label><select data-key="permissionMode">${permissionOptionList}</select>${unrestricted?'<p class="fast-note">⚠️ 에이전트가 사용자 계정 권한으로 명령을 실행합니다. 신뢰하는 프로젝트에서만 사용하세요.</p>':'<p class="fast-note">Gradle 테스트·개발 서버처럼 자식 프로세스가 직접 소켓을 열어야 하면 ‘샌드박스 밖 실행’을 선택하세요.</p>'}</div>
+              <div class="field"><label>작업 폴더</label><div class="path-row"><input data-key="workspacePath" value="${escapeAttr(c.workspacePath)}"><button class="small-btn choose">선택</button></div><div class="branch-row ${state.branchStatus[agent]?.kind==='branch'?'active':state.branchStatus[agent]?.kind==='detached'?'detached':''}"><span>⑂</span><span class="branch-name">${escapeAttr(state.branchStatus[agent]?.label||'확인 전')}</span><button class="branch-refresh" title="브랜치 새로고침">↻</button></div></div>
+              <div class="field"><label>추가 쓰기 폴더 · 쉼표 구분</label><input data-key="writableRoots" value="${escapeAttr(c.writableRoots||'')}" placeholder="예: ~/.gradle, ~/.m2"><p class="fast-note">빌드 캐시처럼 작업 폴더 밖에서 쓰기가 필요한 경로만 추가하세요.</p></div>
+              <div class="row"><div class="field"><label>외부 네트워크</label><select data-key="networkAccess"><option value="false" ${c.networkAccess?'':'selected'}>차단</option><option value="true" ${c.networkAccess?'selected':''}>허용</option></select></div><div class="field"><label>로컬 바인딩</label><select data-key="allowLocalBinding"><option value="false" ${c.allowLocalBinding?'':'selected'}>차단</option><option value="true" ${c.allowLocalBinding?'selected':''}>허용</option></select></div></div>
+              <p class="fast-note">로컬 바인딩은 에이전트의 네트워크 프록시용입니다. 의존성 다운로드가 필요할 때만 외부 네트워크도 허용하세요.</p>
+            </div>
+          </details>
+          <details class="settings-group" data-section="account" ${open.account?'open':''}>
+            <summary>계정 연결 <span class="settings-group-summary">${account.connected?'연결됨':c.authMode==='apiKey'?'API 키':'확인 필요'}</span></summary>
+            <div class="settings-group-body">
+              <div class="field"><label>CLI 실행 파일</label><input data-key="executablePath" value="${escapeAttr(c.executablePath)}"></div>
+              <div class="field"><label>인증 연동</label><select data-key="authMode"><option value="existing" ${c.authMode==='existing'?'selected':''}>구독 계정 (CLI)</option><option value="apiKey" ${c.authMode==='apiKey'?'selected':''}>API 키</option></select></div>
+              ${c.authMode==='existing'?`<div class="field"><label>${names[agent]} 계정</label><div class="token-row"><span class="token-status ${account.connected?'saved':''}">${accountLabel(agent,account)}</span><span class="spacer"></span>${account.connected?'<button class="small-btn auth-connect">다시 연결</button><button class="small-btn auth-logout">로그아웃</button>':'<button class="small-btn auth-refresh">↻</button><button class="small-btn auth-connect">계정 연결</button>'}</div></div>`:''}
+              ${c.authMode==='apiKey'?`<div class="field"><label>${agent==='codex'?'OpenAI':'Anthropic'} API 키 · macOS 키체인 저장</label><input class="token" type="password" autocomplete="off" placeholder="키 입력"><div class="token-row"><span class="token-status ${state.tokenStatus[agent]?'saved':''}">${state.tokenStatus[agent]?'✓ 키체인에 저장됨':'저장된 키 없음'}</span><span class="spacer"></span>${state.tokenStatus[agent]?'<button class="small-btn delete-token">삭제</button>':''}<button class="small-btn save-token">저장</button></div></div>`:''}
+            </div>
+          </details>
+          <details class="settings-group" data-section="session" ${open.session?'open':''}>
+            <summary>세션 <span class="settings-group-summary">${state.sessions[agent]?'연결됨':'새 세션'}</span></summary>
+            <div class="settings-group-body"><div class="session-row"><span>${state.sessions[agent]?'세션 연결됨':'새 세션'}</span><button class="small-btn reset-session" ${state.sessions[agent]?'':'disabled'}>세션 초기화</button></div></div>
+          </details>`;
+        card.querySelectorAll('.settings-group').forEach(group=>group.addEventListener('toggle',()=>{state.settingsOpen[agent][group.dataset.section]=group.open;}));
+        card.querySelectorAll('[data-key]').forEach(input=>input.addEventListener('change',()=>{
+          const key=input.dataset.key;c[key]=(key==='networkAccess'||key==='allowLocalBinding')?input.value==='true':input.value;
+          if(agent==='codex'&&input.dataset.key==='model') { const selected=state.codexModels.find(model=>model.slug===c.model); if(selected&&!selected.efforts.includes(c.effort))c.effort=selected.defaultEffort||selected.efforts[0]; }
+          save(); renderSettings(); renderStatus();if(input.dataset.key==='authMode'||input.dataset.key==='executablePath')requestAuthStatus(agent);if(input.dataset.key==='workspacePath'){requestBranch(agent);requestProjectFiles(agent);}
+        }));
+        card.querySelector('.choose').onclick=()=>post({action:'chooseDirectory',agent});
+        card.querySelector('.branch-refresh').onclick=()=>requestBranch(agent);
+        card.querySelector('.reset-session').onclick=()=>{state.sessions[agent]=null;save();renderSettings();};
+        card.querySelector('.save-token')?.addEventListener('click',()=>{const token=card.querySelector('.token').value;post({action:'saveToken',agent,token});card.querySelector('.token').value='';});
+        card.querySelector('.delete-token')?.addEventListener('click',()=>post({action:'deleteToken',agent}));
+        card.querySelector('.auth-refresh')?.addEventListener('click',()=>requestAuthStatus(agent));
+        card.querySelector('.auth-connect')?.addEventListener('click',()=>{
+          state.accountStatus[agent]={...account,busy:true,operation:'connect'};renderSettings();
+          post({action:'authAccount',operation:'connect',agent,config:c});
+        });
+        card.querySelector('.auth-logout')?.addEventListener('click',()=>{
+          if(!confirm(`${names[agent]} CLI 계정에서 로그아웃할까요?`))return;
+          state.accountStatus[agent]={...account,busy:true,operation:'logout'};renderSettings();
+          post({action:'authAccount',operation:'logout',agent,config:c});
+        });
+        root.appendChild(card);
+      }
+    }
+    function renderAll(){renderConversations();renderMessages();renderSettings();renderStatus();renderTraces();renderQueue();}
+
+    function updateRoutingPreview(){
+      const draft=document.getElementById('draft');const root=document.getElementById('routing-preview');const toggle=document.getElementById('routing-preview-toggle');const details=document.getElementById('routing-preview-details');
+      if(!draft||!root)return;const value=draft.value.trim();if(!value){root.hidden=true;return;}
+      const routed=route(value);if(!routed){root.hidden=true;return;}root.hidden=false;root.classList.toggle('invalid',!!routed.errors?.length);
+      if(routed.errors?.length)toggle.textContent=`전송 불가 · ${routed.errors.join(' · ')}`;
+      else if(state.collaboration.mode!=='independent'){
+        const lead=state.collaboration.mode==='agent'?collaborationLeadFor(routed,state.collaboration.lead):state.collaboration.lead;
+        if(state.collaboration.mode==='agent'&&!lead)toggle.textContent='전송 불가 · 에이전트 협업에서는 시작 AI 하나만 호출';
+        else toggle.textContent=`협업 의제${state.collaboration.mode==='agent'?` · ${names[lead]} 시작`:''} · ${routed.prompt.length.toLocaleString('ko-KR')}자 · 클릭하여 확인`;
+        if(state.collaboration.mode==='agent')document.getElementById('collab-lead').value=lead||state.collaboration.lead;
+      }
+      else {
+        const counts=routed.targets.map(agent=>`${names[agent]} ${routed.prompts[agent].length.toLocaleString('ko-KR')}자`);
+        const common=routed.commonText?` · 공통 ${routed.commonText.length.toLocaleString('ko-KR')}자`:'';
+        toggle.textContent=`전달 예정${routed.mode==='block'?' · 블록 모드':''} · ${counts.join(' · ')}${common} · 클릭하여 확인`;
+      }
+      details.innerHTML='';
+      const entries=state.collaboration.mode!=='independent'?[['system','협업 의제',routed.prompt]]:routed.targets.map(agent=>[agent,names[agent],routed.prompts[agent]]);
+      for(const [agent,label,prompt] of entries){const card=document.createElement('div');card.className='routing-preview-card';const title=document.createElement('strong');title.textContent=label;title.className=agent;const pre=document.createElement('pre');pre.textContent=prompt;card.append(title,pre);details.appendChild(card);}
+      details.hidden=!state.routingPreviewOpen;
+    }
+
+    const autocompleteOptions=[
+      {tag:'#codex',name:'Codex',description:'Codex만 호출'},
+      {tag:'#claude',name:'Claude',description:'Claude만 호출'},
+      {tag:'#all',name:'전체',description:'두 AI 모두 호출'}
+    ];
+    const autocomplete={open:false,type:'agent',index:0,start:0,items:[]};
+    function closeAutocomplete(){autocomplete.open=false;const root=document.getElementById('agent-autocomplete');root.hidden=true;root.classList.remove('file-mode');}
+    function renderAutocomplete(){
+      const root=document.getElementById('agent-autocomplete'); root.innerHTML=''; root.hidden=!autocomplete.open;root.classList.toggle('file-mode',autocomplete.type==='file');
+      autocomplete.items.forEach((item,index)=>{
+        const button=document.createElement('button'); button.className=`autocomplete-item ${index===autocomplete.index?'selected':''}`;
+        if(autocomplete.type==='file'){
+          const badge=document.createElement('span');badge.className='file-symbol';badge.textContent=item.agents.length>1?'C·Cl':item.agents[0]==='claude'?'Claude':'Codex';
+          const main=document.createElement('span');main.className='file-main';const name=document.createElement('strong');name.textContent=item.name;const path=document.createElement('small');path.textContent=item.parent||item.relative;main.append(name,path);
+          const status=document.createElement('span');status.className='file-status';status.textContent=item.status||'';button.append(badge,main,status);button.title=item.absolute;
+        }else{
+          const symbol=document.createElement('span');symbol.className='symbol';symbol.textContent='#';const main=document.createElement('span');const name=document.createElement('strong');name.textContent=item.name;const description=document.createElement('small');description.textContent=`${item.tag} · ${item.description}`;main.append(name,description);button.append(symbol,main);
+        }
+        button.onmousedown=e=>{e.preventDefault();selectAutocomplete(index);}; root.appendChild(button);
+      });
+    }
+    function updateAutocomplete(){
+      const draft=document.getElementById('draft'); const before=draft.value.slice(0,draft.selectionStart);
+      const agentMatch=before.match(/(^|\s)#([^\s#]*)$/u);
+      const fileMatch=before.match(/(^|\s)@(?:"([^"]*)|([^\s@#]*))$/u);
+      const match=agentMatch||fileMatch;if(!match){closeAutocomplete();return;}
+      autocomplete.type=agentMatch?'agent':'file';
+      const query=(agentMatch?match[2]:(match[2]??match[3]??'')).toLowerCase();
+      autocomplete.items=agentMatch
+        ? autocompleteOptions.filter(item=>(state.collaboration.mode!=='agent'||item.tag!=='#all')&&(item.tag.slice(1).startsWith(query)||item.name.toLowerCase().startsWith(query)))
+        : window.TriadFileSearch.search(query,agents.map(agent=>({agent,...state.projectFiles[agent]})),12);
+      if(!autocomplete.items.length){closeAutocomplete();return;}
+      autocomplete.open=true; autocomplete.index=Math.min(autocomplete.index,autocomplete.items.length-1);
+      autocomplete.start=draft.selectionStart-match[0].length+(match[1]?match[1].length:0); renderAutocomplete();
+    }
+    function selectAutocomplete(index){
+      const draft=document.getElementById('draft'); const item=autocomplete.items[index]; if(!item)return;
+      const end=draft.selectionStart;const value=autocomplete.type==='file'?`@"${item.absolute.replaceAll('"','\\"')}"`:item.tag;
+      draft.value=draft.value.slice(0,autocomplete.start)+value+' '+draft.value.slice(end);
+      const caret=autocomplete.start+value.length+1; draft.setSelectionRange(caret,caret); closeAutocomplete(); draft.focus();
+      updateRoutingPreview();
+    }
+    document.querySelectorAll('[data-tag]').forEach(button=>button.onclick=()=>{const d=document.getElementById('draft');if(!d.value.includes(button.dataset.tag))d.value=`${button.dataset.tag} ${d.value}`;d.focus();updateRoutingPreview();});
+    document.getElementById('block-template').onclick=()=>{const draft=document.getElementById('draft');const prefix=draft.value.trim()?`${draft.value.trimEnd()}\n\n`:'';draft.value=`${prefix}#codex:\n\n#claude:\n`;const caret=prefix.length+'#codex:\n'.length;draft.setSelectionRange(caret,caret);draft.focus();updateRoutingPreview();};
+    document.getElementById('attach-file').title='클릭: 문서 자동완성 · Option 클릭: 파일 선택 창';
+    document.getElementById('attach-file').onclick=event=>{
+      if(event.altKey){post({action:'chooseFiles',workspace:state.settings?.codex?.workspacePath || ''});return;}
+      const draft=document.getElementById('draft');const start=draft.selectionStart;const spacer=start>0&&!/\s/u.test(draft.value[start-1])?' ':'';const insertion=`${spacer}@`;
+      draft.value=draft.value.slice(0,start)+insertion+draft.value.slice(draft.selectionEnd);const caret=start+insertion.length;draft.setSelectionRange(caret,caret);draft.focus();updateAutocomplete();updateRoutingPreview();
+    };
+    document.getElementById('routing-preview-toggle').onclick=()=>{state.routingPreviewOpen=!state.routingPreviewOpen;updateRoutingPreview();};
+    document.getElementById('new-conversation').onclick=()=>newConversation();
+    document.getElementById('conversation-search').addEventListener('input',event=>{state.conversationSearch=event.target.value;renderConversations();});
+    document.getElementById('refresh-usage').onclick=()=>refreshUsage(true);
+    document.getElementById('send').onclick=send;
+    document.getElementById('draft').addEventListener('keydown',e=>{
+      if(autocomplete.open){
+        if(e.key==='ArrowDown'){e.preventDefault();autocomplete.index=(autocomplete.index+1)%autocomplete.items.length;renderAutocomplete();return;}
+        if(e.key==='ArrowUp'){e.preventDefault();autocomplete.index=(autocomplete.index-1+autocomplete.items.length)%autocomplete.items.length;renderAutocomplete();return;}
+        if(e.key==='Enter'&&!e.isComposing){e.preventDefault();selectAutocomplete(autocomplete.index);return;}
+        if(e.key==='Escape'){e.preventDefault();closeAutocomplete();return;}
+      }
+      if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();send();}
+    });
+    document.getElementById('draft').addEventListener('input',e=>{document.getElementById('send').disabled=!e.target.value.trim();updateAutocomplete();updateRoutingPreview();});
+    document.getElementById('draft').addEventListener('click',updateAutocomplete);
+    document.getElementById('draft').addEventListener('blur',()=>setTimeout(closeAutocomplete,120));
+    document.getElementById('messages').addEventListener('scroll',updateScrollButton,{passive:true});
+    document.getElementById('scroll-bottom').onclick=()=>{const root=document.getElementById('messages');root.scrollTop=root.scrollHeight;updateScrollButton();};
+    window.addEventListener('resize',updateScrollButton);
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden&&Date.now()-state.lastUsageRefresh>5*60*1000)refreshUsage(true);});
+    document.querySelectorAll('.collab-controls select').forEach(select=>select.addEventListener('change',()=>{
+      state.collaboration.lead=document.getElementById('collab-lead').value;
+      state.collaboration.rounds=Number(document.getElementById('collab-rounds').value);
+      state.collaboration.finalizer=document.getElementById('collab-finalizer').value;save();renderCollaboration();
+    }));
+    document.querySelectorAll('[data-collab-mode]').forEach(button=>button.addEventListener('click',()=>{
+      if(button.disabled)return;state.collaboration.mode=button.dataset.collabMode;save();renderCollaboration();
+    }));
+    function stopAgent(agent){if(state.orchestration)cancelCollaboration();post({action:'stop',agent});}
+    document.getElementById('stop-codex').onclick=()=>stopAgent('codex');
+    document.getElementById('stop-claude').onclick=()=>stopAgent('claude');
+    document.getElementById('clear').onclick=()=>{if(agents.some(a=>state.running[a])||state.queue.length)return;state.messages=[];addWelcome();renderMessages();};
+    document.getElementById('clear-traces').onclick=()=>{state.traces=[];save();renderTraces();};
+    document.getElementById('trace-toggle').onclick=()=>{state.traceVisible=!state.traceVisible;localStorage.setItem('triad.traceVisible',String(state.traceVisible));renderTraceVisibility();};
+    document.getElementById('diff-toggle').onclick=openDiff;
+    document.getElementById('diff-close').onclick=closeDiff;
+    document.getElementById('diff-refresh').onclick=()=>refreshProjectDiff();
+    document.getElementById('diff-agent').onchange=event=>refreshProjectDiff(event.target.value);
+    document.getElementById('diff-content').addEventListener('scroll',syncDiffFileFromScroll,{passive:true});
+    document.addEventListener('keydown',event=>{if(event.key==='Escape'&&state.diff.visible)closeDiff();});
+    document.querySelectorAll('[data-trace-filter]').forEach(button=>button.onclick=()=>{
+      state.traceFilter=button.dataset.traceFilter;
+      document.querySelectorAll('[data-trace-filter]').forEach(item=>item.classList.toggle('active',item===button));
+      renderTraces();
+    });
+    renderMessages(); renderTraces(); renderTraceVisibility(); renderDiff(); post({action:'tokenStatus'});
+  </script>
+</body>
+</html>

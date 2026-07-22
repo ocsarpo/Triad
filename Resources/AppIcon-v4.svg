@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="background" x1="100" y1="78" x2="920" y2="950" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#252038"/>
+      <stop offset="0.5" stop-color="#191A27"/>
+      <stop offset="1" stop-color="#10121A"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="380" y1="70" x2="62" y2="580" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#76B8FF"/>
+      <stop offset="0.58" stop-color="#3186F4"/>
+      <stop offset="1" stop-color="#1462E8"/>
+    </linearGradient>
+    <linearGradient id="orange" x1="644" y1="70" x2="962" y2="580" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFAA7C"/>
+      <stop offset="0.58" stop-color="#F17646"/>
+      <stop offset="1" stop-color="#D94D25"/>
+    </linearGradient>
+    <linearGradient id="violet" x1="118" y1="956" x2="850" y2="560" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C5A4FF"/>
+      <stop offset="0.58" stop-color="#956FE7"/>
+      <stop offset="1" stop-color="#7045C8"/>
+    </linearGradient>
+    <clipPath id="squircle">
+      <rect x="62" y="62" width="900" height="900" rx="210"/>
+    </clipPath>
+  </defs>
+
+  <rect x="62" y="62" width="900" height="900" rx="210" fill="url(#background)"/>
+
+  <!-- Enlarged sectors push toward the center, creating a tighter three-way encounter. -->
+  <g clip-path="url(#squircle)">
+    <path d="M 62 62 H 450 C 450 300, 340 470, 62 620 Z" fill="url(#blue)"/>
+    <path d="M 574 62 H 962 V 620 C 684 470, 574 300, 574 62 Z" fill="url(#orange)"/>
+    <path d="M 88 962 C 138 400, 886 400, 936 962 Z" fill="url(#violet)"/>
+  </g>
+
+  <rect x="72" y="72" width="880" height="880" rx="200" fill="none" stroke="#FFFFFF" stroke-opacity="0.085" stroke-width="4"/>
+</svg>

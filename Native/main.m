@@ -11,6 +11,8 @@ static NSString *const kKeychainService = @"kr.co.ocsarpo.triadroom";
 @property(nonatomic, strong) WKWebView *webView;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSTask *> *tasks;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSTask *> *authTasks;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSTask *> *brokerEventTasks;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *brokerArtifacts;
 @property(nonatomic, strong) NSTask *usageTask;
 @property(nonatomic) sqlite3 *database;
 @end
@@ -20,6 +22,8 @@ static NSString *const kKeychainService = @"kr.co.ocsarpo.triadroom";
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     self.tasks = [NSMutableDictionary dictionary];
     self.authTasks = [NSMutableDictionary dictionary];
+    self.brokerEventTasks = [NSMutableDictionary dictionary];
+    self.brokerArtifacts = [NSMutableDictionary dictionary];
     NSString *iconPath = [[NSBundle mainBundle] pathForResource:@"Triad" ofType:@"icns"];
     NSImage *applicationIcon = iconPath ? [[NSImage alloc] initWithContentsOfFile:iconPath] : nil;
     if (applicationIcon) [NSApp setApplicationIconImage:applicationIcon];
@@ -130,6 +134,9 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     for (NSTask *task in self.authTasks.allValues) {
         if (task.isRunning) [task interrupt];
     }
+    for (NSTask *task in self.brokerEventTasks.allValues) {
+        if (task.isRunning) [task terminate];
+    }
     if (self.usageTask.isRunning) [self.usageTask terminate];
     if (self.database) sqlite3_close(self.database);
 }
@@ -198,7 +205,24 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
         [self loadGitBranch:body[@"workspace"] agent:body[@"agent"]];
     } else if ([action isEqualToString:@"projectFiles"]) {
         [self loadProjectFiles:body[@"workspace"] agent:body[@"agent"]];
+    } else if ([action isEqualToString:@"checkUpdate"]) {
+        [self checkForUpdates];
     }
+}
+
+- (void)checkForUpdates {
+    NSURL *url = [NSURL URLWithString:@"https://api.github.com/repos/ocsarpo/Triad/releases/latest"];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:12];
+    [request setValue:@"Triad-macOS-update-check" forHTTPHeaderField:@"User-Agent"];
+    [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        if (error || !data.length || [(NSHTTPURLResponse *)response statusCode] != 200) return;
+        NSDictionary *release = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        NSString *tag = [release[@"tag_name"] isKindOfClass:[NSString class]] ? release[@"tag_name"] : @"";
+        NSString *page = [release[@"html_url"] isKindOfClass:[NSString class]] ? release[@"html_url"] : @"";
+        if (!tag.length || !page.length) return;
+        NSString *current = [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"0.0.0";
+        dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"updateCheck", @"latest": tag, @"current": current, @"url": page }]; });
+    }] resume];
 }
 
 - (void)loadProjectFiles:(NSString *)workspace agent:(NSString *)agent {
@@ -358,7 +382,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     task.currentDirectoryURL = [NSURL fileURLWithPath:NSHomeDirectory() isDirectory:YES];
     NSMutableDictionary *environment = [NSProcessInfo.processInfo.environment mutableCopy];
     NSString *path = environment[@"PATH"] ?: @"";
-    environment[@"PATH"] = [NSString stringWithFormat:@"/opt/homebrew/bin:/usr/local/bin:%@/.local/bin:%@/bin:%@", NSHomeDirectory(), NSHomeDirectory(), path];
+    environment[@"PATH"] = [NSString stringWithFormat:@"/opt/homebrew/bin:/usr/local/bin:%@/.volta/bin:%@/.local/bin:%@/bin:%@", NSHomeDirectory(), NSHomeDirectory(), NSHomeDirectory(), path];
     environment[@"NO_COLOR"] = @"1";
     task.environment = environment;
     NSPipe *stdoutPipe = [NSPipe pipe];
@@ -435,7 +459,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     task.currentDirectoryURL = [NSURL fileURLWithPath:workspace isDirectory:YES];
     NSMutableDictionary *environment = [NSProcessInfo.processInfo.environment mutableCopy];
     NSString *path = environment[@"PATH"] ?: @"";
-    environment[@"PATH"] = [NSString stringWithFormat:@"/opt/homebrew/bin:/usr/local/bin:%@/.local/bin:%@/bin:%@", NSHomeDirectory(), NSHomeDirectory(), path];
+    environment[@"PATH"] = [NSString stringWithFormat:@"/opt/homebrew/bin:/usr/local/bin:%@/.volta/bin:%@/.local/bin:%@/bin:%@", NSHomeDirectory(), NSHomeDirectory(), NSHomeDirectory(), path];
     environment[@"TERM"] = @"dumb";
     environment[@"NO_COLOR"] = @"1";
     if ([config[@"authMode"] isEqualToString:@"apiKey"]) {
@@ -588,6 +612,95 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     sqlite3_finalize(statement);
 }
 
+- (NSDictionary *)setupBrokerForAgent:(NSString *)agent request:(NSDictionary *)request {
+    if (![request[@"mcpEnabled"] boolValue]) return nil;
+    NSDictionary *agentConfigs = request[@"agentConfigs"];
+    if (![agentConfigs isKindOfClass:[NSDictionary class]] || ![agentConfigs[@"codex"] isKindOfClass:[NSDictionary class]] || ![agentConfigs[@"claude"] isKindOfClass:[NSDictionary class]]) return nil;
+    NSString *nodePath = [self firstExecutable:@[
+        @"/opt/homebrew/bin/node", @"/usr/local/bin/node",
+        [NSHomeDirectory() stringByAppendingPathComponent:@".volta/bin/node"],
+        [NSHomeDirectory() stringByAppendingPathComponent:@".local/bin/node"]
+    ]];
+    NSString *brokerPath = [[NSBundle mainBundle] pathForResource:@"triad-mcp-server" ofType:@"cjs"];
+    if (!nodePath.length || !brokerPath.length) {
+        [self emit:@{ @"type": @"brokerWarning", @"agent": agent, @"message": @"AI 간 호출 도구를 시작할 Node.js 또는 브로커 파일을 찾지 못했습니다. 기존 인계 방식으로 진행합니다." }];
+        return nil;
+    }
+    NSString *identifier = NSUUID.UUID.UUIDString.lowercaseString;
+    NSString *base = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"triad-broker-%@", identifier]];
+    NSString *configPath = [base stringByAppendingString:@".json"];
+    NSString *statePath = [base stringByAppendingString:@".state.json"];
+    NSString *eventsPath = [base stringByAppendingString:@".events.jsonl"];
+    NSInteger callLimit = [request[@"collaboration"][@"rounds"] integerValue];
+    if (callLimit < 1) callLimit = 6;
+    if (callLimit > 10) callLimit = 10;
+    NSDictionary *payload = @{
+        @"nodePath": nodePath, @"brokerPath": brokerPath, @"statePath": statePath, @"eventsPath": eventsPath,
+        @"callLimit": @(callLimit), @"maxDepth": @2, @"timeoutMs": @300000, @"agents": agentConfigs
+    };
+    NSData *data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+    if (![data writeToFile:configPath options:NSDataWritingAtomic error:nil]) return nil;
+    [@"" writeToFile:eventsPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    NSData *stateData = [NSJSONSerialization dataWithJSONObject:@{ @"used": @0, @"limit": @(callLimit) } options:0 error:nil];
+    [stateData writeToFile:statePath options:NSDataWritingAtomic error:nil];
+    NSDictionary *permissions = @{ NSFilePosixPermissions: @0600 };
+    NSFileManager *manager = NSFileManager.defaultManager;
+    [manager setAttributes:permissions ofItemAtPath:configPath error:nil];
+    [manager setAttributes:permissions ofItemAtPath:statePath error:nil];
+    [manager setAttributes:permissions ofItemAtPath:eventsPath error:nil];
+    NSDictionary *artifacts = @{ @"configPath": configPath, @"statePath": statePath, @"eventsPath": eventsPath, @"nodePath": nodePath, @"brokerPath": brokerPath };
+    self.brokerArtifacts[agent] = artifacts;
+    [self startBrokerEventsForAgent:agent artifacts:artifacts];
+    return artifacts;
+}
+
+- (void)startBrokerEventsForAgent:(NSString *)agent artifacts:(NSDictionary *)artifacts {
+    NSTask *tail = [[NSTask alloc] init];
+    tail.executableURL = [NSURL fileURLWithPath:@"/usr/bin/tail"];
+    tail.arguments = @[@"-n", @"0", @"-F", artifacts[@"eventsPath"]];
+    NSPipe *pipe = [NSPipe pipe];tail.standardOutput = pipe;tail.standardError = [NSPipe pipe];
+    __block NSMutableString *buffer = [NSMutableString string];
+    __weak typeof(self) weakSelf = self;
+    pipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *handle) {
+        NSData *data = handle.availableData;if (!data.length) return;
+        NSString *chunk = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];if (!chunk) return;
+        @synchronized (buffer) {
+            [buffer appendString:chunk];
+            while (YES) {
+                NSRange newline = [buffer rangeOfString:@"\n"];
+                if (newline.location == NSNotFound) break;
+                NSString *line = [buffer substringToIndex:newline.location];
+                [buffer deleteCharactersInRange:NSMakeRange(0, newline.location + 1)];
+                NSData *lineData = [line dataUsingEncoding:NSUTF8StringEncoding];
+                NSDictionary *event = lineData.length ? [NSJSONSerialization JSONObjectWithData:lineData options:0 error:nil] : nil;
+                if ([event isKindOfClass:[NSDictionary class]]) {
+                    NSMutableDictionary *message = [event mutableCopy];message[@"type"] = @"brokerEvent";message[@"rootAgent"] = agent;
+                    [weakSelf emit:message];
+                }
+            }
+        }
+    };
+    NSError *error = nil;
+    if ([tail launchAndReturnError:&error]) self.brokerEventTasks[agent] = tail;
+    else [self emit:@{ @"type": @"brokerWarning", @"agent": agent, @"message": error.localizedDescription ?: @"AI 호출 이벤트 감시를 시작하지 못했습니다." }];
+}
+
+- (void)cleanupBrokerForAgent:(NSString *)agent {
+    NSTask *tail = self.brokerEventTasks[agent];if (tail.isRunning) [tail terminate];
+    [self.brokerEventTasks removeObjectForKey:agent];
+    NSDictionary *artifacts = self.brokerArtifacts[agent];[self.brokerArtifacts removeObjectForKey:agent];
+    for (NSString *key in @[@"configPath", @"statePath", @"eventsPath"]) {
+        NSString *path = artifacts[key];if (path.length) [NSFileManager.defaultManager removeItemAtPath:path error:nil];
+    }
+    NSString *statePath = artifacts[@"statePath"];
+    if (statePath.length) [NSFileManager.defaultManager removeItemAtPath:[statePath stringByAppendingString:@".lock"] error:nil];
+}
+
+- (NSString *)JSONString:(id)value fallback:(NSString *)fallback {
+    NSData *data = value ? [NSJSONSerialization dataWithJSONObject:value options:0 error:nil] : nil;
+    return data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : fallback;
+}
+
 - (void)runAgent:(NSDictionary *)request {
     NSString *agent = request[@"agent"];
     NSString *prompt = request[@"prompt"];
@@ -616,6 +729,8 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     task.executableURL = [NSURL fileURLWithPath:executable];
     NSString *workspace = config[@"workspacePath"] ?: NSHomeDirectory();
     task.currentDirectoryURL = [NSURL fileURLWithPath:workspace isDirectory:YES];
+    NSDictionary *broker = [self setupBrokerForAgent:agent request:request];
+    NSArray *brokerArgs = broker ? @[broker[@"brokerPath"], @"--config", broker[@"configPath"], @"--caller", agent, @"--depth", @"0"] : nil;
 
     NSMutableArray<NSString *> *arguments = [NSMutableArray array];
     NSString *model = config[@"model"] ?: @"";
@@ -666,6 +781,11 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
         } else {
             [arguments addObjectsFromArray:@[@"--disable", @"fast_mode"]];
         }
+        if (broker) {
+            NSString *command = [self JSONString:broker[@"nodePath"] fallback:@"\"node\""];
+            NSString *argsJSON = [self JSONString:brokerArgs fallback:@"[]"];
+            [arguments addObjectsFromArray:@[@"--config", [NSString stringWithFormat:@"mcp_servers.triad.command=%@", command], @"--config", [NSString stringWithFormat:@"mcp_servers.triad.args=%@", argsJSON]]];
+        }
         [arguments addObject:@"-"];
     } else {
         NSMutableDictionary *claudeSettings = [@{@"fastMode": @([speed isEqualToString:@"fast"])} mutableCopy];
@@ -695,6 +815,10 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
             [arguments addObject:@"--add-dir"];
             [arguments addObjectsFromArray:writableRoots];
         }
+        if (broker) {
+            NSDictionary *mcp = @{ @"mcpServers": @{ @"triad": @{ @"command": broker[@"nodePath"], @"args": brokerArgs } } };
+            [arguments addObjectsFromArray:@[@"--mcp-config", [self JSONString:mcp fallback:@"{}"]]];
+        }
         if ([session isKindOfClass:[NSString class]] && session.length > 0) {
             [arguments addObjectsFromArray:@[@"--resume", session]];
         } else {
@@ -706,18 +830,22 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
 
     NSMutableDictionary *environment = [NSProcessInfo.processInfo.environment mutableCopy];
     NSString *path = environment[@"PATH"] ?: @"";
-    environment[@"PATH"] = [NSString stringWithFormat:@"/opt/homebrew/bin:/usr/local/bin:%@/.local/bin:%@/bin:%@", NSHomeDirectory(), NSHomeDirectory(), path];
+    environment[@"PATH"] = [NSString stringWithFormat:@"/opt/homebrew/bin:/usr/local/bin:%@/.volta/bin:%@/.local/bin:%@/bin:%@", NSHomeDirectory(), NSHomeDirectory(), NSHomeDirectory(), path];
     environment[@"TERM"] = @"dumb";
     environment[@"NO_COLOR"] = @"1";
 
-    if ([config[@"authMode"] isEqualToString:@"apiKey"]) {
-        NSString *token = [self tokenForAgent:agent];
-        if (token.length == 0) {
+    NSDictionary *allConfigs = [request[@"agentConfigs"] isKindOfClass:[NSDictionary class]] ? request[@"agentConfigs"] : @{ agent: config };
+    for (NSString *configuredAgent in @[@"codex", @"claude"]) {
+        NSDictionary *agentConfig = allConfigs[configuredAgent];
+        if (![agentConfig[@"authMode"] isEqualToString:@"apiKey"]) continue;
+        NSString *token = [self tokenForAgent:configuredAgent];
+        if (token.length == 0 && [configuredAgent isEqualToString:agent]) {
+            [self cleanupBrokerForAgent:agent];
             [self emit:@{@"type": @"error", @"agent": agent, @"message": @"키체인에 저장된 API 키가 없습니다."}];
             return;
         }
-        if ([agent isEqualToString:@"codex"]) environment[@"CODEX_API_KEY"] = token;
-        else environment[@"ANTHROPIC_API_KEY"] = token;
+        if (token.length && [configuredAgent isEqualToString:@"codex"]) environment[@"CODEX_API_KEY"] = token;
+        if (token.length && [configuredAgent isEqualToString:@"claude"]) environment[@"ANTHROPIC_API_KEY"] = token;
     }
     task.environment = environment;
 
@@ -752,11 +880,13 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
                 @"exitCode": @(finished.terminationStatus)
             }];
             [weakSelf notifyAgentCompletion:agent exitCode:finished.terminationStatus];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ [weakSelf cleanupBrokerForAgent:agent]; });
         });
     };
 
     NSError *error = nil;
     if (![task launchAndReturnError:&error]) {
+        [self cleanupBrokerForAgent:agent];
         [self emit:@{@"type": @"error", @"agent": agent, @"message": error.localizedDescription ?: @"실행 실패"}];
         return;
     }

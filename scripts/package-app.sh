@@ -23,6 +23,8 @@ cp "$root/Resources/diff.js" "$app/Contents/Resources/diff.js"
 cp "$root/Resources/queue.js" "$app/Contents/Resources/queue.js"
 cp "$root/Resources/usage.js" "$app/Contents/Resources/usage.js"
 cp "$root/Resources/file-search.js" "$app/Contents/Resources/file-search.js"
+cp "$root/Resources/triad-mcp-server.cjs" "$app/Contents/Resources/triad-mcp-server.cjs"
+cp "$root/Resources/version.js" "$app/Contents/Resources/version.js"
 cp "$root/Resources/Triad.icns" "$app/Contents/Resources/Triad.icns"
 chmod +x "$app/Contents/MacOS/Triad"
 

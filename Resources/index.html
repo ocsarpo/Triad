@@ -65,6 +65,8 @@
     .brand { margin-right: auto; }
     .brand h1 { margin: 0; font-size: 21px; letter-spacing: -.5px; }
     .brand p { margin: 1px 0 0; color: var(--muted); font-size: 12px; }
+    .update-banner { max-width: 165px; padding: 5px 8px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--all), transparent 55%); border-radius: 9px; background: color-mix(in srgb, var(--all), transparent 90%); color: var(--all); text-overflow: ellipsis; white-space: nowrap; font-size: 9px; font-weight: 750; }
+    .update-banner[hidden] { display: none; }
     .agent-pill {
       display: flex; align-items: center; gap: 8px; min-width: 174px; padding: 7px 10px;
       border: 1px solid var(--line); border-radius: 12px; background: var(--card);
@@ -304,6 +306,7 @@
     <section class="chat">
       <header>
         <div class="brand"><h1>Triad</h1><p>나 · Codex · Claude — 멘션 기반 AI 작업방</p></div>
+        <button class="update-banner" id="update-banner" hidden></button>
         <div class="agent-pill" id="pill-codex"><span class="dot"></span><div><strong>Codex</strong><small id="summary-codex"></small><small class="usage-summary" id="usage-codex"></small></div></div>
         <div class="agent-pill" id="pill-claude"><span class="dot"></span><div><strong>Claude</strong><small id="summary-claude"></small><small class="usage-summary" id="usage-claude"></small></div></div>
         <button class="usage-refresh" id="refresh-usage" title="사용량 새로고침">↻</button>
@@ -328,7 +331,7 @@
           </div>
           <label for="collab-lead" id="collab-lead-label">첫 발언</label>
           <select id="collab-lead"><option value="codex">Codex</option><option value="claude">Claude</option></select>
-          <span id="collab-rounds-wrap"><label for="collab-rounds" id="collab-rounds-label">라운드</label> <select id="collab-rounds"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></span>
+          <span id="collab-rounds-wrap"><label for="collab-rounds" id="collab-rounds-label">라운드</label> <select id="collab-rounds"></select></span>
           <span id="collab-finalizer-wrap"><label for="collab-finalizer">최종 종합</label> <select id="collab-finalizer"><option value="none">없음</option><option value="codex">Codex</option><option value="claude" selected>Claude</option></select></span>
           <span class="collab-state" id="collab-state">각 AI가 독립적으로 응답</span>
         </div>
@@ -375,6 +378,7 @@
   <script src="queue.js"></script>
   <script src="usage.js"></script>
   <script src="file-search.js"></script>
+  <script src="version.js"></script>
   <script>
     const agents = ['codex', 'claude'];
     const names = { codex: 'Codex', claude: 'Claude' };
@@ -386,13 +390,14 @@
       traces: JSON.parse(localStorage.getItem('triad.traces') || '[]'), traceFilter:'all',
       conversations: [], activeConversationId: localStorage.getItem('triad.activeConversationId'),
       storageReady: false, saveTimer: null, conversationSearch: '',
-      collaboration: {mode:'independent',lead:'codex',rounds:3,finalizer:'claude'}, orchestration:null,
+      collaboration: {mode:'independent',lead:'codex',rounds:6,finalizer:'claude'}, orchestration:null,
       queue: [],
       usage: JSON.parse(localStorage.getItem('triad.usage')||'{"codex":{"windows":[]},"claude":{"windows":[]}}'), usageRefreshing:false, usageTimer:null, lastUsageRefresh:0,
       forceMessageBottom:false,routingPreviewOpen:false,
       traceVisible:localStorage.getItem('triad.traceVisible')!=='false',
       running: { codex: false, claude: false },
       responseIds: {}, lineBuffers: { codex: '', claude: '' }, stderr: { codex: '', claude: '' },
+      brokerMessages:{},
       pending: {}, retryOnTermination: { codex:false, claude:false },
       tokenStatus: { codex: false, claude: false },
       accountStatus: {codex:{checking:false,connected:false,message:''},claude:{checking:false,connected:false,message:''}}, codexModels: [], claudeModels: [],
@@ -442,7 +447,7 @@
       state.activeConversationId=conversation.id;
       state.messages=clone(conversation.messages||[]);
       state.settings=clone(conversation.settings||state.settings);
-      state.collaboration=clone(conversation.collaboration||{mode:'independent',lead:'codex',rounds:3,finalizer:'claude'});
+      state.collaboration=clone(conversation.collaboration||{mode:'independent',lead:'codex',rounds:6,finalizer:'claude'});
       state.sessions=clone(conversation.sessions||{codex:null,claude:null});
       state.traces=clone(conversation.traces||[]);
       localStorage.setItem('triad.activeConversationId',conversation.id);
@@ -692,6 +697,26 @@
       const message = state.messages.find(m => m.id === messageId); if (!message) return;
       updater(message); save(); renderMessages();
     }
+    function handleBrokerEvent(event) {
+      const from=event.from||event.rootAgent||'codex';const to=event.to||(from==='codex'?'claude':'codex');const count=`${event.used||0}/${event.limit||state.collaboration.rounds}`;
+      if(state.orchestration?.mode==='agent'&&event.used)state.orchestration.handoffs=Math.max(state.orchestration.handoffs||0,Number(event.used));
+      if(event.eventType==='agent_call_started'){
+        const reason=event.reason?`\n\n호출 이유: ${event.reason}`:'';
+        state.brokerMessages[event.id]=addMessage('system',`**${names[from]} → ${names[to]} · AI 호출 ${count}**\n\n질문 중…\n\n${event.question||''}${reason}`,true);
+        addTrace(from,'info',`${names[to]} 보조 호출`,{question:event.question,reason:event.reason,count,depth:event.depth});
+      }else if(event.eventType==='agent_call_completed'){
+        const answer=String(event.answer||'').trim();const preview=answer.length>3000?`${answer.slice(0,3000)}\n\n… 답변이 길어 일부만 표시했습니다.`:answer;
+        const messageId=state.brokerMessages[event.id]||addMessage('system','',true);
+        updateMessage(messageId,message=>{message.text=`**${names[from]} ← ${names[to]} · 답변 도착 ✓ · ${count}**\n\n${preview}\n\n${names[from]}가 답변을 반영해 작업을 계속합니다.`;message.streaming=false;});
+        if(state.orchestration?.mode==='agent')state.orchestration.mcpCalls=Math.max(state.orchestration.mcpCalls||0,Number(event.used)||1);
+        delete state.brokerMessages[event.id];addTrace(to,'success',`${names[from]}에게 보조 답변 반환`,{count,duration_ms:event.durationMs,characters:answer.length});
+      }else if(event.eventType==='agent_call_failed'){
+        const messageId=state.brokerMessages[event.id]||addMessage('system','',true);
+        updateMessage(messageId,message=>{message.text=`**${names[from]} → ${names[to]} · AI 호출 실패 · ${count}**\n\n⚠️ ${event.error||'알 수 없는 오류'}\n\n${names[from]}가 현재 정보로 작업을 계속합니다.`;message.streaming=false;});
+        delete state.brokerMessages[event.id];addTrace(to,'error','보조 AI 호출 실패',{count,error:event.error,duration_ms:event.durationMs});
+      }
+      renderCollaboration();
+    }
     function messagesNearBottom(root=document.getElementById('messages')) {
       return !root || root.scrollHeight-root.scrollTop-root.clientHeight<=56;
     }
@@ -766,7 +791,7 @@
       state.pending[agent]={prompt,retried:false};state.responseIds[agent]=addMessage(agent,'',true);renderStatus();
       const config=state.settings[agent];
       addTrace(agent,'info','명령 전달',{model:config.model,effort:config.effort,speed:config.speedMode,workspace:config.workspacePath,writableRoots:config.writableRoots||'',networkAccess:!!config.networkAccess,allowLocalBinding:!!config.allowLocalBinding,session:state.sessions[agent]?'resume':'new',mode:state.orchestration?.mode||'independent'});
-      post({action:'run',agent,prompt,config:state.settings[agent],session:state.sessions[agent]});return true;
+      post({action:'run',agent,prompt,config:state.settings[agent],agentConfigs:state.settings,collaboration:state.collaboration,mcpEnabled:state.orchestration?.mode==='agent',session:state.sessions[agent]});return true;
     }
     function enqueueAgent(agent,prompt,sourceText) {
       const item={id:id(),kind:'agent',agent,prompt,sourceText,createdAt:Date.now()};
@@ -835,7 +860,7 @@
     function agentHandoffProtocol(agent, disabled=false) {
       if(disabled)return '위임 한도에 도달했습니다. 상대 AI에게 추가 질문을 요청하지 말고 현재 정보로 사용자에게 줄 최선의 결과를 완성하세요.';
       const other=agent==='codex'?'claude':'codex';
-      return `상대 AI의 정보, MCP, 코드 분석 또는 검증이 꼭 필요할 때만 답변 맨 끝에 아래 형식으로 요청하세요. JSON 밖의 마커 문구를 바꾸지 마세요.\n[[TRIAD_HANDOFF]]\n{"to":"${other}","question":"상대가 수행할 구체적인 단일 질문","reason":"위임이 필요한 이유"}\n[[/TRIAD_HANDOFF]]\n상대가 필요하지 않으면 마커 없이 작업 결과를 완성하세요.`;
+      return `에이전트 협업 모드입니다. Triad의 ask_agent MCP 도구가 보이면 작업 도중 ${names[other]}의 정보·검토·도구 사용이 유용한 지점을 찾아 최소 한 번 호출하세요. 도구 결과가 돌아오면 같은 작업을 계속하여 최종 답변을 완성하세요. ask_agent를 사용했다면 아래 인계 마커는 출력하지 마세요.\nask_agent 도구가 제공되지 않거나 호출할 수 없을 때만 답변 맨 끝에 아래 호환 형식으로 요청하세요. JSON 밖의 마커 문구를 바꾸지 마세요.\n[[TRIAD_HANDOFF]]\n{"to":"${other}","question":"상대가 수행할 구체적인 단일 질문","reason":"위임이 필요한 이유"}\n[[/TRIAD_HANDOFF]]`;
     }
     function buildAgentPrompt(task) {
       const flow=state.orchestration;
@@ -872,7 +897,7 @@
     }
     function startCollaboration(objective) {
       if(state.collaboration.mode==='agent'){
-        state.orchestration={mode:'agent',objective,tasks:[],index:0,current:null,transcript:[],cancelled:false,lastAgent:null,handoffs:0,maxHandoffs:state.collaboration.rounds};
+        state.orchestration={mode:'agent',objective,tasks:[],index:0,current:null,transcript:[],cancelled:false,lastAgent:null,handoffs:0,mcpCalls:0,maxHandoffs:state.collaboration.rounds};
         addTrace(state.collaboration.lead,'info','에이전트 협업 시작',{lead:names[state.collaboration.lead],maxHandoffs:state.collaboration.rounds});
         addMessage('system',`${names[state.collaboration.lead]}가 작업을 시작합니다. 필요한 경우 상대 AI에게 질문하고 답을 받아 계속 진행합니다.`);
         runAgentTurn({agent:state.collaboration.lead,kind:'agent_work'});return;
@@ -980,6 +1005,9 @@
           addTrace(agent,'error','협업 인계 형식 오류',parsed.error);cancelCollaboration(parsed.error);return;
         }
         if(parsed.handoff){
+          if(flow.mcpCalls>0){
+            addTrace(agent,'info','MCP 협업 완료 후 중복 인계 마커 무시',parsed.handoff);finishAgentCollaboration(flow,agent);return;
+          }
           if(task.noHandoff){
             addTrace(agent,'error','마무리 단계에서 추가 위임 요청',parsed.handoff);
             finishAgentCollaboration(flow,agent,'추가 위임 한도 이후에도 협업 요청이 발생해 흐름을 종료했습니다. 마지막 AI 응답과 실행 과정을 확인하세요.');return;
@@ -1011,7 +1039,7 @@
       const pending=state.pending[agent];
       if (!pending) { finishAgent(agent,1); return; }
       addTrace(agent,'info','저장된 세션을 찾지 못해 새 세션으로 자동 재시도');
-      post({action:'run',agent,prompt:pending.prompt,config:state.settings[agent],session:null});
+      post({action:'run',agent,prompt:pending.prompt,config:state.settings[agent],agentConfigs:state.settings,collaboration:state.collaboration,mcpEnabled:state.orchestration?.mode==='agent',session:null});
     }
 
     window.nativeEvent = event => {
@@ -1023,7 +1051,7 @@
         if(loaded.length){
           const selected=loaded.find(item=>item.id===state.activeConversationId)||loaded[0];
           state.activeConversationId=selected.id;state.messages=clone(selected.messages||[]);
-          state.settings=clone(selected.settings||defaults(event.home));state.collaboration=clone(selected.collaboration||{mode:'independent',lead:'codex',rounds:3,finalizer:'claude'});state.sessions=clone(selected.sessions||{codex:null,claude:null});state.traces=clone(selected.traces||[]);
+          state.settings=clone(selected.settings||defaults(event.home));state.collaboration=clone(selected.collaboration||{mode:'independent',lead:'codex',rounds:6,finalizer:'claude'});state.sessions=clone(selected.sessions||{codex:null,claude:null});state.traces=clone(selected.traces||[]);
         }else{
           if(!state.settings)state.settings=defaults(event.home);
           const now=Date.now();const migrated={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:clone(state.messages),settings:clone(state.settings),collaboration:clone(state.collaboration),sessions:clone(state.sessions),traces:clone(state.traces)};
@@ -1067,6 +1095,12 @@
         state.projectFiles[event.agent]={workspace:event.workspace||state.settings?.[event.agent]?.workspacePath||'',files:event.files||[],loading:false,error:event.error||'',truncated:!!event.truncated};
         if(autocomplete.open&&autocomplete.type==='file')updateAutocomplete();
       }
+      else if(event.type==='brokerEvent')handleBrokerEvent(event);
+      else if(event.type==='brokerWarning'){addTrace(event.agent||'codex','error','AI 간 호출 도구 준비 실패',event.message||'');addMessage('system',`⚠️ ${event.message||'AI 간 호출 도구를 준비하지 못했습니다.'}`);}
+      else if(event.type==='updateCheck'){
+        const banner=document.getElementById('update-banner');const newer=window.TriadVersion.isNewer(event.latest,event.current);banner.hidden=!newer;
+        if(newer){banner.textContent=`새 버전 ${event.latest} · 릴리스 보기`;banner.dataset.url=event.url||'';banner.title=`현재 ${event.current} · 최신 ${event.latest}`;}
+      }
       else if (event.type==='tokenStatus') { state.tokenStatus=event.status; renderSettings(); }
       else if (event.type==='tokenError') alert(event.message);
       else if(event.type==='authProgress') {state.accountStatus[event.agent]={...state.accountStatus[event.agent],checking:false,busy:true,operation:event.operation};renderSettings();}
@@ -1099,15 +1133,18 @@
     function renderCollaboration() {
       const c=state.collaboration;const modeButtons=[...document.querySelectorAll('[data-collab-mode]')];if(!modeButtons.length)return;
       modeButtons.forEach(button=>{const active=button.dataset.collabMode===c.mode;button.classList.toggle('active',active);button.setAttribute('aria-checked',String(active));});
-      document.getElementById('collab-lead').value=c.lead;document.getElementById('collab-rounds').value=String(c.rounds);document.getElementById('collab-finalizer').value=c.finalizer;
       const independent=c.mode==='independent';const review=c.mode==='review';const agentMode=c.mode==='agent';
+      const roundSelect=document.getElementById('collab-rounds');const roundValues=agentMode?[2,4,6,8,10]:[1,2,3,4,5];
+      if(!roundValues.includes(Number(c.rounds)))c.rounds=agentMode?6:Math.min(5,Math.max(1,Number(c.rounds)||3));
+      roundSelect.innerHTML=roundValues.map(value=>`<option value="${value}" ${value===Number(c.rounds)?'selected':''}>${value}</option>`).join('');
+      document.getElementById('collab-lead').value=c.lead;document.getElementById('collab-finalizer').value=c.finalizer;
       document.getElementById('collab-lead-label').hidden=independent;document.getElementById('collab-lead').hidden=independent;
       document.getElementById('collab-rounds-wrap').hidden=independent;document.getElementById('collab-finalizer-wrap').hidden=independent||review;
       document.getElementById('collab-finalizer-wrap').hidden=independent||review||agentMode;
       document.getElementById('collab-lead-label').textContent=agentMode?'작업 시작':review?'초안 작성':'첫 발언';
-      document.getElementById('collab-rounds-label').textContent=agentMode?'최대 위임':'라운드';
+      document.getElementById('collab-rounds-label').textContent=agentMode?'AI 간 호출 한도':'라운드';
       const status=document.getElementById('collab-state');
-      if(state.orchestration){const task=state.orchestration.current;status.textContent=task?(state.orchestration.mode==='agent'?`${names[task.agent]} · ${task.label} · 위임 ${state.orchestration.handoffs}/${state.orchestration.maxHandoffs}`:`${names[task.agent]} · ${task.label} (${state.orchestration.index}/${state.orchestration.tasks.length})`):'다음 작업 준비 중';status.classList.add('live');}
+      if(state.orchestration){const task=state.orchestration.current;status.textContent=task?(state.orchestration.mode==='agent'?`${names[task.agent]} · ${task.label} · AI 호출 ${state.orchestration.handoffs}/${state.orchestration.maxHandoffs}`:`${names[task.agent]} · ${task.label} (${state.orchestration.index}/${state.orchestration.tasks.length})`):'다음 작업 준비 중';status.classList.add('live');}
       else {status.textContent=independent?'각 AI가 독립적으로 응답':agentMode?'필요할 때 서로 질문하고 답을 돌려받아 작업':review?'작성 → 검토 → 수정':'두 AI가 번갈아 토론';status.classList.remove('live');}
       document.querySelectorAll('[data-tag]').forEach(button=>button.disabled=!independent&&!(agentMode&&button.dataset.tag!=='#all'));
       document.getElementById('block-template').disabled=!independent;
@@ -1327,6 +1364,7 @@
     document.getElementById('new-conversation').onclick=()=>newConversation();
     document.getElementById('conversation-search').addEventListener('input',event=>{state.conversationSearch=event.target.value;renderConversations();});
     document.getElementById('refresh-usage').onclick=()=>refreshUsage(true);
+    document.getElementById('update-banner').onclick=event=>{const url=event.currentTarget.dataset.url;if(url)post({action:'openURL',url});};
     document.getElementById('send').onclick=send;
     document.getElementById('draft').addEventListener('keydown',e=>{
       if(autocomplete.open){
@@ -1350,7 +1388,7 @@
       state.collaboration.finalizer=document.getElementById('collab-finalizer').value;save();renderCollaboration();
     }));
     document.querySelectorAll('[data-collab-mode]').forEach(button=>button.addEventListener('click',()=>{
-      if(button.disabled)return;state.collaboration.mode=button.dataset.collabMode;save();renderCollaboration();
+      if(button.disabled)return;state.collaboration.mode=button.dataset.collabMode;if(state.collaboration.mode==='agent'&&![2,4,6,8,10].includes(Number(state.collaboration.rounds)))state.collaboration.rounds=6;save();renderCollaboration();
     }));
     function stopAgent(agent){if(state.orchestration)cancelCollaboration();post({action:'stop',agent});}
     document.getElementById('stop-codex').onclick=()=>stopAgent('codex');
@@ -1369,7 +1407,7 @@
       document.querySelectorAll('[data-trace-filter]').forEach(item=>item.classList.toggle('active',item===button));
       renderTraces();
     });
-    renderMessages(); renderTraces(); renderTraceVisibility(); renderDiff(); post({action:'tokenStatus'});
+    renderMessages(); renderTraces(); renderTraceVisibility(); renderDiff(); post({action:'tokenStatus'});post({action:'checkUpdate'});setInterval(()=>post({action:'checkUpdate'}),24*60*60*1000);
   </script>
 </body>
 </html>

@@ -2,6 +2,7 @@
 #import <WebKit/WebKit.h>
 #import <Security/Security.h>
 #import <UserNotifications/UserNotifications.h>
+#import <CoreServices/CoreServices.h>
 #import <sqlite3.h>
 
 static NSString *const kKeychainService = @"kr.co.ocsarpo.triadroom";
@@ -24,6 +25,7 @@ static NSString *const kKeychainService = @"kr.co.ocsarpo.triadroom";
     self.authTasks = [NSMutableDictionary dictionary];
     self.brokerEventTasks = [NSMutableDictionary dictionary];
     self.brokerArtifacts = [NSMutableDictionary dictionary];
+    LSRegisterURL((__bridge CFURLRef)NSBundle.mainBundle.bundleURL, true);
     NSString *iconPath = [[NSBundle mainBundle] pathForResource:@"Triad" ofType:@"icns"];
     NSImage *applicationIcon = iconPath ? [[NSImage alloc] initWithContentsOfFile:iconPath] : nil;
     if (applicationIcon) [NSApp setApplicationIconImage:applicationIcon];
@@ -156,6 +158,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     ]] ?: @"claude";
     NSDictionary *payload = @{
         @"type": @"boot",
+        @"appVersion": [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"0.0.0",
         @"home": home,
         @"codexPath": codexPath,
         @"claudePath": claudePath,
@@ -697,8 +700,18 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
 }
 
 - (NSString *)JSONString:(id)value fallback:(NSString *)fallback {
-    NSData *data = value ? [NSJSONSerialization dataWithJSONObject:value options:0 error:nil] : nil;
-    return data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : fallback;
+    if (!value) return fallback;
+    @try {
+        NSError *error = nil;
+        NSData *data = [NSJSONSerialization dataWithJSONObject:value
+                                                       options:(NSJSONWritingFragmentsAllowed | NSJSONWritingWithoutEscapingSlashes)
+                                                         error:&error];
+        if (error || !data) return fallback;
+        NSString *result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        return result ?: fallback;
+    } @catch (NSException *exception) {
+        return fallback;
+    }
 }
 
 - (void)runAgent:(NSDictionary *)request {

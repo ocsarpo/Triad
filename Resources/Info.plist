@@ -15,15 +15,15 @@
     <key>CFBundleName</key>
     <string>Triad</string>
     <key>CFBundleIconFile</key>
-    <string>Triad</string>
+    <string>Triad.icns</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.37.0</string>
+    <string>0.37.1</string>
     <key>CFBundleVersion</key>
-    <string>44</string>
+    <string>45</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>

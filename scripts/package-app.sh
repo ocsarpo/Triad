@@ -10,7 +10,7 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 mkdir -p "$root/.module-cache"
 python3 "$root/scripts/build-icns.py" "$root/Resources/AppIcon-v4.png" "$root/Resources/Triad.icns"
 clang -fobjc-arc -fmodules -fmodules-cache-path="$root/.module-cache" -O2 \
-  -framework Cocoa -framework WebKit -framework Security -framework UserNotifications \
+  -framework Cocoa -framework WebKit -framework Security -framework UserNotifications -framework CoreServices \
   -lsqlite3 \
   "$root/Native/main.m" -o "$app/Contents/MacOS/Triad"
 cp "$root/Resources/Info.plist" "$app/Contents/Info.plist"

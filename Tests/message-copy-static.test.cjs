@@ -36,9 +36,3 @@ test('스트리밍 재렌더 뒤에도 messageId 기반 복사 피드백을 이�
   assert.match(renderer, /const feedback=state\.copyFeedback\[messageId\]/);
   assert.match(renderer, /applyCopyFeedback\(copy,m\.id,String\(m\.text\|\|''\)\.length>0\)/);
 });
-
-test('말풍선 복사 배포 버전을 올린다', () => {
-  const plist = fs.readFileSync(path.join(__dirname, '../Resources/Info.plist'), 'utf8');
-  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.40\.5<\/string>/);
-  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>55<\/string>/);
-});

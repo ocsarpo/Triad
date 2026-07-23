@@ -13,6 +13,8 @@ test('ask_agent MCP가 상대 AI 답변을 반환하고 공유 호출 한도를 
   fs.chmodSync(fake,0o755);
   const statePath=path.join(directory,'state.json');const eventsPath=path.join(directory,'events.jsonl');const configPath=path.join(directory,'config.json');
   fs.writeFileSync(statePath,JSON.stringify({used:0,limit:1}));fs.writeFileSync(eventsPath,'');
+  // claimCall uses the same recoverable lock helper as the shared board.
+  fs.writeFileSync(`${statePath}.lock`,JSON.stringify({pid:2_000_000_000,at:Date.now(),token:'crashed-budget-owner'}));
   fs.writeFileSync(configPath,JSON.stringify({nodePath:process.execPath,brokerPath:path.join(__dirname,'../Resources/triad-mcp-server.cjs'),statePath,eventsPath,allowAskAgent:true,callLimit:1,maxDepth:2,timeoutMs:3000,agents:{codex:{},claude:{executablePath:fake,workspacePath:directory,model:'test',effort:'low',permissionMode:'acceptEdits'}}}));
   const child=spawn(process.execPath,[path.join(__dirname,'../Resources/triad-mcp-server.cjs'),'--config',configPath,'--caller','codex','--depth','0'],{stdio:['pipe','pipe','pipe']});
   t.after(()=>child.kill('SIGTERM'));

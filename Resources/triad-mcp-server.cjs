@@ -4,6 +4,7 @@
 const fs = require('fs');
 const vm = require('node:vm');
 const { spawn } = require('child_process');
+const { withFileLock } = require('./file-lock.cjs');
 
 // The app bundle can be beneath a package.json with "type": "module".  Loading
 // this UMD file through require in that layout may expose an empty ESM namespace,
@@ -42,21 +43,6 @@ const boardSections = ['objective', 'constraints', 'proposal', 'evidence', 'verd
 
 function emitEvent(value) {
   try { fs.appendFileSync(config.eventsPath, `${JSON.stringify(value)}\n`, { encoding: 'utf8' }); } catch {}
-}
-
-function withFileLock(filePath, work) {
-  const lockPath = `${filePath}.lock`;
-  let lock = null;
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    try { lock = fs.openSync(lockPath, 'wx', 0o600); break; }
-    catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    }
-  }
-  if (lock == null) throw new Error('공유 작업 보드 잠금을 얻지 못했습니다.');
-  try { return work(); }
-  finally { try { fs.closeSync(lock); } catch {} try { fs.unlinkSync(lockPath); } catch {} }
 }
 
 function sharedBoardEnabled() { return Boolean(config.sharedContextPath); }
@@ -102,23 +88,16 @@ function requestedSections(value) {
 }
 
 function claimCall() {
-  const lockPath = `${config.statePath}.lock`;
-  let lock = null;
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    try { lock = fs.openSync(lockPath, 'wx', 0o600); break; }
-    catch (error) { if (error.code !== 'EEXIST') throw error; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10); }
-  }
-  if (lock == null) throw new Error('AI 간 호출 예산 잠금을 얻지 못했습니다.');
-  try {
-  let state = { used: 0, limit: Number(config.callLimit) || 6 };
-  try { state = { ...state, ...JSON.parse(fs.readFileSync(config.statePath, 'utf8')) }; } catch {}
-  if (state.used >= state.limit) return { allowed: false, used: state.used, limit: state.limit };
-  state.used += 1;
-  const temporary = `${config.statePath}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(state), { mode: 0o600 });
-  fs.renameSync(temporary, config.statePath);
-  return { allowed: true, used: state.used, limit: state.limit };
-  } finally { try { fs.closeSync(lock); } catch {} try { fs.unlinkSync(lockPath); } catch {} }
+  return withFileLock(config.statePath, () => {
+    let state = { used: 0, limit: Number(config.callLimit) || 6 };
+    try { state = { ...state, ...JSON.parse(fs.readFileSync(config.statePath, 'utf8')) }; } catch {}
+    if (state.used >= state.limit) return { allowed: false, used: state.used, limit: state.limit };
+    state.used += 1;
+    const temporary = `${config.statePath}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify(state), { mode: 0o600 });
+    fs.renameSync(temporary, config.statePath);
+    return { allowed: true, used: state.used, limit: state.limit };
+  }, { failureMessage: 'AI 간 호출 예산 잠금을 얻지 못했습니다.' });
 }
 
 function writableRoots(agentConfig) {

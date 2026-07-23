@@ -137,15 +137,39 @@
       ? { codex: [], claude: [] } : requireContributions(board.contributions);
   }
 
+  function historyContributionsFor(board) {
+    const contributions = contributionsFor(board);
+    const result = {};
+    // A durable run record needs the outcome from each AI, not every interim
+    // submission. Keep the latest small contribution per actor inside the
+    // history item so the 20-item/3k cap remains a compact handoff index.
+    for (const actor of AGENTS) {
+      const latest = contributions[actor][contributions[actor].length - 1];
+      if (!latest || !latest.summary.trim()) continue;
+      result[actor] = [{
+        summary: latest.summary.slice(0, 700),
+        evidence: latest.evidence.slice(0, 2).map(item => {
+          if (typeof item === 'string') return item.slice(0, 160);
+          const serialized = JSON.stringify(item);
+          return serialized.length > 160 ? serialized.slice(0, 160) : item;
+        }),
+        updatedAt: latest.updatedAt
+      }];
+    }
+    return result;
+  }
+
   function historySummary(board, decisionOverride) {
     const decision = decisionOverride === undefined ? initialText(board.decision, 'decision') : initialText(decisionOverride, 'decision');
+    const contributions = historyContributionsFor(board);
     const summary = {
       runId: requireString(board.runId || '', 'runId', 512),
       objective: initialText(board.objective, 'objective'),
       decision,
       owner: requireAgent(board.owner, 'owner'),
       reviewer: board.reviewer === undefined || board.reviewer === null ? null : requireAgent(board.reviewer, 'reviewer'),
-      updatedAt: now(board.updatedAt)
+      updatedAt: now(board.updatedAt),
+      ...(Object.keys(contributions).length ? { contributions } : {})
     };
     // A run can contain long proposal text. The durable history is a compact
     // handoff index, so retain both fields while staying within its hard cap.
@@ -223,9 +247,8 @@
     const priorObjective = initialText(existing.objective, 'objective');
     const priorDecision = initialText(existing.decision, 'decision');
     const contributionSummary = contributionSummaryForHistory(existing);
-    const decisionForHistory = [priorDecision.slice(0, 1200), contributionSummary].filter(Boolean).join('\n\n');
     const history = [...priorHistory];
-    if (priorObjective.trim() || priorDecision.trim() || contributionSummary.trim()) history.push(historySummary(existing, decisionForHistory));
+    if (priorObjective.trim() || priorDecision.trim() || contributionSummary.trim()) history.push(historySummary(existing, priorDecision));
     const retainedHistory = history.slice(-HISTORY_LIMIT);
     const owner = requireAgent(input.owner || existing.owner, 'owner');
     if (input.reviewer !== undefined && input.reviewer !== null && input.reviewer !== '') {
@@ -262,9 +285,8 @@
     const priorHistory = historyFor(existing);
     const priorDecision = initialText(existing.decision, 'decision');
     const contributionSummary = contributionSummaryForHistory(existing);
-    const decisionForHistory = [priorDecision.slice(0, 1200), contributionSummary].filter(Boolean).join('\n\n');
     const history = [...priorHistory];
-    if (priorDecision.trim() || contributionSummary.trim()) history.push(historySummary(existing, decisionForHistory));
+    if (priorDecision.trim() || contributionSummary.trim()) history.push(historySummary(existing, priorDecision));
     const owner = requireAgent(input.owner || existing.owner, 'owner');
     if (input.reviewer !== undefined && input.reviewer !== null && input.reviewer !== '') {
       throw new TypeError('reviewer는 owner로부터 자동 결정됩니다.');

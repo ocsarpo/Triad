@@ -157,7 +157,7 @@ test('continueBoard는 문서 정체성과 제약을 유지하고 새 실행 단
   }]);
 });
 
-test('continueBoard도 이전 독립 contribution을 decision summary로 history에 보존한다', () => {
+test('continueBoard는 이전 독립 contribution을 구조화된 history 기여로 보존한다', () => {
   const existing = boardApi.createBoard({
     conversationId: 'chat-old', runId: 'independent-1', documentId: 'doc-1', title: '문서', objective: '독립 조사', owner: 'codex',
     contributions: { codex: [{ runId: 'independent-1', summary: 'Codex 조사 결과', evidence: [], updatedAt: 'old' }], claude: [{ runId: 'independent-1', summary: 'Claude 조사 결과', evidence: [], updatedAt: 'old' }] },
@@ -166,8 +166,11 @@ test('continueBoard도 이전 독립 contribution을 decision summary로 history
   const continued = boardApi.continueBoard(existing, { conversationId: 'chat-new', runId: 'collab-2', objective: '교차 검토', owner: 'claude' });
   assert.equal(continued.phase, 'proposal');
   assert.equal(continued.history.length, 1);
-  assert.match(continued.history[0].decision, /Codex 조사 결과/);
-  assert.match(continued.history[0].decision, /Claude 조사 결과/);
+  assert.equal(continued.history[0].decision, '');
+  assert.deepEqual(plain(continued.history[0].contributions), {
+    codex: [{ summary: 'Codex 조사 결과', evidence: [], updatedAt: 'old' }],
+    claude: [{ summary: 'Claude 조사 결과', evidence: [], updatedAt: 'old' }]
+  });
   assert.deepEqual(plain(continued.contributions), { codex: [], claude: [] });
 });
 
@@ -204,7 +207,7 @@ test('history는 패킷에서 명시적으로 선택했을 때만 전달된다',
   assert.equal(withHistory.title, '문서');
 });
 
-test('독립 실행은 이전 기여를 history로 요약하고 새 실행 contributions를 비운다', () => {
+test('독립 실행은 이전 기여를 구조화된 history로 보존하고 새 실행 contributions를 비운다', () => {
   const existing = boardApi.createBoard({
     conversationId: 'chat-old', runId: 'run-1', documentId: 'doc-1', title: '독립 작업', objective: '이전 목표', owner: 'codex',
     constraints: ['근거만 기록'], contributions: { codex: [{ runId: 'run-1', summary: 'Codex 결과', evidence: ['a.js'], updatedAt: 'old' }], claude: [{ runId: 'run-1', summary: 'Claude 검토', evidence: [], updatedAt: 'old' }] }
@@ -216,8 +219,42 @@ test('독립 실행은 이전 기여를 history로 요약하고 새 실행 contr
   assert.deepEqual(plain(continued.constraints), ['근거만 기록']);
   assert.deepEqual(plain(continued.contributions), { codex: [], claude: [] });
   assert.equal(continued.history.length, 1);
-  assert.match(continued.history[0].decision, /Codex 결과/);
-  assert.match(continued.history[0].decision, /Claude 검토/);
+  assert.equal(continued.history[0].decision, '');
+  assert.deepEqual(plain(continued.history[0].contributions), {
+    codex: [{ summary: 'Codex 결과', evidence: ['a.js'], updatedAt: 'old' }],
+    claude: [{ summary: 'Claude 검토', evidence: [], updatedAt: 'old' }]
+  });
+});
+
+test('실행 history는 최신 AI 기여만 구조화해 보존하며 항목·패킷 상한을 지킨다', () => {
+  const contributions = {
+    codex: [
+      { runId: 'run-1', summary: '이전 Codex 제출', evidence: [], updatedAt: 'one' },
+      { runId: 'run-1', summary: '최종 Codex 제출', evidence: ['a.js'], updatedAt: 'two' }
+    ],
+    claude: [{ runId: 'run-1', summary: '최종 Claude 검토', evidence: ['b.js'], updatedAt: 'three' }]
+  };
+  const existing = boardApi.createBoard({ runId: 'run-1', objective: '이전 실행', owner: 'codex', contributions });
+  const continued = boardApi.continueIndependentBoard(existing, { runId: 'run-2', objective: '새 실행', owner: 'claude' });
+  assert.equal(JSON.stringify(continued.history[0]).length <= boardApi.HISTORY_ITEM_LIMIT, true);
+  assert.equal(continued.history[0].contributions.codex[0].summary, '최종 Codex 제출');
+  assert.equal(continued.history[0].contributions.claude[0].summary, '최종 Claude 검토');
+  const packet = boardApi.compactPacket(continued, { sections: ['history'] });
+  assert.equal(JSON.stringify(packet).length <= boardApi.PACKET_LIMIT, true);
+});
+
+test('최대 크기 contribution도 history 항목 상한 안에서 보존한다', () => {
+  const long = 'x'.repeat(boardApi.CONTRIBUTION_SUMMARY_LIMIT);
+  const evidence = Array.from({ length: boardApi.CONTRIBUTION_EVIDENCE_LIMIT }, () => 'e'.repeat(boardApi.CONTRIBUTION_EVIDENCE_ITEM_LIMIT - 2));
+  const existing = boardApi.createBoard({
+    runId: 'run-1', objective: 'o'.repeat(boardApi.TEXT_LIMIT), decision: 'd'.repeat(boardApi.TEXT_LIMIT), owner: 'codex',
+    contributions: {
+      codex: [{ runId: 'run-1', summary: long, evidence, updatedAt: 'old' }],
+      claude: [{ runId: 'run-1', summary: long, evidence, updatedAt: 'old' }]
+    }
+  });
+  const continued = boardApi.continueIndependentBoard(existing, { runId: 'run-2', objective: '다음 실행', owner: 'claude' });
+  assert.equal(JSON.stringify(continued.history[0]).length <= boardApi.HISTORY_ITEM_LIMIT, true);
 });
 
 test('각 AI는 자기 contribution만 cap 내에서 추가하고 일반 patch로는 수정할 수 없다', () => {

@@ -83,6 +83,25 @@ test('공유 보드 프롬프트는 manifest-first이며 독립 실행에 과거
   assert.doesNotMatch(renderer, /sections:\['objective','constraints','decision'\],maxCharacters:12000/);
 });
 
+test('공유 문서 화면은 현재 작업과 접이식 실행 기록을 분리해 렌더한다', () => {
+  const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html'), 'utf8');
+  const plist = fs.readFileSync(path.join(__dirname, '../Resources/Info.plist'), 'utf8');
+  assert.match(renderer, /currentHeading\.textContent='현재 작업'/);
+  assert.match(renderer, /실행 기록 \(\$\{history\.length\}\)/);
+  assert.match(renderer, /document\.createElement\('details'\)/);
+  assert.match(renderer, /history\.slice\(\)\.reverse\(\)/);
+  assert.match(renderer, /historyContributionText\(entry\.contributions\)/);
+  assert.match(renderer, /decisionTitle\.textContent='결론'/);
+  assert.match(renderer, /decision\.textContent=entry\.decision\|\|'결론이 기록되지 않았습니다\.'/);
+  assert.match(renderer, /AI 기여 요약/);
+  // Legacy records only have decision text. They retain that text as the
+  // conclusion; no synthetic contribution section is rendered without data.
+  assert.match(renderer, /if\(contribution\)\{const contributionTitle/);
+  assert.match(renderer, /board-history-entry/);
+  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.40\.7<\/string>/);
+  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>57<\/string>/);
+});
+
 test('공유 문서는 최근 수정 순으로 합치고 선택 ID로만 찾는다', () => {
   const first = { documentId: 'first', updatedAt: '2026-07-21T00:00:00.000Z' };
   const newer = { documentId: 'newer', updatedAt: '2026-07-22T00:00:00.000Z' };

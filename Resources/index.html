@@ -134,10 +134,23 @@
     .board-empty { margin: 18px 4px; color: var(--muted); font-size: 11px; line-height: 1.6; }
     .board-summary { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 12px; }
     .board-chip { padding: 3px 6px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: color-mix(in srgb, var(--bg), transparent 22%); font-size: 9px; }
+    .board-area-heading { margin: 0 0 8px; color: var(--text); font-size: 11px; }
     .board-section { margin: 0 0 10px; border: 1px solid var(--line); border-radius: 9px; background: color-mix(in srgb, var(--bg), transparent 16%); overflow: hidden; }
     .board-section h3 { margin: 0; padding: 7px 9px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 10px; }
     .board-section pre { margin: 0; padding: 8px 9px; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font: 10px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
     .board-section ul { margin: 0; padding: 8px 9px 8px 25px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 10px; line-height: 1.55; }
+    .board-history { margin: 16px 0 0; border-top: 1px solid var(--line); }
+    .board-history > h3 { margin: 0; padding: 12px 0 8px; color: var(--text); font-size: 11px; }
+    .board-history-entry { margin: 0 0 7px; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--bg), transparent 16%); overflow: hidden; }
+    .board-history-entry summary { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 9px; cursor: pointer; list-style: none; }
+    .board-history-entry summary::-webkit-details-marker { display: none; }
+    .board-history-entry summary::before { content: '›'; flex: none; color: var(--muted); font-size: 14px; line-height: 1; transition: transform .15s ease; }
+    .board-history-entry[open] summary::before { transform: rotate(90deg); }
+    .board-history-headline { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 10px; font-weight: 700; }
+    .board-history-entry time { flex: none; color: var(--muted); font-size: 8px; }
+    .board-history-meta { padding: 0 9px 8px 25px; color: var(--muted); font-size: 8px; }
+    .board-history-entry > h4 { margin: 0; padding: 8px 9px 0; color: var(--muted); font-size: 9px; }
+    .board-history-content { max-height: 220px; margin: 0; padding: 8px 9px; overflow: auto; border-top: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font: 10px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
     .collab-document { max-width: 190px; overflow: hidden; color: var(--all); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 700; }
     .collab-document[hidden] { display: none; }
     .app.trace-hidden { grid-template-columns: 230px minmax(520px,1fr) 310px; }
@@ -831,6 +844,28 @@
       if(Array.isArray(value))return value.length?value.map(item=>typeof item==='string'?item:JSON.stringify(item)).join('\n'):'아직 기록되지 않았습니다.';
       return typeof value==='string'?value:JSON.stringify(value,null,2);
     }
+    function boardTimestamp(value) {
+      const timestamp=Date.parse(value||'');if(Number.isNaN(timestamp))return value||'기록 시각 없음';
+      return new Date(timestamp).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    }
+    function historyContributionText(value) {
+      if(!value||typeof value!=='object'||Array.isArray(value))return '';
+      const parts=[];
+      for(const actor of agents){for(const item of Array.isArray(value[actor])?value[actor]:[]){
+        const evidence=Array.isArray(item?.evidence)&&item.evidence.length?`\n근거: ${item.evidence.map(entry=>typeof entry==='string'?entry:JSON.stringify(entry)).join(' · ')}`:'';
+        parts.push(`${names[actor]||actor}\n${item?.summary||''}${evidence}`.trim());
+      }}
+      return parts.join('\n\n');
+    }
+    function renderHistoryEntry(item,index) {
+      const entry=item&&typeof item==='object'?item:{};const details=document.createElement('details');details.className='board-history-entry';
+      const summary=document.createElement('summary');const headline=document.createElement('span');headline.className='board-history-headline';headline.textContent=entry.objective||'이전 실행';const time=document.createElement('time');time.textContent=boardTimestamp(entry.updatedAt);summary.append(headline,time);details.appendChild(summary);
+      const meta=document.createElement('div');meta.className='board-history-meta';const people=[entry.owner&&`담당 ${names[entry.owner]||entry.owner}`,entry.reviewer&&`검토 ${names[entry.reviewer]||entry.reviewer}`].filter(Boolean);meta.textContent=[`실행 ${index}`,entry.runId&&`run ${entry.runId}`,...people].filter(Boolean).join(' · ');details.appendChild(meta);
+      const decisionTitle=document.createElement('h4');decisionTitle.textContent='결론';const decision=document.createElement('pre');decision.className='board-history-content';decision.textContent=entry.decision||'결론이 기록되지 않았습니다.';details.append(decisionTitle,decision);
+      const contribution=historyContributionText(entry.contributions);
+      if(contribution){const contributionTitle=document.createElement('h4');contributionTitle.textContent='AI 기여 요약';const contributionBody=document.createElement('pre');contributionBody.className='board-history-content';contributionBody.textContent=contribution;details.append(contributionTitle,contributionBody);}
+      return details;
+    }
     function renderSharedBoard() {
       const pane=document.getElementById('board-pane');const body=document.getElementById('board-body');const chat=document.querySelector('.chat');const toggle=document.getElementById('board-toggle');if(!pane||!body||!chat)return;
       pane.hidden=!state.boardVisible;chat.classList.toggle('board-open',state.boardVisible);if(toggle)toggle.textContent=state.boardVisible?'공유 문서 닫기':'공유 문서';const documentLocked=sharedDocumentsLocked();const newButton=document.getElementById('board-new');if(newButton){newButton.disabled=documentLocked;newButton.title=documentLocked?'AI 작업 또는 대기열이 끝난 뒤 새 문서를 만들 수 있습니다.':'';}
@@ -852,6 +887,7 @@
       const documentHead=document.createElement('div');documentHead.className='board-document-head';const titleInput=document.createElement('input');titleInput.className='board-document-title';titleInput.value=documentTitleOf(board);titleInput.disabled=documentLocked;titleInput.title=documentLocked?'AI 작업 또는 대기열이 끝난 뒤 제목을 바꿀 수 있습니다.':'';titleInput.setAttribute('aria-label','공유 문서 제목');const saveTitle=document.createElement('button');saveTitle.className='small-btn';saveTitle.textContent='저장';saveTitle.disabled=documentLocked;saveTitle.onclick=()=>updateSharedDocumentTitle(board,titleInput);titleInput.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();updateSharedDocumentTitle(board,titleInput);}};const remove=document.createElement('button');remove.className=`small-btn board-delete ${state.pendingSharedDocumentDeleteId===documentIdOf(board)?'confirm-delete':''}`;remove.textContent=state.pendingSharedDocumentDeleteId===documentIdOf(board)?'삭제 확인':'삭제';remove.disabled=documentLocked;remove.title=documentLocked?'AI 작업 또는 대기열이 끝난 뒤 삭제할 수 있습니다.':'';remove.onclick=()=>deleteSharedDocument(board);documentHead.append(titleInput,saveTitle,remove);detail.appendChild(documentHead);
       const summary=document.createElement('div');summary.className='board-summary';
       for(const text of [`owner ${names[board.owner]||board.owner}`,`reviewer ${names[board.reviewer]||board.reviewer}`,`phase ${board.phase||'proposal'}`,`revision ${board.revision??0}`]){const chip=document.createElement('span');chip.className='board-chip';chip.textContent=text;summary.appendChild(chip);}detail.appendChild(summary);
+      const currentHeading=document.createElement('h3');currentHeading.className='board-area-heading';currentHeading.textContent='현재 작업';detail.appendChild(currentHeading);
       const labels={objective:'의제',constraints:'제약 조건',proposal:'제안',evidence:'근거',verdict:'검토 판정',disputes:'이견·보완',decision:'최종 결정',contributions:'독립 실행 기여'};
       for(const key of ['objective','constraints','proposal','evidence','verdict','disputes','decision','contributions']){
         const section=document.createElement('section');section.className='board-section';const title=document.createElement('h3');title.textContent=labels[key];const content=document.createElement(key==='contributions'?'div':Array.isArray(board[key])?'ul':'pre');
@@ -862,6 +898,10 @@
         } else if(Array.isArray(board[key])){for(const item of board[key]||[]){const li=document.createElement('li');li.textContent=typeof item==='string'?item:JSON.stringify(item);content.appendChild(li);}if(!board[key]?.length){const li=document.createElement('li');li.textContent='아직 기록되지 않았습니다.';content.appendChild(li);}}
         else content.textContent=boardValue(board[key]);section.append(title,content);detail.appendChild(section);
       }
+      const history=Array.isArray(board.history)?board.history:[];const historySection=document.createElement('section');historySection.className='board-history';const historyTitle=document.createElement('h3');historyTitle.textContent=`실행 기록 (${history.length})`;historySection.appendChild(historyTitle);
+      if(!history.length){const empty=document.createElement('p');empty.className='board-empty';empty.textContent='이 문서의 이전 실행 기록이 아직 없습니다.';historySection.appendChild(empty);}
+      else history.slice().reverse().forEach((item,index)=>historySection.appendChild(renderHistoryEntry(item,history.length-index)));
+      detail.appendChild(historySection);
     }
     function traceProviderEvent(agent, data, rawLine) {
       if(agent==='codex'){

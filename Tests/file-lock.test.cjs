@@ -102,11 +102,8 @@ test('이전 소유자의 finally는 새 소유자 락을 지우지 않는다', 
   assert.equal(readLock(`${filePath}.lock`).metadata.token, 'replacement-owner');
 });
 
-test('파일 락 복구 모듈은 버전을 올리고 앱 패키지에 포함한다', () => {
+test('파일 락 복구 모듈은 앱 패키지에 포함한다', () => {
   const root = path.join(__dirname, '..');
-  const plist = fs.readFileSync(path.join(root, 'Resources/Info.plist'), 'utf8');
   const packager = fs.readFileSync(path.join(root, 'scripts/package-app.sh'), 'utf8');
-  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.40\.6<\/string>/);
-  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>56<\/string>/);
   assert.match(packager, /cp "\$root\/Resources\/file-lock\.cjs" "\$app\/Contents\/Resources\/file-lock\.cjs"/);
 });

@@ -64,6 +64,14 @@ test('렌더러의 실행과 재시도 요청은 명시적 MCP predicate와 공�
   assert.match(renderer, /const canonical=upsertSharedDocument/);
 });
 
+test('공유 보드 프롬프트는 manifest-first이며 독립 실행에 과거 기여를 반복 주입하지 않는다', () => {
+  const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html'), 'utf8');
+  assert.match(renderer, /sections,maxCharacters:4000/);
+  assert.match(renderer, /window\.TriadSharedContext\.manifest\(board\)/);
+  assert.match(renderer, /history 또는 contributions를 선택해 읽고/);
+  assert.doesNotMatch(renderer, /sections:\['objective','constraints','decision'\],maxCharacters:12000/);
+});
+
 test('공유 문서는 최근 수정 순으로 합치고 선택 ID로만 찾는다', () => {
   const first = { documentId: 'first', updatedAt: '2026-07-21T00:00:00.000Z' };
   const newer = { documentId: 'newer', updatedAt: '2026-07-22T00:00:00.000Z' };

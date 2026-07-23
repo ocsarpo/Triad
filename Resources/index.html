@@ -417,6 +417,7 @@
   <script src="diff.js"></script>
   <script src="queue.js"></script>
   <script src="usage.js"></script>
+  <script src="session-budget.js"></script>
   <script src="file-search.js"></script>
   <script src="version.js"></script>
   <script>
@@ -427,10 +428,11 @@
       messages: JSON.parse(localStorage.getItem('triad.messages') || '[]'),
       settings: JSON.parse(localStorage.getItem('triad.settings') || 'null'),
       sessions: JSON.parse(localStorage.getItem('triad.sessions') || '{"codex":null,"claude":null}'),
+      sessionStats: JSON.parse(localStorage.getItem('triad.sessionStats') || '{}'),
       traces: JSON.parse(localStorage.getItem('triad.traces') || '[]'), traceFilter:'all',
       conversations: [], activeConversationId: localStorage.getItem('triad.activeConversationId'),
       storageReady: false, saveTimer: null, conversationSearch: '',
-      collaboration: {mode:'independent',lead:'codex',rounds:6,finalizer:'claude',helperTimeoutMinutes:5}, orchestration:null, sharedContext:null,
+      collaboration: {mode:'independent',lead:'codex',rounds:2,finalizer:'claude',helperTimeoutMinutes:5}, orchestration:null, sharedContext:null,
       sharedDocuments:[], activeSharedDocumentId:null, pendingSharedDocumentDeleteId:null,
       queue: [],
       usage: JSON.parse(localStorage.getItem('triad.usage')||'{"codex":{"windows":[]},"claude":{"windows":[]}}'), usageRefreshing:false, usageTimer:null, lastUsageRefresh:0,
@@ -449,8 +451,8 @@
       boardVisible:false
     };
     const defaults = home => ({
-      codex: { model:'gpt-5.6-sol', effort:'medium', speedMode:'standard', permissionMode:'workspace-write', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'codex', authMode:'existing' },
-      claude: { model:'sonnet', effort:'medium', speedMode:'standard', permissionMode:'acceptEdits', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'claude', authMode:'existing' }
+      codex: { model:'gpt-5.6-sol', effort:'medium', speedMode:'standard', permissionMode:'workspace-write', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'codex', authMode:'existing', sessionPolicy:'auto', sessionTurnLimit:6, sessionTokenLimit:48000 },
+      claude: { model:'sonnet', effort:'medium', speedMode:'standard', permissionMode:'acceptEdits', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'claude', authMode:'existing', sessionPolicy:'auto', sessionTurnLimit:6, sessionTokenLimit:48000 }
     });
     const post = payload => window.webkit?.messageHandlers?.triad?.postMessage(payload);
     const id = () => crypto.randomUUID();
@@ -460,9 +462,17 @@
       return Number.isInteger(minutes)&&minutes>=1&&minutes<=120?minutes:5;
     }
     function normalizeCollaboration(value) {
-      const collaboration={mode:'independent',lead:'codex',rounds:6,finalizer:'claude',...(value||{})};
+      const collaboration={mode:'independent',lead:'codex',rounds:2,finalizer:'claude',...(value||{})};
       collaboration.helperTimeoutMinutes=helperTimeoutMinutes(collaboration.helperTimeoutMinutes);
       return collaboration;
+    }
+    function normalizeSessionSettings(config) {
+      return {...config,...window.TriadSessionBudget.normalizePolicy(config)};
+    }
+    function normalizeSessionStats(value=state.sessionStats) {
+      state.sessionStats=window.TriadSessionBudget.normalizeStats(value);
+      for(const agent of agents){if(state.sessions?.[agent]&&!state.sessionStats[agent].sessionId)state.sessionStats[agent].sessionId=state.sessions[agent];}
+      return state.sessionStats;
     }
     function conversationSnapshot() {
       const existing=state.conversations.find(item=>item.id===state.activeConversationId);
@@ -471,7 +481,7 @@
         id:state.activeConversationId, title:existing?.title||'새 대화',
         createdAt:existing?.createdAt||now, updatedAt:now,
         messages:clone(state.messages.slice(-300)), settings:clone(state.settings), collaboration:clone(state.collaboration),
-        sessions:clone(state.sessions), traces:clone(state.traces.slice(-500)), sharedContext:clone(state.sharedContext),
+        sessions:clone(state.sessions), sessionStats:clone(state.sessionStats), traces:clone(state.traces.slice(-500)), sharedContext:clone(state.sharedContext),
         activeSharedDocumentId:state.activeSharedDocumentId
       };
     }
@@ -490,6 +500,7 @@
       localStorage.setItem('triad.messages', JSON.stringify(state.messages.slice(-300)));
       localStorage.setItem('triad.settings', JSON.stringify(state.settings));
       localStorage.setItem('triad.sessions', JSON.stringify(state.sessions));
+      localStorage.setItem('triad.sessionStats', JSON.stringify(state.sessionStats));
       localStorage.setItem('triad.traces', JSON.stringify(state.traces.slice(-500)));
       if(state.activeConversationId)localStorage.setItem('triad.activeConversationId',state.activeConversationId);
       persistConversation();
@@ -501,6 +512,7 @@
       state.settings=clone(conversation.settings||state.settings);
       state.collaboration=normalizeCollaboration(conversation.collaboration);
       state.sessions=clone(conversation.sessions||{codex:null,claude:null});
+      normalizeSessionStats(conversation.sessionStats||{});
       state.traces=clone(conversation.traces||[]);
       state.sharedContext=clone(conversation.sharedContext||null);
       state.activeSharedDocumentId=conversation.activeSharedDocumentId||state.sharedContext?.board?.documentId||null;
@@ -511,7 +523,7 @@
       if(agents.some(agent=>state.running[agent])||state.queue.length)return;
       if(!skipPersist)persistConversation(true);
       const now=Date.now();
-      const conversation={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:[],settings:clone(state.settings),collaboration:clone(state.collaboration),sessions:{codex:null,claude:null},traces:[],sharedContext:null,activeSharedDocumentId:null};
+      const conversation={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:[],settings:clone(state.settings),collaboration:clone(state.collaboration),sessions:{codex:null,claude:null},sessionStats:window.TriadSessionBudget.normalizeStats(),traces:[],sharedContext:null,activeSharedDocumentId:null};
       state.conversations.unshift(conversation);loadConversation(conversation);addWelcome();persistConversation(true);
       document.getElementById('draft').focus();
     }
@@ -604,8 +616,13 @@
     }
     function recordTurnUsage(agent,usage){
       if(!usage)return;
-      const input=usage.input_tokens??usage.inputTokens??0;const output=usage.output_tokens??usage.outputTokens??0;
-      if(input||output)addTrace(agent,'info','이번 요청 토큰 사용량',{input_tokens:input,output_tokens:output,total_tokens:input+output});
+      const pending=state.pending[agent];
+      const input=window.TriadSessionBudget.logicalInputTokens(agent,usage);const output=window.TriadSessionBudget.outputTokens(usage);
+      if(!input&&!output)return;
+      if(!pending?.isolated)state.sessionStats=window.TriadSessionBudget.recordUsage(state.sessionStats,agent,usage,{replaceLast:!!pending?.usageRecorded,sessionId:state.sessions[agent]||pending?.sessionId||null});
+      if(pending)pending.usageRecorded=true;
+      if(!pending?.isolated){save();renderSettings();}
+      addTrace(agent,'info','이번 요청 토큰 사용량',{logical_input_tokens:input,output_tokens:output,total_tokens:input+output,cache_included:agent==='claude',isolated:!!pending?.isolated});
     }
 
     function detailText(value) {
@@ -968,9 +985,19 @@
       state.running[agent]=true;state.stderr[agent]='';state.lineBuffers[agent]='';
       const isolated=options.isolated===true;
       const sharedContext=options.sharedContext||state.orchestration?.sharedContext||null;
-      state.pending[agent]={prompt,retried:false,isolated,sharedContext};state.responseIds[agent]=addMessage(agent,'',true);renderStatus();
       const config=state.settings[agent];
-      const session=isolated?null:state.sessions[agent];
+      let session=isolated?null:state.sessions[agent];
+      let rotationReason='';
+      if(!isolated&&config.sessionPolicy==='alwaysNew'){
+        if(session){state.sessions[agent]=null;state.sessionStats=window.TriadSessionBudget.resetAgent(state.sessionStats,agent);rotationReason='정책: 항상 새 세션';}
+        session=null;
+      }else if(!isolated&&window.TriadSessionBudget.shouldRotate(config,state.sessionStats[agent],!!session)){
+        const stats=state.sessionStats[agent];
+        rotationReason=stats.turns>=config.sessionTurnLimit?`자동 회전 · ${stats.turns}턴`: `자동 회전 · 입력 ${Math.round(stats.sessionInputTokens/1000)}k`;
+        state.sessions[agent]=null;state.sessionStats=window.TriadSessionBudget.resetAgent(state.sessionStats,agent,{incrementRotation:true});session=null;
+      }
+      if(rotationReason){addTrace(agent,'info','다음 작업 새 세션',rotationReason);save();}
+      state.pending[agent]={prompt,retried:false,isolated,sharedContext,usageRecorded:false,sessionId:session};state.responseIds[agent]=addMessage(agent,'',true);renderStatus();
       addTrace(agent,'info','명령 전달',{model:config.model,effort:config.effort,speed:config.speedMode,workspace:config.workspacePath,writableRoots:config.writableRoots||'',networkAccess:!!config.networkAccess,allowLocalBinding:!!config.allowLocalBinding,session:session?'resume':'new',isolated,mode:state.orchestration?.mode||'independent'});
       post({action:'run',agent,prompt,config:state.settings[agent],agentConfigs:state.settings,collaboration:state.collaboration,mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,sharedContext),sharedContext,session});return true;
     }
@@ -1059,10 +1086,8 @@
     }
     function boardFor(flow=state.orchestration) { return flow?.sharedContext?.board || activeSharedDocument() || state.sharedContext?.board || null; }
     function boardSectionsFor(task) {
-      if(task.kind==='proposal')return ['objective','constraints'];
-      if(task.kind==='verdict')return ['objective','constraints','proposal','evidence'];
-      if(task.kind==='resolve')return ['objective','proposal','evidence','verdict','disputes'];
-      return ['objective','constraints','proposal','evidence','verdict','disputes'];
+      if(task.kind==='proposal')return ['constraints'];
+      return [];
     }
     function createRunBoard(objective, lead, independent=false) {
       const owner=window.TriadCollaboration.rolesFor(lead).owner;
@@ -1090,17 +1115,20 @@
     }
     function boardPacket(task, flow) {
       const board=boardFor(flow);if(!board)return null;
-      try { return window.TriadSharedContext.compactPacket(board,{sections:boardSectionsFor(task),maxCharacters:12000}); }
+      try {
+        const sections=boardSectionsFor(task);
+        return sections.length?window.TriadSharedContext.compactPacket(board,{sections,maxCharacters:4000}):window.TriadSharedContext.manifest(board);
+      }
       catch(error) { addTrace(task.agent,'error','공유 보드 패킷 준비 실패',error.message);return window.TriadSharedContext.manifest(board); }
     }
     function buildCollaborationPrompt(task) {
       const flow=state.orchestration;const board=boardFor(flow);const packet=boardPacket(task,flow);
       const role=task.agent===board?.owner?'owner/proposer':'reviewer';
       const common=`사용자 의제:\n${flow.objective}\n\n당신의 역할: ${role}\n공유 보드 단계: ${task.phase}\n공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(packet)}\n\n공유 보드는 프로젝트가 아니라 Triad가 관리합니다. 전체 채팅 기록이나 다른 AI의 원문 답변을 요청하거나 반복하지 마세요. 필요한 프로젝트 근거는 직접 필요한 파일·라인만 읽으세요.`;
-      if(task.kind==='proposal')return `${common}\n\n먼저 shared_context_update 도구로 proposal과 필요한 constraints/evidence를 작성하세요. 그 뒤 사용자에게는 실행 가능한 제안과 근거만 간결하게 설명하세요.`;
-      if(task.kind==='verdict')return `${common}\n\nshared_context_read로 필요한 보드 섹션을 확인하고 proposal의 반례·누락만 검토하세요. submit_verdict 도구로 agree | disagree | conditional 중 하나와 최대 3개의 findings를 기록하세요. agree라면 새 동의 라운드를 시작하지 마세요.`;
-      if(task.kind==='resolve')return `${common}\n\nreviewer의 disputes만 해결하세요. 필요한 변경은 shared_context_update로 proposal/evidence에 반영하고, 해결 결과를 짧게 남기세요.`;
-      return `${common}\n\n현재 보드만 근거로 최종 결론을 내리세요. shared_context_update로 decision을 기록해 보드를 완료하고, 사용자에게 바로 실행 가능한 결론을 제시하세요. 새 토론이나 상대 AI 호출은 시작하지 마세요.`;
+      if(task.kind==='proposal')return `${common}\n\ninline에는 제약만 있습니다. 필요한 경우 shared_context_read로 필요한 섹션만 읽으세요. 먼저 shared_context_update 도구로 proposal과 필요한 constraints/evidence를 작성하세요. 그 뒤 사용자에게는 실행 가능한 제안과 근거만 간결하게 설명하세요.`;
+      if(task.kind==='verdict')return `${common}\n\nshared_context_read로 proposal과 evidence만 읽고 반례·누락만 검토하세요. submit_verdict 도구로 agree | disagree | conditional 중 하나와 최대 3개의 findings를 기록하세요. agree라면 새 동의 라운드를 시작하지 마세요.`;
+      if(task.kind==='resolve')return `${common}\n\nshared_context_read로 verdict와 disputes만 읽고 해결하세요. 필요한 변경은 shared_context_update로 proposal/evidence에 반영하고, 해결 결과를 짧게 남기세요.`;
+      return `${common}\n\nshared_context_read로 proposal, evidence, verdict, disputes만 읽어 현재 보드 근거로 최종 결론을 내리세요. shared_context_update로 decision을 기록해 보드를 완료하고, 사용자에게 바로 실행 가능한 결론을 제시하세요. 새 토론이나 상대 AI 호출은 시작하지 마세요.`;
     }
     function agentHandoffProtocol(agent, disabled=false) {
       if(disabled)return '위임 한도에 도달했습니다. 상대 AI에게 추가 질문을 요청하지 말고 현재 정보로 사용자에게 줄 최선의 결과를 완성하세요.';
@@ -1120,9 +1148,9 @@
       return `${context}당신이 이 작업의 시작 담당입니다. 직접 작업을 진행하고 사용자에게 줄 결과를 완성하세요.\n\n${agentHandoffProtocol(task.agent,task.noHandoff)}`;
     }
     function buildIndependentPrompt(agent, prompt, sharedContext) {
-      const board=sharedContext?.board;let packet=null;
-      try { packet=board?window.TriadSharedContext.compactPacket(board,{sections:['objective','constraints','decision'],maxCharacters:12000}):null; } catch {}
-      return `${prompt}\n\nTriad 독립 실행 공유 문서:\n${JSON.stringify(packet)}\n\n전체 채팅이나 상대 AI의 답변은 읽지 마세요. 필요한 공유 보드 섹션과 프로젝트 파일만 읽고, 작업을 마친 뒤 submit_contribution 도구로 runId: ${sharedContext?.runId||''}에 자신의 요약과 근거를 기록하세요. 이 실행에서는 상대 AI 호출을 하지 마세요.`;
+      const board=sharedContext?.board;let manifest=null;
+      try { manifest=board?window.TriadSharedContext.manifest(board):null; } catch {}
+      return `${prompt}\n\nTriad 독립 실행 공유 문서 manifest:\n${JSON.stringify(manifest)}\n\n전체 채팅이나 상대 AI의 답변은 읽지 마세요. 과거 맥락이 꼭 필요할 때만 shared_context_read로 history 또는 contributions를 선택해 읽고, 그 외에는 필요한 공유 보드 섹션과 프로젝트 파일만 읽으세요. 작업을 마친 뒤 submit_contribution 도구로 runId: ${sharedContext?.runId||''}에 자신의 요약과 근거를 반드시 기록하세요. 이 실행에서는 상대 AI 호출을 하지 마세요.`;
     }
     function runAgentTurn(task) {
       const flow=state.orchestration;if(!flow||flow.cancelled)return;
@@ -1201,13 +1229,13 @@
       try { data=JSON.parse(line); } catch { addTrace(agent,'info','비정형 출력',line); return; }
       traceProviderEvent(agent,data,line);
       if (agent==='codex') {
-        if (data.type==='thread.started' && data.thread_id && !state.pending.codex?.isolated) { state.sessions.codex=data.thread_id; save(); renderSettings(); }
+        if (data.type==='thread.started' && data.thread_id && !state.pending.codex?.isolated) { state.sessions.codex=data.thread_id; state.sessionStats.codex.sessionId=data.thread_id; if(state.pending.codex)state.pending.codex.sessionId=data.thread_id; save(); renderSettings(); }
         if (data.type==='item.completed' && data.item?.type==='agent_message' && data.item.text) appendAgentText(agent,data.item.text);
         if (data.type==='error') failAgent(agent,data.error?.message || data.message || 'Codex 실행 오류');
       } else {
         const delta=data.type==='stream_event' && data.event?.type==='content_block_delta' && data.event?.delta?.type==='text_delta' ? data.event.delta.text : null;
         if (data.session_id && !state.pending.claude?.isolated && (delta || data.type==='assistant' || (data.type==='result'&&!data.is_error))) {
-          state.sessions.claude=data.session_id; save(); renderSettings();
+          state.sessions.claude=data.session_id; state.sessionStats.claude.sessionId=data.session_id; if(state.pending.claude)state.pending.claude.sessionId=data.session_id; save(); renderSettings();
         }
         if (delta) appendAgentText(agent,delta);
         if (data.type==='result' && !currentText(agent) && data.result) appendAgentText(agent,data.result);
@@ -1264,6 +1292,13 @@
       });
       state.running[agent]=false; renderStatus();
       addTrace(agent,exitCode===0?'success':'error',exitCode===0?'프로세스 정상 종료':`프로세스 비정상 종료 · code ${exitCode}`,exitCode===0?'':err);
+      // Some CLI result streams omit usage.  A successful normal request
+      // still occupies one continued-session turn, but never double-count a
+      // request whose assistant/result usage was already recorded.
+      if(exitCode===0&&!pending?.isolated&&!pending?.usageRecorded){
+        state.sessionStats=window.TriadSessionBudget.recordCompletion(state.sessionStats,agent,{sessionId:state.sessions[agent]||pending?.sessionId||null});
+        pending.usageRecorded=true;save();renderSettings();
+      }
       if(agent==='codex'&&exitCode===0)refreshUsage(true);
       if(exitCode===0){requestBranch(agent);requestProjectFiles(agent);}
       if(exitCode===0&&state.diff.visible&&state.diff.agent===agent)refreshProjectDiff(agent);
@@ -1345,16 +1380,17 @@
         if(loaded.length){
           const selected=loaded.find(item=>item.id===state.activeConversationId)||loaded[0];
           state.activeConversationId=selected.id;state.messages=clone(selected.messages||[]);
-          state.settings=clone(selected.settings||defaults(event.home));state.collaboration=normalizeCollaboration(selected.collaboration);state.sessions=clone(selected.sessions||{codex:null,claude:null});state.traces=clone(selected.traces||[]);state.sharedContext=clone(selected.sharedContext||null);state.activeSharedDocumentId=selected.activeSharedDocumentId||state.sharedContext?.board?.documentId||null;
+          state.settings=clone(selected.settings||defaults(event.home));state.collaboration=normalizeCollaboration(selected.collaboration);state.sessions=clone(selected.sessions||{codex:null,claude:null});state.sessionStats=clone(selected.sessionStats||{});state.traces=clone(selected.traces||[]);state.sharedContext=clone(selected.sharedContext||null);state.activeSharedDocumentId=selected.activeSharedDocumentId||state.sharedContext?.board?.documentId||null;
         }else{
           if(!state.settings)state.settings=defaults(event.home);
-          const now=Date.now();const migrated={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:clone(state.messages),settings:clone(state.settings),collaboration:clone(state.collaboration),sessions:clone(state.sessions),traces:clone(state.traces),sharedContext:clone(state.sharedContext),activeSharedDocumentId:state.activeSharedDocumentId};
+          const now=Date.now();const migrated={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:clone(state.messages),settings:clone(state.settings),collaboration:clone(state.collaboration),sessions:clone(state.sessions),sessionStats:clone(state.sessionStats),traces:clone(state.traces),sharedContext:clone(state.sharedContext),activeSharedDocumentId:state.activeSharedDocumentId};
           const firstUser=state.messages.find(message=>message.author==='user')?.text?.replace(/\s+/g,' ').trim();
           if(firstUser)migrated.title=firstUser.slice(0,36)+(firstUser.length>36?'…':'');
           state.conversations=[migrated];state.activeConversationId=migrated.id;
         }
         const base=defaults(event.home);
-        state.settings={codex:{...base.codex,...(state.settings?.codex||{})},claude:{...base.claude,...(state.settings?.claude||{})}};
+        state.settings={codex:normalizeSessionSettings({...base.codex,...(state.settings?.codex||{})}),claude:normalizeSessionSettings({...base.claude,...(state.settings?.claude||{})})};
+        normalizeSessionStats(state.sessionStats||{});
         state.messages.forEach(message=>{if(message.streaming){message.streaming=false;if(!message.text)message.text='이전 앱 종료로 작업이 중단되었습니다.';}});
         state.settings.codex.executablePath ||= event.codexPath;
         state.settings.claude.executablePath ||= event.claudePath;
@@ -1378,7 +1414,7 @@
         if(state.retryOnTermination[event.agent]) retryAgent(event.agent); else finishAgent(event.agent,event.exitCode);
       }
       else if (event.type==='error') failAgent(event.agent,event.message);
-      else if (event.type==='session') { if(!state.pending[event.agent]?.isolated){state.sessions[event.agent]=event.session; save(); renderSettings();} }
+      else if (event.type==='session') { if(!state.pending[event.agent]?.isolated){state.sessions[event.agent]=event.session;state.sessionStats[event.agent].sessionId=event.session;if(state.pending[event.agent])state.pending[event.agent].sessionId=event.session; save(); renderSettings();} }
       else if (event.type==='directory') { state.settings[event.agent].workspacePath=event.path; save(); renderSettings(); renderStatus();requestBranch(event.agent);requestProjectFiles(event.agent); }
       else if (event.type==='files') {
         const draft=document.getElementById('draft');
@@ -1506,6 +1542,12 @@
       post({action:'projectFiles',agent,workspace});
     }
     function refreshProjectFiles(){agents.forEach(requestProjectFiles);}
+    function sessionSummary(agent) {
+      const config=state.settings?.[agent]||{};const stats=state.sessionStats?.[agent]||{};
+      const policy={auto:'자동',continue:'계속',alwaysNew:'항상 새'}[config.sessionPolicy]||'자동';
+      const input=Math.round((stats.sessionInputTokens||0)/1000);
+      return `${policy} · ${stats.turns||0}턴 · 입력 ${input}k${state.sessions?.[agent]?'':' · 새 세션'}`;
+    }
     function renderSettings() {
       if (!state.settings) return;
       const root=document.getElementById('settings'); root.innerHTML='';
@@ -1560,18 +1602,23 @@
             </div>
           </details>
           <details class="settings-group" data-section="session" ${open.session?'open':''}>
-            <summary>세션 <span class="settings-group-summary">${state.sessions[agent]?'연결됨':'새 세션'}</span></summary>
-            <div class="settings-group-body"><div class="session-row"><span>${state.sessions[agent]?'세션 연결됨':'새 세션'}</span><button class="small-btn reset-session" ${state.sessions[agent]?'':'disabled'}>세션 초기화</button></div></div>
+            <summary>세션 <span class="settings-group-summary">${sessionSummary(agent)}</span></summary>
+            <div class="settings-group-body">
+              <div class="field"><label>세션 정책</label><select data-key="sessionPolicy"><option value="auto" ${c.sessionPolicy==='auto'?'selected':''}>자동 회전 (권장)</option><option value="continue" ${c.sessionPolicy==='continue'?'selected':''}>계속 유지</option><option value="alwaysNew" ${c.sessionPolicy==='alwaysNew'?'selected':''}>항상 새 세션</option></select></div>
+              ${c.sessionPolicy==='auto'?`<div class="row"><div class="field"><label>턴 기준</label><input data-key="sessionTurnLimit" type="number" min="2" max="50" value="${c.sessionTurnLimit}"></div><div class="field"><label>입력 토큰 기준</label><input data-key="sessionTokenLimit" type="number" min="8000" max="500000" step="1000" value="${c.sessionTokenLimit}"></div></div><p class="fast-note">둘 중 하나에 도달한 다음 일반 작업부터 새 세션으로 시작합니다. 정확한 과금값이 아닌 실행 이벤트 기반 추정치입니다.</p>`:''}
+              <div class="session-row"><span>${sessionSummary(agent)}</span><button class="small-btn reset-session" ${state.running[agent]?'disabled':''}>다음 작업부터 새 세션</button></div>
+            </div>
           </details>`;
         card.querySelectorAll('.settings-group').forEach(group=>group.addEventListener('toggle',()=>{state.settingsOpen[agent][group.dataset.section]=group.open;}));
         card.querySelectorAll('[data-key]').forEach(input=>input.addEventListener('change',()=>{
           const key=input.dataset.key;c[key]=(key==='networkAccess'||key==='allowLocalBinding')?input.value==='true':input.value;
+          if(key==='sessionTurnLimit'||key==='sessionTokenLimit'){Object.assign(c,window.TriadSessionBudget.normalizePolicy(c));}
           if(agent==='codex'&&input.dataset.key==='model') { const selected=state.codexModels.find(model=>model.slug===c.model); if(selected&&!selected.efforts.includes(c.effort))c.effort=selected.defaultEffort||selected.efforts[0]; }
           save(); renderSettings(); renderStatus();if(input.dataset.key==='authMode'||input.dataset.key==='executablePath')requestAuthStatus(agent);if(input.dataset.key==='workspacePath'){requestBranch(agent);requestProjectFiles(agent);}
         }));
         card.querySelector('.choose').onclick=()=>post({action:'chooseDirectory',agent});
         card.querySelector('.branch-refresh').onclick=()=>requestBranch(agent);
-        card.querySelector('.reset-session').onclick=()=>{state.sessions[agent]=null;save();renderSettings();};
+        card.querySelector('.reset-session').onclick=()=>{if(state.running[agent])return;state.sessions[agent]=null;state.sessionStats=window.TriadSessionBudget.resetAgent(state.sessionStats,agent,{incrementRotation:true});addTrace(agent,'info','다음 작업 새 세션','사용자가 세션을 초기화했습니다.');save();renderSettings();};
         card.querySelector('.save-token')?.addEventListener('click',()=>{const token=card.querySelector('.token').value;post({action:'saveToken',agent,token});card.querySelector('.token').value='';});
         card.querySelector('.delete-token')?.addEventListener('click',()=>post({action:'deleteToken',agent}));
         card.querySelector('.auth-refresh')?.addEventListener('click',()=>requestAuthStatus(agent));
@@ -1597,18 +1644,26 @@
       else if(state.collaboration.mode!=='independent'){
         const lead=collaborationLeadFor(routed,state.collaboration.lead);
         if(!lead)toggle.textContent='전송 불가 · 협업에서는 #codex 또는 #claude 중 하나만 시작 AI로 지정';
-        else toggle.textContent=`협업 의제 · ${names[lead]} 시작 · ${routed.prompt.length.toLocaleString('ko-KR')}자 · 클릭하여 확인`;
+        else toggle.textContent=`협업 의제 · ${names[lead]} 시작 · ${routed.prompt.length.toLocaleString('ko-KR')}자 · 입력 약 ${window.TriadSessionBudget.estimateTokens(routed.prompt).toLocaleString('ko-KR')} 토큰 · 클릭하여 확인`;
         if(lead)document.getElementById('collab-lead').value=lead;
       }
       else {
-        const counts=routed.targets.map(agent=>`${names[agent]} ${routed.prompts[agent].length.toLocaleString('ko-KR')}자`);
+        const counts=routed.targets.map(agent=>promptEstimateLabel(agent,routed.prompts[agent]));
         const common=routed.commonText?` · 공통 ${routed.commonText.length.toLocaleString('ko-KR')}자`:'';
         toggle.textContent=`전달 예정${routed.mode==='block'?' · 블록 모드':''} · ${counts.join(' · ')}${common} · 클릭하여 확인`;
       }
       details.innerHTML='';
       const entries=state.collaboration.mode!=='independent'?[['system','협업 의제',routed.prompt]]:routed.targets.map(agent=>[agent,names[agent],routed.prompts[agent]]);
-      for(const [agent,label,prompt] of entries){const card=document.createElement('div');card.className='routing-preview-card';const title=document.createElement('strong');title.textContent=label;title.className=agent;const pre=document.createElement('pre');pre.textContent=prompt;card.append(title,pre);details.appendChild(card);}
+      for(const [agent,label,prompt] of entries){const card=document.createElement('div');card.className='routing-preview-card';const title=document.createElement('strong');title.textContent=state.collaboration.mode==='independent'?promptEstimateLabel(agent,prompt):`${label} · ${prompt.length.toLocaleString('ko-KR')}자 · 입력 약 ${window.TriadSessionBudget.estimateTokens(prompt).toLocaleString('ko-KR')} 토큰`;title.className=agent;const pre=document.createElement('pre');pre.textContent=prompt;card.append(title,pre);details.appendChild(card);}
       details.hidden=!state.routingPreviewOpen;
+    }
+    function promptEstimateLabel(agent,prompt) {
+      const input=window.TriadSessionBudget.estimateTokens(prompt);const config=state.settings?.[agent]||{};
+      const stats=state.sessionStats?.[agent]||{};const resume=state.sessions?.[agent]
+        && config.sessionPolicy!=='alwaysNew'
+        && !window.TriadSessionBudget.shouldRotate(config,stats,true);
+      const context=resume&&stats.lastInputTokens?` · 세션 문맥 약 ${stats.lastInputTokens.toLocaleString('ko-KR')} 토큰`:'';
+      return `${names[agent]} ${prompt.length.toLocaleString('ko-KR')}자 · 입력 약 ${input.toLocaleString('ko-KR')} 토큰${context}`;
     }
 
     const autocompleteOptions=[

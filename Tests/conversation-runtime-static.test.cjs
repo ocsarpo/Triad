@@ -7,8 +7,8 @@ test('대화별 설정과 세션 통계는 스냅샷으로 복원하고, 큐는 
   assert.match(renderer,/state\.defaultTarget=normalizeDefaultTarget\(conversation\.defaultTarget\)/);
   assert.match(renderer,/state\.sessions=clone\(conversation\.sessions\|\|\{codex:null,claude:null\}\)/);
   assert.match(renderer,/normalizeSessionStats\(conversation\.sessionStats\|\|\{\}\)/);
-  assert.match(renderer,/settings:clone\(state\.settings\),collaboration:clone\(activeCollaboration\(\)\)/);
-  assert.match(renderer,/config:clone\(state\.settings\[agent\]\),agentConfigs:clone\(state\.settings\)/);
+  assert.match(renderer,/settings:clone\(effectiveAgentConfigs\(\)\),collaboration:clone\(activeCollaboration\(\)\)/);
+  assert.match(renderer,/config:clone\(effectiveAgentConfig\(agent\)\),agentConfigs:clone\(effectiveAgentConfigs\(\)\)/);
 });
 
 test('대화 목록의 실행·대기 배지와 삭제 가드는 대상 대화 런타임을 사용한다',()=>{
@@ -33,7 +33,7 @@ test('브랜치·파일 목록·diff 캐시는 대화별 런타임에 두고 요
   assert.match(renderer,/'branchStatus','projectFiles','diff'/);
   assert.match(renderer,/action:'gitBranch',agent,workspace,conversationId:state\.activeConversationId/);
   assert.match(renderer,/action:'projectFiles',agent,workspace,conversationId:state\.activeConversationId/);
-  assert.match(renderer,/action:'projectDiff',agent,workspace:state\.settings\[agent\]\.workspacePath,conversationId:state\.activeConversationId/);
+  assert.match(renderer,/action:'projectDiff',agent,workspace:effectiveWorkspacePath\(agent\),conversationId:state\.activeConversationId/);
   assert.match(renderer,/event\?\.conversationId&&event\.conversationId!==state\.activeConversationId/);
   assert.match(renderer,/if\(!isBackgroundRuntime\(\)\)renderDiff\(\)/);
   assert.match(renderer,/if\(!isBackgroundRuntime\(\)\)renderSettings\(\)/);

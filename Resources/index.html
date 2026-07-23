@@ -468,7 +468,7 @@
       sessions: JSON.parse(localStorage.getItem('triad.sessions') || '{"codex":null,"claude":null}'),
       sessionStats: JSON.parse(localStorage.getItem('triad.sessionStats') || '{}'),
       traces: JSON.parse(localStorage.getItem('triad.traces') || '[]'), traceFilter:'all',
-      conversations: [], activeConversationId: localStorage.getItem('triad.activeConversationId'), unread:false,
+      conversations: [], activeConversationId: localStorage.getItem('triad.activeConversationId'), unread:false, workspace:{separate:false,commonPath:''},
       storageReady: false, saveTimer: null, conversationSearch: '',
       collaboration: {mode:'independent',lead:'codex',rounds:2,finalizer:'claude',helperTimeoutMinutes:5}, defaultTarget:'all', orchestration:null, sharedContext:null,
       sharedDocuments:[], activeSharedDocumentId:null, pendingSharedDocumentDeleteId:null,
@@ -535,6 +535,20 @@
     function normalizeDefaultTarget(value) {
       return agents.includes(value) ? value : 'all';
     }
+    function normalizeWorkspace(value, settings=state.settings, fallback='') {
+      const codexPath=settings?.codex?.workspacePath||fallback||'';const claudePath=settings?.claude?.workspacePath||fallback||codexPath;
+      const legacySeparate=!!codexPath&&!!claudePath&&codexPath!==claudePath;
+      return {separate:typeof value?.separate==='boolean'?value.separate:legacySeparate,commonPath:value?.commonPath||codexPath||claudePath||fallback||''};
+    }
+    function effectiveWorkspacePath(agent, settings=state.settings, workspace=state.workspace) {
+      const normalized=normalizeWorkspace(workspace,settings);return normalized.separate?settings?.[agent]?.workspacePath||normalized.commonPath:normalized.commonPath||settings?.[agent]?.workspacePath||'';
+    }
+    function effectiveAgentConfig(agent, settings=state.settings, workspace=state.workspace) {
+      return {...(settings?.[agent]||{}),workspacePath:effectiveWorkspacePath(agent,settings,workspace)};
+    }
+    function effectiveAgentConfigs(settings=state.settings, workspace=state.workspace) {
+      return Object.fromEntries(agents.map(agent=>[agent,effectiveAgentConfig(agent,settings,workspace)]));
+    }
     function activeCollaboration() {
       const flow=state.orchestration;
       return flow?.conversationId===state.activeConversationId ? flow.collaboration : state.collaboration;
@@ -561,7 +575,7 @@
     // letting an arriving stream event write into whichever chat is visible.
     function applyConversationSnapshot(conversation) {
       state.activeConversationId=conversation.id;
-      state.messages=clone(removeDeferredOrphans(conversation.messages||[]));state.unread=!!conversation.unread;
+      state.messages=clone(removeDeferredOrphans(conversation.messages||[]));state.unread=!!conversation.unread;state.workspace=normalizeWorkspace(conversation.workspace,conversation.settings||state.settings);
       state.settings=clone(conversation.settings||state.settings);
       state.collaboration=normalizeCollaboration(conversation.collaboration);
       state.defaultTarget=normalizeDefaultTarget(conversation.defaultTarget);
@@ -579,7 +593,7 @@
         id:state.activeConversationId, title:existing?.title||'새 대화',
         createdAt:existing?.createdAt||now, updatedAt:now,
         messages:clone(state.messages.slice(-300)), settings:clone(state.settings), collaboration:clone(state.collaboration), defaultTarget:normalizeDefaultTarget(state.defaultTarget),
-        sessions:clone(state.sessions), sessionStats:clone(state.sessionStats), traces:clone(state.traces.slice(-500)), sharedContext:clone(state.sharedContext), unread:!!state.unread,
+        sessions:clone(state.sessions), sessionStats:clone(state.sessionStats), traces:clone(state.traces.slice(-500)), sharedContext:clone(state.sharedContext), unread:!!state.unread, workspace:clone(state.workspace),
         activeSharedDocumentId:state.activeSharedDocumentId
       };
     }
@@ -666,7 +680,7 @@
     function newConversation(skipPersist=false) {
       if(!skipPersist)persistConversation(true);
       const now=Date.now();
-      const conversation={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:[createWelcomeMessage()],settings:clone(state.settings),collaboration:clone(state.collaboration),defaultTarget:'all',sessions:{codex:null,claude:null},sessionStats:window.TriadSessionBudget.normalizeStats(),traces:[],sharedContext:null,activeSharedDocumentId:null,unread:false};
+      const conversation={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:[createWelcomeMessage()],settings:clone(state.settings),workspace:clone(state.workspace),collaboration:clone(state.collaboration),defaultTarget:'all',sessions:{codex:null,claude:null},sessionStats:window.TriadSessionBudget.normalizeStats(),traces:[],sharedContext:null,activeSharedDocumentId:null,unread:false};
       state.conversations.unshift(conversation);loadConversation(conversation);persistConversation(true);
       document.getElementById('draft').focus();
     }
@@ -812,13 +826,13 @@
     }
     function refreshProjectDiff(agent=state.diff.agent) {
       if(!state.settings?.[agent])return;state.diff.agent=agent;state.diff.loading=true;state.diff.error='';if(!isBackgroundRuntime())renderDiff();
-      post({action:'projectDiff',agent,workspace:state.settings[agent].workspacePath,conversationId:state.activeConversationId});
+      post({action:'projectDiff',agent,workspace:effectiveWorkspacePath(agent),conversationId:state.activeConversationId});
     }
     function renderDiff() {
       const pane=document.getElementById('diff-pane');const content=document.getElementById('diff-content');const fileList=document.getElementById('diff-file-list');const chat=document.querySelector('.chat');if(!pane||!content||!fileList||!chat)return;
       pane.hidden=!state.diff.visible;chat.classList.toggle('diff-open',state.diff.visible);document.getElementById('diff-agent').value=state.diff.agent;
       const toggle=document.getElementById('diff-toggle');if(toggle)toggle.textContent=state.diff.visible?'변경 사항 닫기':'변경 사항';
-      document.getElementById('diff-workspace').textContent=state.diff.workspace||state.settings?.[state.diff.agent]?.workspacePath||'';
+      document.getElementById('diff-workspace').textContent=state.diff.workspace||effectiveWorkspacePath(state.diff.agent)||'';
       const previousFileScroll=fileList.scrollTop;content.innerHTML='';fileList.innerHTML='';document.getElementById('diff-title').textContent='변경 사항';
       if(state.diff.loading){const line=document.createElement('span');line.className='diff-line diff-empty';line.textContent='변경 사항을 불러오는 중…';content.appendChild(line);return;}
       if(state.diff.error){const line=document.createElement('span');line.className='diff-line diff-empty';line.textContent=`⚠️ ${state.diff.error}`;content.appendChild(line);return;}
@@ -1247,8 +1261,8 @@
       const conversationId=options.conversationId||state.activeConversationId;
       // A queued request retains the agent settings it was submitted with,
       // even if the user edits a different conversation before it starts.
-      const config=clone(options.config||state.settings[agent]);
-      const agentConfigs=clone(options.agentConfigs||state.settings);
+      const config=clone(options.config||effectiveAgentConfig(agent));
+      const agentConfigs=clone(options.agentConfigs||effectiveAgentConfigs());
       const collaboration=clone(options.collaboration||activeCollaboration());
       let session=isolated?null:state.sessions[agent];
       let rotationReason='';
@@ -1318,19 +1332,19 @@
       return state.queue.some(item=>queueItemsConflict(item,request));
     }
     function enqueueAgent(agent,prompt,sourceText,messageId,sharedContext=null) {
-      const item={id:id(),kind:'agent',agent,prompt,sourceText,messageId,sharedContext,conversationId:state.activeConversationId,config:clone(state.settings[agent]),agentConfigs:clone(state.settings),collaboration:clone(activeCollaboration()),createdAt:Date.now()};
+      const item={id:id(),kind:'agent',agent,prompt,sourceText,messageId,sharedContext,conversationId:state.activeConversationId,config:clone(effectiveAgentConfig(agent)),agentConfigs:clone(effectiveAgentConfigs()),collaboration:clone(activeCollaboration()),createdAt:Date.now()};
       state.queue.push(item);renderQueue();renderCollaboration();if(state.boardVisible)renderSharedBoard();
       addTrace(agent,'info','순차 대기열 등록',{position:window.TriadQueue.positionFor(state.queue,item),characters:prompt.length});
       return item;
     }
     function enqueueIndependentBatch(targets,prompts,sourceText,messageId,options={}) {
-      const item={id:id(),kind:'independentBatch',targets:[...targets],prompts:clone(prompts),sourceText,objective:options.objective||sourceText,messageId,conversationId:state.activeConversationId,settings:clone(state.settings),collaboration:clone(activeCollaboration()),recentContexts:clone(options.recentContexts||{}),referencePacket:clone(options.referencePacket||[]),sharedContext:options.sharedContext||null,documentId:options.documentId||contextDocumentId(options.sharedContext),createdAt:Date.now()};
+      const item={id:id(),kind:'independentBatch',targets:[...targets],prompts:clone(prompts),sourceText,objective:options.objective||sourceText,messageId,conversationId:state.activeConversationId,settings:clone(effectiveAgentConfigs()),collaboration:clone(activeCollaboration()),recentContexts:clone(options.recentContexts||{}),referencePacket:clone(options.referencePacket||[]),sharedContext:options.sharedContext||null,documentId:options.documentId||contextDocumentId(options.sharedContext),createdAt:Date.now()};
       state.queue.push(item);renderQueue();renderCollaboration();if(state.boardVisible)renderSharedBoard();
       addTrace(targets[0]||'codex','info','독립 실행 묶음 대기열 등록',{targets,position:state.queue.filter(candidate=>candidate.kind==='independentBatch').length});
       return item;
     }
     function enqueueCollaboration(objective,sourceText,messageId,collaboration=state.collaboration,referencePacket=[]) {
-      const item={id:id(),kind:'collaboration',objective,sourceText,messageId,conversationId:state.activeConversationId,settings:clone(state.settings),collaboration:clone(collaboration),referencePacket:clone(referencePacket),createdAt:Date.now()};
+      const item={id:id(),kind:'collaboration',objective,sourceText,messageId,conversationId:state.activeConversationId,settings:clone(effectiveAgentConfigs()),collaboration:clone(collaboration),referencePacket:clone(referencePacket),createdAt:Date.now()};
       state.queue.push(item);renderQueue();renderCollaboration();if(state.boardVisible)renderSharedBoard();
       addTrace(collaboration.lead,'info','협업 순차 대기열 등록',{position:window.TriadQueue.positionFor(state.queue,item),mode:collaboration.mode});
       return item;
@@ -1498,7 +1512,7 @@
       task.label=labels[task.kind];addTrace(task.agent,'info',`${task.label} 시작`,{turn:flow.index,total:flow.tasks.length});
       dispatchAgent(task.agent,buildCollaborationPrompt(task),{isolated:true,conversationId:flow.conversationId,config:flow.settings?.[task.agent],agentConfigs:flow.settings,collaboration:flow.collaboration});renderCollaboration();
     }
-    function startCollaboration(objective, runCollaboration=state.collaboration, conversationId=state.activeConversationId, settings=state.settings, referencePacket=[]) {
+    function startCollaboration(objective, runCollaboration=state.collaboration, conversationId=state.activeConversationId, settings=effectiveAgentConfigs(), referencePacket=[]) {
       const collaboration=normalizeCollaboration(runCollaboration);
       const sharedContext=createSharedContext(objective,collaboration.lead);
       if(collaboration.mode==='agent'){
@@ -1566,7 +1580,7 @@
             routed.targets.forEach(agent=>dispatchAgent(agent,buildIndependentPrompt(agent,routed.prompts[agent],independentContext,recentContexts[agent],referencePacket),{sharedContext:independentContext}));
           }
         } else if(queued)enqueueCollaboration(routed.prompt,original,userMessageId,runCollaboration,referencePacket);
-        else {markMessageWorkStarted(userMessageId);startCollaboration(routed.prompt,runCollaboration,state.activeConversationId,state.settings,referencePacket);}
+        else {markMessageWorkStarted(userMessageId);startCollaboration(routed.prompt,runCollaboration,state.activeConversationId,effectiveAgentConfigs(),referencePacket);}
       } catch(error) {
         markMessageWorkStarted(userMessageId);
         const detail=error instanceof Error&&error.message?error.message:String(error||'알 수 없는 오류');
@@ -1789,14 +1803,17 @@
         const recoveredConversationIds=new Set();
         const interruptedConversationIds=new Set();
         const viewedConversationIds=new Set();
+        const migratedWorkspaceIds=new Set();
         const loaded=(Array.isArray(event.conversations)?event.conversations:[]).map(conversation=>{
           const withoutDeferred=removeDeferredOrphans(conversation.messages||[]);
           const messages=seedInitialWelcome(withoutDeferred);
+          const workspace=normalizeWorkspace(conversation.workspace,conversation.settings,event.home);
           if(messages.length!==(conversation.messages||[]).length)recoveredConversationIds.add(conversation.id);
+          if(!conversation.workspace||conversation.workspace.separate!==workspace.separate||conversation.workspace.commonPath!==workspace.commonPath)migratedWorkspaceIds.add(conversation.id);
           let interrupted=false;
           messages.forEach(message=>{if(message.streaming){message.streaming=false;if(!message.text)message.text='이전 앱 종료로 작업이 중단되었습니다.';interrupted=true;}});
           if(interrupted)interruptedConversationIds.add(conversation.id);
-          return {...conversation,messages};
+          return {...conversation,messages,workspace};
         });
         state.conversations=loaded;
         if(loaded.length){
@@ -1806,13 +1823,14 @@
           state.settings=clone(selected.settings||defaults(event.home));state.collaboration=normalizeCollaboration(selected.collaboration);state.defaultTarget=normalizeDefaultTarget(selected.defaultTarget);state.sessions=clone(selected.sessions||{codex:null,claude:null});state.sessionStats=clone(selected.sessionStats||{});state.traces=clone(selected.traces||[]);state.sharedContext=clone(selected.sharedContext||null);state.activeSharedDocumentId=selected.activeSharedDocumentId||state.sharedContext?.board?.documentId||null;
         }else{
           if(!state.settings)state.settings=defaults(event.home);
-          const now=Date.now();const migrated={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:clone(seedInitialWelcome(removeDeferredOrphans(state.messages))),settings:clone(state.settings),collaboration:clone(state.collaboration),defaultTarget:'all',sessions:clone(state.sessions),sessionStats:clone(state.sessionStats),traces:clone(state.traces),sharedContext:clone(state.sharedContext),activeSharedDocumentId:state.activeSharedDocumentId,unread:false};
+          const now=Date.now();const migrated={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:clone(seedInitialWelcome(removeDeferredOrphans(state.messages))),settings:clone(state.settings),workspace:normalizeWorkspace(null,state.settings,event.home),collaboration:clone(state.collaboration),defaultTarget:'all',sessions:clone(state.sessions),sessionStats:clone(state.sessionStats),traces:clone(state.traces),sharedContext:clone(state.sharedContext),activeSharedDocumentId:state.activeSharedDocumentId,unread:false};
           const firstUser=migrated.messages.find(message=>message.author==='user')?.text?.replace(/\s+/g,' ').trim();
           if(firstUser)migrated.title=firstUser.slice(0,36)+(firstUser.length>36?'…':'');
           state.conversations=[migrated];state.activeConversationId=migrated.id;
         }
         const base=defaults(event.home);
         state.settings={codex:normalizeSessionSettings({...base.codex,...(state.settings?.codex||{})}),claude:normalizeSessionSettings({...base.claude,...(state.settings?.claude||{})})};
+        state.workspace=normalizeWorkspace(loaded.find(item=>item.id===state.activeConversationId)?.workspace,state.settings,event.home);
         normalizeSessionStats(state.sessionStats||{});
         state.settings.codex.executablePath ||= event.codexPath;
         state.settings.claude.executablePath ||= event.claudePath;
@@ -1824,7 +1842,7 @@
           state.settings.codex.effort=state.codexModels[0].defaultEffort || 'medium';
         }
         activateRuntime(state.activeConversationId);state.tokenStatus=event.tokenStatus;state.storageReady=true;save();
-        for(const conversation of loaded)if(recoveredConversationIds.has(conversation.id)||interruptedConversationIds.has(conversation.id)||viewedConversationIds.has(conversation.id))post({action:'saveConversation',conversation});
+        for(const conversation of loaded)if(recoveredConversationIds.has(conversation.id)||interruptedConversationIds.has(conversation.id)||viewedConversationIds.has(conversation.id)||migratedWorkspaceIds.has(conversation.id))post({action:'saveConversation',conversation});
         renderAll();post({action:'listSharedDocuments'});startUsagePolling();refreshAuthStatuses();refreshBranches();refreshProjectFiles();
       } else if (event.type==='raw') {
         state.lineBuffers[event.agent]+=event.chunk;
@@ -1841,14 +1859,14 @@
       }
       else if (event.type==='error') {if(event.runId&&state.pending[event.agent]?.runId!==event.runId)return;failAgent(event.agent,event.message,{source:'native',terminal:true});}
       else if (event.type==='session') { withPendingConversation(event.agent,()=>{if(!state.pending[event.agent]?.isolated&&agents.includes(event.agent)){state.sessions[event.agent]=event.session;const stats=ensureAgentSessionStats(event.agent);if(stats)stats.sessionId=event.session;if(state.pending[event.agent])state.pending[event.agent].sessionId=event.session; save(); renderSettings();}}); }
-      else if (event.type==='directory') { state.settings[event.agent].workspacePath=event.path; save(); renderSettings(); renderStatus();requestBranch(event.agent);requestProjectFiles(event.agent); }
+      else if (event.type==='directory') { if(event.agent==='common'){state.workspace.commonPath=event.path;}else if(state.settings[event.agent])state.settings[event.agent].workspacePath=event.path;save();renderSettings();renderStatus();refreshBranches();refreshProjectFiles(); }
       else if (event.type==='files') {
         const draft=document.getElementById('draft');
         const refs=event.paths.map(path=>`@"${path.replaceAll('"','\\"')}"`).join(' ');
         draft.value=`${draft.value}${draft.value.trim()?' ':''}${refs} `; draft.focus();updateRoutingPreview();
       }
       else if(event.type==='projectFiles') {
-        state.projectFiles[event.agent]={workspace:event.workspace||state.settings?.[event.agent]?.workspacePath||'',files:event.files||[],loading:false,error:event.error||'',truncated:!!event.truncated};
+        state.projectFiles[event.agent]={workspace:event.workspace||effectiveWorkspacePath(event.agent)||'',files:event.files||[],loading:false,error:event.error||'',truncated:!!event.truncated};
         if(!isBackgroundRuntime()&&autocomplete.open&&autocomplete.type==='file')updateAutocomplete();
       }
       else if(event.type==='brokerEvent')handleBrokerEvent(event);
@@ -1873,7 +1891,7 @@
       }
       else if(event.type==='diffResult') {state.diff={...state.diff,loading:false,agent:event.agent||state.diff.agent,text:event.text||'',error:event.error||'',workspace:event.workspace||'',truncated:!!event.truncated,selectedFileId:null};if(!isBackgroundRuntime())renderDiff();}
       else if(event.type==='branchResult') {
-        if(state.settings?.[event.agent]?.workspacePath===event.workspace){state.branchStatus[event.agent]={loading:false,kind:event.kind||'unknown',label:event.label||'확인 불가',workspace:event.workspace};if(!isBackgroundRuntime())renderSettings();}
+        if(effectiveWorkspacePath(event.agent)===event.workspace){state.branchStatus[event.agent]={loading:false,kind:event.kind||'unknown',label:event.label||'확인 불가',workspace:event.workspace};if(!isBackgroundRuntime())renderSettings();}
       }
       else if (event.type==='linkError') alert(event.message);
       else if (event.type==='usage') {state.usageRefreshing=false;const normalized=window.TriadUsage.normalizeCodex(event.data);if(normalized.windows.length){setUsage('codex',normalized,event.data);addTrace('codex','success','계정 잔여량 갱신',normalized.windows);}else {state.usage.codex={...(state.usage.codex||{}),error:'계정 한도 정보가 제공되지 않았습니다.',updatedAt:Date.now()};saveUsage();renderUsage();}}
@@ -1981,13 +1999,13 @@
     }
     function refreshAuthStatuses(){agents.forEach(requestAuthStatus);}
     function requestBranch(agent) {
-      if(!state.settings?.[agent])return;const workspace=state.settings[agent].workspacePath;
+      if(!state.settings?.[agent])return;const workspace=effectiveWorkspacePath(agent);
       state.branchStatus[agent]={loading:true,kind:'unknown',label:'브랜치 확인 중…',workspace};if(!isBackgroundRuntime())renderSettings();
       post({action:'gitBranch',agent,workspace,conversationId:state.activeConversationId});
     }
     function refreshBranches(){agents.forEach(requestBranch);}
     function requestProjectFiles(agent) {
-      const workspace=state.settings?.[agent]?.workspacePath;if(!workspace)return;
+      const workspace=effectiveWorkspacePath(agent);if(!workspace)return;
       state.projectFiles[agent]={...state.projectFiles[agent],loading:true,error:''};
       post({action:'projectFiles',agent,workspace,conversationId:state.activeConversationId});
     }
@@ -2002,6 +2020,14 @@
       if(isBackgroundRuntime())return;
       if (!state.settings) return;
       const root=document.getElementById('settings'); root.innerHTML='';
+      state.workspace=normalizeWorkspace(state.workspace,state.settings);
+      const workspaceCard=document.createElement('div');workspaceCard.className='settings-card workspace-common';
+      const separate=!!state.workspace.separate;const commonDisabled=separate?'disabled':'';
+      workspaceCard.innerHTML=`<div class="settings-head"><h3>공통 작업 폴더</h3></div><div class="field"><label class="toggle-label"><input type="checkbox" class="workspace-separate" ${separate?'checked':''}> 에이전트별 작업 폴더 사용</label><p class="fast-note">기본은 두 AI가 같은 작업 폴더를 사용합니다. 켜면 아래 각 AI의 저장된 작업 폴더를 다시 사용합니다.</p></div><div class="field"><label>기본 작업 폴더</label><div class="path-row"><input class="common-workspace" value="${escapeAttr(state.workspace.commonPath)}" ${commonDisabled} aria-disabled="${separate}" title="${separate?'에이전트별 작업 폴더 사용 중입니다.':'두 AI에 공통으로 적용됩니다.'}"><button class="small-btn common-choose" ${commonDisabled}>선택</button></div></div>`;
+      workspaceCard.querySelector('.workspace-separate').onchange=event=>{state.workspace.separate=event.target.checked;save();renderSettings();refreshBranches();refreshProjectFiles();};
+      workspaceCard.querySelector('.common-workspace').onchange=event=>{state.workspace.commonPath=event.target.value;save();renderSettings();refreshBranches();refreshProjectFiles();};
+      workspaceCard.querySelector('.common-choose').onclick=()=>post({action:'chooseDirectory',agent:'common'});
+      root.appendChild(workspaceCard);
       for (const agent of agents) {
         const c=state.settings[agent];const account=state.accountStatus[agent]||{}; const card=document.createElement('div'); card.className='settings-card';
         const activeCodexModel=state.codexModels.find(model=>model.slug===c.model);
@@ -2022,7 +2048,7 @@
             ];
         const permissionOptionList=permissionOptions.map(([value,label])=>`<option value="${value}" ${value===c.permissionMode?'selected':''}>${label}</option>`).join('');
         const unrestricted=(agent==='codex'&&c.permissionMode==='danger-full-access')||(agent==='claude'&&c.permissionMode==='bypassPermissions');
-        const open=state.settingsOpen[agent];
+        const open=state.settingsOpen[agent];const workspaceDisabled=separate?'':'disabled';const workspaceTitle=separate?'이 AI에만 적용되는 저장된 작업 폴더입니다.':'공통 작업 폴더를 사용 중입니다. 위 설정에서 변경하세요.';
         card.innerHTML=`
           <div class="settings-head"><h3>${names[agent]}</h3><span class="health"></span></div>
           <details class="settings-group" data-section="model" ${open.model?'open':''}>
@@ -2037,7 +2063,7 @@
             <summary>실행 환경 <span class="settings-group-summary">${unrestricted?'샌드박스 밖':escapeAttr(state.branchStatus[agent]?.label||'브랜치 확인 전')}</span></summary>
             <div class="settings-group-body">
               <div class="field"><label>작업 권한</label><select data-key="permissionMode">${permissionOptionList}</select>${unrestricted?'<p class="fast-note">⚠️ 에이전트가 사용자 계정 권한으로 명령을 실행합니다. 신뢰하는 프로젝트에서만 사용하세요.</p>':'<p class="fast-note">Gradle 테스트·개발 서버처럼 자식 프로세스가 직접 소켓을 열어야 하면 ‘샌드박스 밖 실행’을 선택하세요.</p>'}</div>
-              <div class="field"><label>작업 폴더</label><div class="path-row"><input data-key="workspacePath" value="${escapeAttr(c.workspacePath)}"><button class="small-btn choose">선택</button></div><div class="branch-row ${state.branchStatus[agent]?.kind==='branch'?'active':state.branchStatus[agent]?.kind==='detached'?'detached':''}"><span>⑂</span><span class="branch-name">${escapeAttr(state.branchStatus[agent]?.label||'확인 전')}</span><button class="branch-refresh" title="브랜치 새로고침">↻</button></div></div>
+              <div class="field"><label>작업 폴더</label><div class="path-row"><input data-key="workspacePath" value="${escapeAttr(c.workspacePath)}" ${workspaceDisabled} aria-disabled="${!separate}" title="${workspaceTitle}"><button class="small-btn choose" ${workspaceDisabled} title="${workspaceTitle}">선택</button></div><div class="branch-row ${state.branchStatus[agent]?.kind==='branch'?'active':state.branchStatus[agent]?.kind==='detached'?'detached':''}"><span>⑂</span><span class="branch-name">${escapeAttr(state.branchStatus[agent]?.label||'확인 전')}</span><button class="branch-refresh" title="브랜치 새로고침" ${workspaceDisabled}>↻</button></div></div>
               <div class="field"><label>추가 쓰기 폴더 · 쉼표 구분</label><input data-key="writableRoots" value="${escapeAttr(c.writableRoots||'')}" placeholder="예: ~/.gradle, ~/.m2"><p class="fast-note">빌드 캐시처럼 작업 폴더 밖에서 쓰기가 필요한 경로만 추가하세요.</p></div>
               <div class="row"><div class="field"><label>외부 네트워크</label><select data-key="networkAccess"><option value="false" ${c.networkAccess?'':'selected'}>차단</option><option value="true" ${c.networkAccess?'selected':''}>허용</option></select></div><div class="field"><label>로컬 바인딩</label><select data-key="allowLocalBinding"><option value="false" ${c.allowLocalBinding?'':'selected'}>차단</option><option value="true" ${c.allowLocalBinding?'selected':''}>허용</option></select></div></div>
               <p class="fast-note">로컬 바인딩은 에이전트의 네트워크 프록시용입니다. 의존성 다운로드가 필요할 때만 외부 네트워크도 허용하세요.</p>
@@ -2166,7 +2192,7 @@
     document.getElementById('block-template').onclick=()=>{const draft=document.getElementById('draft');const prefix=draft.value.trim()?`${draft.value.trimEnd()}\n\n`:'';draft.value=`${prefix}#codex:\n\n#claude:\n`;const caret=prefix.length+'#codex:\n'.length;draft.setSelectionRange(caret,caret);draft.focus();updateRoutingPreview();};
     document.getElementById('attach-file').title='클릭: 문서 자동완성 · Option 클릭: 파일 선택 창';
     document.getElementById('attach-file').onclick=event=>{
-      if(event.altKey){post({action:'chooseFiles',workspace:state.settings?.codex?.workspacePath || ''});return;}
+      if(event.altKey){post({action:'chooseFiles',workspace:effectiveWorkspacePath('codex')||''});return;}
       const draft=document.getElementById('draft');const start=draft.selectionStart;const spacer=start>0&&!/\s/u.test(draft.value[start-1])?' ':'';const insertion=`${spacer}@`;
       draft.value=draft.value.slice(0,start)+insertion+draft.value.slice(draft.selectionEnd);const caret=start+insertion.length;draft.setSelectionRange(caret,caret);draft.focus();updateAutocomplete();updateRoutingPreview();
     };

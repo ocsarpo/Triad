@@ -45,8 +45,8 @@ test('종료 이벤트는 실행 ID로 늦은 이벤트를 무시한다', () => 
 });
 
 test('대기열 생명주기 변경의 앱 버전은 이 테스트에서 검증한다', () => {
-  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.47\.0<\/string>/);
-  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>69<\/string>/);
+  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.48\.0<\/string>/);
+  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>70<\/string>/);
 });
 
 test('독립 실행은 대상 슬롯과 공유 문서 충돌을 분리해 판단한다', () => {
@@ -74,8 +74,8 @@ test('백그라운드 실행은 시작 대화에 설정과 스트림을 고정�
   const backgroundRestore=renderer.slice(renderer.indexOf('function withConversation'),renderer.indexOf('function withPendingConversation'));
   assert.doesNotMatch(backgroundRestore, /renderAll\(\)/);
   assert.doesNotMatch(backgroundRestore, /renderConversations\(\)/);
-  assert.match(renderer, /conversationId:state\.activeConversationId,config:clone\(state\.settings\[agent\]\)/);
-  assert.match(renderer, /conversationId:state\.activeConversationId,settings:clone\(state\.settings\)/);
+  assert.match(renderer, /conversationId:state\.activeConversationId,config:clone\(effectiveAgentConfig\(agent\)\)/);
+  assert.match(renderer, /conversationId:state\.activeConversationId,settings:clone\(effectiveAgentConfigs\(\)\)/);
   assert.match(renderer, /withPendingConversation\(agent,\(\)=>parseLine\(agent,line\)\)/);
   assert.match(renderer, /withPendingConversation\(agent,\(\)=>finishAgent\(agent,exitCode\)\)/);
   assert.match(renderer, /backgroundWaits: new Set\(\)/);

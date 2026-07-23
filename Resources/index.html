@@ -511,6 +511,16 @@
     const hasNativeBridge = () => !!window.webkit?.messageHandlers?.triad;
     const id = () => crypto.randomUUID();
     const clone = value => JSON.parse(JSON.stringify(value));
+    const welcomeText='독립 실행에서는 태그 없이 보내면 두 AI가 응답합니다. 에이전트 협업에서는 시작 AI가 필요할 때 상대 AI에게 질문하고 답을 돌려받아 작업을 계속합니다. 상호 토론과 교차 검토도 사용할 수 있습니다. @문서로 프로젝트 파일을 참조할 수 있습니다.';
+    const createWelcomeMessage=()=>({id:id(),author:'system',text:welcomeText,streaming:false,createdAt:Date.now()});
+    const isInitialWelcome=message=>message?.author==='system'&&message?.text===welcomeText;
+    function seedInitialWelcome(messages=[]) {
+      const list=Array.isArray(messages)?messages:[];
+      if(!list.length)return [createWelcomeMessage()];
+      let repeated=1;
+      while(repeated<list.length&&isInitialWelcome(list[0])&&isInitialWelcome(list[repeated]))repeated+=1;
+      return repeated>1?[list[0],...list.slice(repeated)]:list;
+    }
     function helperTimeoutMinutes(value) {
       const minutes=Number(value);
       return Number.isInteger(minutes)&&minutes>=1&&minutes<=120?minutes:5;
@@ -651,8 +661,8 @@
     function newConversation(skipPersist=false) {
       if(!skipPersist)persistConversation(true);
       const now=Date.now();
-      const conversation={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:[],settings:clone(state.settings),collaboration:clone(state.collaboration),defaultTarget:'all',sessions:{codex:null,claude:null},sessionStats:window.TriadSessionBudget.normalizeStats(),traces:[],sharedContext:null,activeSharedDocumentId:null};
-      state.conversations.unshift(conversation);loadConversation(conversation);addWelcome();persistConversation(true);
+      const conversation={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:[createWelcomeMessage()],settings:clone(state.settings),collaboration:clone(state.collaboration),defaultTarget:'all',sessions:{codex:null,claude:null},sessionStats:window.TriadSessionBudget.normalizeStats(),traces:[],sharedContext:null,activeSharedDocumentId:null};
+      state.conversations.unshift(conversation);loadConversation(conversation);persistConversation(true);
       document.getElementById('draft').focus();
     }
     function selectConversation(conversationId) {
@@ -1152,7 +1162,6 @@
     }
     function renderMessages() {
       const root=document.getElementById('messages');const followBottom=state.forceMessageBottom||messagesNearBottom(root);const previousScrollTop=root.scrollTop;root.innerHTML='';
-      if (!state.messages.length) addWelcome();
       for (const m of state.messages) {
         if(!window.TriadQueue.shouldRenderMessage(m))continue;
         const el = document.createElement('div'); el.className = `message ${m.author}`;
@@ -1172,10 +1181,6 @@
       }
       requestAnimationFrame(()=>{root.scrollTop=followBottom?root.scrollHeight:previousScrollTop;updateScrollButton();});
     }
-    function addWelcome() {
-      state.messages.push({ id:id(), author:'system', text:'독립 실행에서는 태그 없이 보내면 두 AI가 응답합니다. 에이전트 협업에서는 시작 AI가 필요할 때 상대 AI에게 질문하고 답을 돌려받아 작업을 계속합니다. 상호 토론과 교차 검토도 사용할 수 있습니다. @문서로 프로젝트 파일을 참조할 수 있습니다.', streaming:false, createdAt:Date.now() }); save();
-    }
-
     function renderLinkedText(element,text) {
       for(const token of window.TriadLinkify.tokensFor(text||'')){
         if(token.type==='text')element.appendChild(document.createTextNode(token.text));
@@ -1767,7 +1772,8 @@
         const recoveredConversationIds=new Set();
         const interruptedConversationIds=new Set();
         const loaded=(Array.isArray(event.conversations)?event.conversations:[]).map(conversation=>{
-          const messages=removeDeferredOrphans(conversation.messages||[]);
+          const withoutDeferred=removeDeferredOrphans(conversation.messages||[]);
+          const messages=seedInitialWelcome(withoutDeferred);
           if(messages.length!==(conversation.messages||[]).length)recoveredConversationIds.add(conversation.id);
           let interrupted=false;
           messages.forEach(message=>{if(message.streaming){message.streaming=false;if(!message.text)message.text='이전 앱 종료로 작업이 중단되었습니다.';interrupted=true;}});
@@ -1781,8 +1787,8 @@
           state.settings=clone(selected.settings||defaults(event.home));state.collaboration=normalizeCollaboration(selected.collaboration);state.defaultTarget=normalizeDefaultTarget(selected.defaultTarget);state.sessions=clone(selected.sessions||{codex:null,claude:null});state.sessionStats=clone(selected.sessionStats||{});state.traces=clone(selected.traces||[]);state.sharedContext=clone(selected.sharedContext||null);state.activeSharedDocumentId=selected.activeSharedDocumentId||state.sharedContext?.board?.documentId||null;
         }else{
           if(!state.settings)state.settings=defaults(event.home);
-          const now=Date.now();const migrated={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:clone(removeDeferredOrphans(state.messages)),settings:clone(state.settings),collaboration:clone(state.collaboration),defaultTarget:'all',sessions:clone(state.sessions),sessionStats:clone(state.sessionStats),traces:clone(state.traces),sharedContext:clone(state.sharedContext),activeSharedDocumentId:state.activeSharedDocumentId};
-          const firstUser=state.messages.find(message=>message.author==='user')?.text?.replace(/\s+/g,' ').trim();
+          const now=Date.now();const migrated={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:clone(seedInitialWelcome(removeDeferredOrphans(state.messages))),settings:clone(state.settings),collaboration:clone(state.collaboration),defaultTarget:'all',sessions:clone(state.sessions),sessionStats:clone(state.sessionStats),traces:clone(state.traces),sharedContext:clone(state.sharedContext),activeSharedDocumentId:state.activeSharedDocumentId};
+          const firstUser=migrated.messages.find(message=>message.author==='user')?.text?.replace(/\s+/g,' ').trim();
           if(firstUser)migrated.title=firstUser.slice(0,36)+(firstUser.length>36?'…':'');
           state.conversations=[migrated];state.activeConversationId=migrated.id;
         }
@@ -2187,7 +2193,7 @@
     }
     document.getElementById('stop-codex').onclick=()=>stopAgent('codex');
     document.getElementById('stop-claude').onclick=()=>stopAgent('claude');
-    document.getElementById('clear').onclick=()=>{if(agents.some(a=>state.running[a])||state.queue.length)return;state.messages=[];addWelcome();renderMessages();};
+    document.getElementById('clear').onclick=()=>{if(agents.some(a=>state.running[a])||state.queue.length)return;state.messages=[createWelcomeMessage()];save();renderMessages();};
     document.getElementById('clear-traces').onclick=()=>{state.traces=[];save();renderTraces();};
     document.getElementById('trace-toggle').onclick=()=>{state.traceVisible=!state.traceVisible;localStorage.setItem('triad.traceVisible',String(state.traceVisible));renderTraceVisibility();};
     document.getElementById('diff-toggle').onclick=openDiff;

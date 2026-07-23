@@ -21,9 +21,9 @@
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.46.1</string>
+    <string>0.46.2</string>
     <key>CFBundleVersion</key>
-    <string>67</string>
+    <string>68</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>

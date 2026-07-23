@@ -13,7 +13,7 @@ test('대기 사용자 메시지는 생성부터 deferred이며 dequeue에서만
   assert.match(renderer, /message\.deferred=false;message\.workStarted=true;state\.forceMessageBottom=true/);
   assert.match(renderer, /save\(\);renderMessages\(\);requestAnimationFrame/);
   assert.match(renderer, /removeDeferredOrphans\(conversation\.messages\|\|\[\]\)/);
-  assert.match(renderer, /const messages=removeDeferredOrphans\(conversation\.messages\|\|\[\]\)/);
+  assert.match(renderer, /const withoutDeferred=removeDeferredOrphans\(conversation\.messages\|\|\[\]\);\s*const messages=seedInitialWelcome\(withoutDeferred\)/);
   assert.match(renderer, /recoveredConversationIds\.add\(conversation\.id\)/);
 });
 
@@ -45,8 +45,8 @@ test('종료 이벤트는 실행 ID로 늦은 이벤트를 무시한다', () => 
 });
 
 test('대기열 생명주기 변경의 앱 버전은 이 테스트에서 검증한다', () => {
-  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.46\.1<\/string>/);
-  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>67<\/string>/);
+  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.46\.2<\/string>/);
+  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>68<\/string>/);
 });
 
 test('독립 실행은 대상 슬롯과 공유 문서 충돌을 분리해 판단한다', () => {

@@ -54,7 +54,11 @@
     return matches.sort((left, right) => left.boundary - right.boundary);
   }
 
-  function route(input) {
+  function normalizeDefaultTarget(value) {
+    return agents.includes(value) ? value : 'all';
+  }
+
+  function route(input, options = {}) {
     const blockMatches = blockTagMatches(input);
     const matches = blockMatches.length ? blockMatches : tagMatches(input);
     const mode = blockMatches.length ? 'block' : matches.length ? 'inline' : 'broadcast';
@@ -79,7 +83,8 @@
     if (!matches.length) {
       const common = cleanContent(input);
       commonText = common.text;
-      add(agents, common);
+      const defaultTarget = normalizeDefaultTarget(options.defaultTarget);
+      add(defaultTarget === 'all' ? agents : [defaultTarget], common);
     } else {
       const common = cleanContent(input.slice(0, matches[0].boundary));
       commonText = explicitTargets.size > 1 ? common.text : '';
@@ -107,8 +112,14 @@
     return { targets, prompts, prompt, files: [...new Set(agents.flatMap(agent => filesByAgent[agent]))], mode, commonText, errors };
   }
 
-  function collaborationLeadFor(result, currentLead) {
-    if (!result || result.mode === 'broadcast') return currentLead;
+  function collaborationLeadFor(result, currentLead, defaultTarget = 'all') {
+    if (!result) return currentLead;
+    if (result.mode === 'broadcast') {
+      const pinned = normalizeDefaultTarget(defaultTarget);
+      return pinned === 'all' ? currentLead : pinned;
+    }
+    // A collaboration can begin only with one explicitly selected AI. Keep
+    // the long-standing rejection for #all and multi-agent instructions.
     return result.targets.length === 1 ? result.targets[0] : null;
   }
 

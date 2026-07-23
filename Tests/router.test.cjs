@@ -28,9 +28,47 @@ test('에이전트 협업의 단일 호출 태그가 시작 AI를 덮어쓴다',
   assert.equal(collaborationLeadFor(route('구현해줘'), 'codex'), 'codex');
 });
 
-test('에이전트 협업에서 여러 AI를 명시하면 시작 AI를 결정하지 않는다', () => {
-  assert.equal(collaborationLeadFor(route('#all 검토해줘'), 'codex'), null);
-  assert.equal(collaborationLeadFor(route('#codex 구현 #claude 검토'), 'codex'), null);
+test('태그 없는 메시지는 대화별 기본 대상으로 라우팅한다', () => {
+  assert.deepEqual(plain(route('구현해줘', { defaultTarget: 'all' }).targets), ['codex', 'claude']);
+  assert.deepEqual(plain(route('구현해줘', { defaultTarget: 'codex' }).targets), ['codex']);
+  assert.deepEqual(plain(route('구현해줘', { defaultTarget: 'claude' }).targets), ['claude']);
+  assert.deepEqual(plain(route('구현해줘', { defaultTarget: 'unknown' }).targets), ['codex', 'claude']);
+});
+
+test('명시 호출 태그와 블록 라우팅은 기본 고정보다 우선한다', () => {
+  assert.deepEqual(plain(route('#claude 검토해줘', { defaultTarget: 'codex' }).targets), ['claude']);
+  const block = plain(route('#claude:\n검토해줘', { defaultTarget: 'codex' }));
+  assert.equal(block.mode, 'block');
+  assert.deepEqual(block.targets, ['claude']);
+});
+
+test('협업에서는 고정 대상이 태그 없는 실행의 시작 AI만 덮어쓴다', () => {
+  assert.equal(collaborationLeadFor(route('구현해줘', { defaultTarget: 'codex' }), 'claude', 'codex'), 'codex');
+  assert.equal(collaborationLeadFor(route('구현해줘', { defaultTarget: 'claude' }), 'codex', 'claude'), 'claude');
+  assert.equal(collaborationLeadFor(route('#claude 구현해줘', { defaultTarget: 'codex' }), 'codex', 'codex'), 'claude');
+});
+
+test('협업에서 #all과 복수 호출은 시작 AI가 모호해 전송을 막는다', () => {
+  assert.equal(collaborationLeadFor(route('#all 검토해줘'), 'codex', 'claude'), null);
+  assert.equal(collaborationLeadFor(route('#codex 구현 #claude 검토'), 'claude', 'codex'), null);
+});
+
+test('기본 대상 고정의 렌더러 연결과 버전을 보장한다', () => {
+  const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html'), 'utf8');
+  const plist = fs.readFileSync(path.join(__dirname, '../Resources/Info.plist'), 'utf8');
+  assert.match(renderer, /defaultTarget:'all'/);
+  assert.match(renderer, /defaultTarget:normalizeDefaultTarget\(state\.defaultTarget\)/);
+  assert.match(renderer, /state\.defaultTarget=normalizeDefaultTarget\(conversation\.defaultTarget\)/);
+  assert.match(renderer, /data-default-target="codex"/);
+  assert.match(renderer, /aria-pressed/);
+  assert.match(renderer, /route\(original,\{defaultTarget:state\.defaultTarget\}\)/);
+  assert.match(renderer, /startCollaboration\(routed\.prompt,runCollaboration\)/);
+  assert.match(renderer, /collaboration:activeCollaboration\(\)/);
+  assert.match(renderer, /\.compose-tools \{ display: flex; flex-wrap: wrap;/);
+  assert.match(renderer, /@media \(max-width: 1180px\) \{ \.compose-tools > \.hint \{ display: none; \} \}/);
+  assert.match(renderer, /function collaborationDefaultTargetHint\(\)/);
+  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.40\.8<\/string>/);
+  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>58<\/string>/);
 });
 
 test('@ 문서 참조는 AI 호출과 분리된다', () => {

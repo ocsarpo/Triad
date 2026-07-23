@@ -229,7 +229,13 @@
     .queue-target.codex { color: var(--codex); } .queue-target.claude { color: var(--claude); } .queue-target.collaboration { color: var(--all); }
     .queue-preview { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
     .queue-cancel { flex: none; margin-left: auto; padding: 2px 7px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--danger); font-size: 10px; }
-    .compose-tools { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
+    .compose-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-bottom: 8px; }
+    .agent-pin { display: inline-flex; min-width: 0; max-width: 100%; padding: 2px; overflow-x: auto; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); }
+    .agent-pin-btn { height: 25px; padding: 2px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); white-space: nowrap; font-size: 10px; }
+    .agent-pin-btn:hover { color: var(--text); }
+    .agent-pin-btn.active { background: var(--card); color: var(--all); box-shadow: 0 1px 4px rgba(20,24,32,.12); font-weight: 750; }
+    .agent-pin-btn[data-default-target="codex"].active { color: var(--codex); }
+    .agent-pin-btn[data-default-target="claude"].active { color: var(--claude); }
     .tag {
       padding: 4px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--card);
       font-size: 11px; font-weight: 700;
@@ -339,6 +345,7 @@
     .trace-detail pre { margin: 5px 0 0; max-height: 180px; overflow: auto; white-space: pre-wrap; }
     @media (max-width: 1480px) { .app { grid-template-columns: 210px minmax(500px, 1fr) 320px; } .app.trace-hidden { grid-template-columns: 210px minmax(500px,1fr); } .settings-panel { display: none; } .agent-pill { min-width: 125px; } }
     @media (max-width: 1080px) { .app { grid-template-columns: 170px minmax(430px,1fr) 300px; } .app.trace-hidden { grid-template-columns: 170px minmax(430px,1fr); } }
+    @media (max-width: 1180px) { .compose-tools > .hint { display: none; } }
     @media (max-height: 700px) {
       header { height: 64px; padding-top: 9px; padding-bottom: 9px; }
       .composer { padding-top: 9px; padding-bottom: 10px; }
@@ -396,12 +403,17 @@
         </div>
         <div class="queue-list" id="queue-list" aria-label="순차 대기열" hidden></div>
         <div class="compose-tools">
+          <div class="agent-pin" role="radiogroup" aria-label="태그 없는 메시지 기본 대상">
+            <button type="button" class="agent-pin-btn" data-default-target="all" role="radio" title="태그 없는 메시지를 Codex와 Claude 모두에게 전달">둘 다</button>
+            <button type="button" class="agent-pin-btn" data-default-target="codex" role="radio" title="태그 없는 메시지를 Codex에게만 전달">Codex 고정</button>
+            <button type="button" class="agent-pin-btn" data-default-target="claude" role="radio" title="태그 없는 메시지를 Claude에게만 전달">Claude 고정</button>
+          </div>
           <button class="tag codex" data-tag="#codex">#codex</button>
           <button class="tag claude" data-tag="#claude">#claude</button>
           <button class="tag all" data-tag="#all">#all</button>
           <button class="tag" id="block-template">블록 지시</button>
           <button class="tag" id="attach-file">@ 문서</button>
-          <span class="hint"># AI 지정 · @ 문서 참조 · 미지정 시 둘 다</span><span class="spacer"></span>
+          <span class="hint"># AI 지정 · @ 문서 참조 · 태그가 고정보다 우선</span><span class="spacer"></span>
           <button class="stop" id="stop-codex" hidden>■ Codex 중지</button>
           <button class="stop" id="stop-claude" hidden>■ Claude 중지</button>
         </div>
@@ -452,7 +464,7 @@
       traces: JSON.parse(localStorage.getItem('triad.traces') || '[]'), traceFilter:'all',
       conversations: [], activeConversationId: localStorage.getItem('triad.activeConversationId'),
       storageReady: false, saveTimer: null, conversationSearch: '',
-      collaboration: {mode:'independent',lead:'codex',rounds:2,finalizer:'claude',helperTimeoutMinutes:5}, orchestration:null, sharedContext:null,
+      collaboration: {mode:'independent',lead:'codex',rounds:2,finalizer:'claude',helperTimeoutMinutes:5}, defaultTarget:'all', orchestration:null, sharedContext:null,
       sharedDocuments:[], activeSharedDocumentId:null, pendingSharedDocumentDeleteId:null,
       queue: [],
       usage: JSON.parse(localStorage.getItem('triad.usage')||'{"codex":{"windows":[]},"claude":{"windows":[]}}'), usageRefreshing:false, usageTimer:null, lastUsageRefresh:0,
@@ -488,6 +500,12 @@
       collaboration.helperTimeoutMinutes=helperTimeoutMinutes(collaboration.helperTimeoutMinutes);
       return collaboration;
     }
+    function normalizeDefaultTarget(value) {
+      return agents.includes(value) ? value : 'all';
+    }
+    function activeCollaboration() {
+      return state.orchestration?.collaboration || state.collaboration;
+    }
     function normalizeSessionSettings(config) {
       return {...config,...window.TriadSessionBudget.normalizePolicy(config)};
     }
@@ -507,7 +525,7 @@
       return {
         id:state.activeConversationId, title:existing?.title||'새 대화',
         createdAt:existing?.createdAt||now, updatedAt:now,
-        messages:clone(state.messages.slice(-300)), settings:clone(state.settings), collaboration:clone(state.collaboration),
+        messages:clone(state.messages.slice(-300)), settings:clone(state.settings), collaboration:clone(state.collaboration), defaultTarget:normalizeDefaultTarget(state.defaultTarget),
         sessions:clone(state.sessions), sessionStats:clone(state.sessionStats), traces:clone(state.traces.slice(-500)), sharedContext:clone(state.sharedContext),
         activeSharedDocumentId:state.activeSharedDocumentId
       };
@@ -538,6 +556,7 @@
       state.messages=clone(conversation.messages||[]);
       state.settings=clone(conversation.settings||state.settings);
       state.collaboration=normalizeCollaboration(conversation.collaboration);
+      state.defaultTarget=normalizeDefaultTarget(conversation.defaultTarget);
       state.sessions=clone(conversation.sessions||{codex:null,claude:null});
       normalizeSessionStats(conversation.sessionStats||{});
       state.traces=clone(conversation.traces||[]);
@@ -550,7 +569,7 @@
       if(agents.some(agent=>state.running[agent])||state.queue.length)return;
       if(!skipPersist)persistConversation(true);
       const now=Date.now();
-      const conversation={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:[],settings:clone(state.settings),collaboration:clone(state.collaboration),sessions:{codex:null,claude:null},sessionStats:window.TriadSessionBudget.normalizeStats(),traces:[],sharedContext:null,activeSharedDocumentId:null};
+      const conversation={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:[],settings:clone(state.settings),collaboration:clone(state.collaboration),defaultTarget:'all',sessions:{codex:null,claude:null},sessionStats:window.TriadSessionBudget.normalizeStats(),traces:[],sharedContext:null,activeSharedDocumentId:null};
       state.conversations.unshift(conversation);loadConversation(conversation);addWelcome();persistConversation(true);
       document.getElementById('draft').focus();
     }
@@ -944,7 +963,7 @@
       updater(message); save(); renderMessages();
     }
     function handleBrokerEvent(event) {
-      const from=event.from||event.rootAgent||'codex';const to=event.to||(from==='codex'?'claude':'codex');const count=`${event.used||0}/${event.limit||state.collaboration.rounds}`;
+      const from=event.from||event.rootAgent||'codex';const to=event.to||(from==='codex'?'claude':'codex');const count=`${event.used||0}/${event.limit||activeCollaboration().rounds}`;
       if(event.eventType==='shared_context_updated'){
         const board=ensureDocumentBoard(event.board);
         if(board&&typeof board==='object'){
@@ -1126,7 +1145,7 @@
       if(rotationReason){addTrace(agent,'info','다음 작업 새 세션',rotationReason);save();}
       state.pending[agent]={prompt,retried:false,isolated,sharedContext,usageRecorded:false,sessionId:session};state.responseIds[agent]=addMessage(agent,'',true);renderStatus();
       addTrace(agent,'info','명령 전달',{model:config.model,effort:config.effort,speed:config.speedMode,workspace:config.workspacePath,writableRoots:config.writableRoots||'',networkAccess:!!config.networkAccess,allowLocalBinding:!!config.allowLocalBinding,session:session?'resume':'new',isolated,mode:state.orchestration?.mode||'independent'});
-      post({action:'run',agent,prompt,config:state.settings[agent],agentConfigs:state.settings,collaboration:state.collaboration,mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,sharedContext),sharedContext,session});return true;
+      post({action:'run',agent,prompt,config:state.settings[agent],agentConfigs:state.settings,collaboration:activeCollaboration(),mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,sharedContext),sharedContext,session});return true;
     }
     function markMessageWorkStarted(messageId) {
       const message=state.messages.find(item=>item.id===messageId);if(message)message.workStarted=true;
@@ -1143,10 +1162,10 @@
       addTrace(targets[0]||'codex','info','독립 실행 묶음 대기열 등록',{targets,position:state.queue.filter(candidate=>candidate.kind==='independentBatch').length});
       return item;
     }
-    function enqueueCollaboration(objective,sourceText,messageId) {
-      const item={id:id(),kind:'collaboration',objective,sourceText,messageId,collaboration:clone(state.collaboration),createdAt:Date.now()};
+    function enqueueCollaboration(objective,sourceText,messageId,collaboration=state.collaboration) {
+      const item={id:id(),kind:'collaboration',objective,sourceText,messageId,collaboration:clone(collaboration),createdAt:Date.now()};
       state.queue.push(item);renderQueue();renderCollaboration();if(state.boardVisible)renderSharedBoard();
-      addTrace(state.collaboration.lead,'info','협업 순차 대기열 등록',{position:window.TriadQueue.positionFor(state.queue,item),mode:state.collaboration.mode});
+      addTrace(collaboration.lead,'info','협업 순차 대기열 등록',{position:window.TriadQueue.positionFor(state.queue,item),mode:collaboration.mode});
       return item;
     }
     function renderQueue() {
@@ -1198,8 +1217,9 @@
       }
       if(collaborationIndex>=0&&(firstAgentIndex<0||collaborationIndex<firstAgentIndex)){
         if(agents.some(agent=>state.running[agent]))return;
-        const [item]=state.queue.splice(collaborationIndex,1);markMessageWorkStarted(item.messageId);state.collaboration=clone(item.collaboration);renderQueue();renderCollaboration();
-        addTrace(state.collaboration.lead,'info','대기 협업 시작',{remaining:state.queue.filter(candidate=>candidate.kind==='collaboration').length});startCollaboration(item.objective);return;
+        const [item]=state.queue.splice(collaborationIndex,1);markMessageWorkStarted(item.messageId);renderQueue();renderCollaboration();
+        const collaboration=normalizeCollaboration(item.collaboration);
+        addTrace(collaboration.lead,'info','대기 협업 시작',{remaining:state.queue.filter(candidate=>candidate.kind==='collaboration').length});startCollaboration(item.objective,collaboration);return;
       }
       agents.forEach(drainAgentQueue);
       if(!agents.some(agent=>state.running[agent])){
@@ -1208,8 +1228,8 @@
         if(nextCollaboration>=0||nextBatch>=0)setTimeout(drainQueues,0);
       }
     }
-    function collaborationTasks() {
-      return window.TriadCollaboration.harnessTasks(state.collaboration.lead);
+    function collaborationTasks(collaboration=activeCollaboration()) {
+      return window.TriadCollaboration.harnessTasks(collaboration.lead);
     }
     function boardFor(flow=state.orchestration) { return flow?.sharedContext?.board || activeSharedDocument() || state.sharedContext?.board || null; }
     function boardSectionsFor(task) {
@@ -1292,7 +1312,7 @@
     function runNextCollaborationTurn() {
       const flow=state.orchestration;if(!flow||flow.cancelled)return;
       if(flow.index>=flow.tasks.length){
-        addTrace(flow.lastAgent||state.collaboration.lead,'success',flow.mode==='debate'?'상호 토론 완료':'교차 검토 완료');
+        addTrace(flow.lastAgent||flow.collaboration?.lead||state.collaboration.lead,'success',flow.mode==='debate'?'상호 토론 완료':'교차 검토 완료');
         state.orchestration=null;addMessage('system',flow.mode==='debate'?'상호 토론이 완료되었습니다.':'교차 검토가 완료되었습니다.');renderCollaboration();setTimeout(drainQueues,0);return;
       }
       let task=flow.tasks[flow.index++];
@@ -1303,31 +1323,35 @@
       task.label=labels[task.kind];addTrace(task.agent,'info',`${task.label} 시작`,{turn:flow.index,total:flow.tasks.length});
       dispatchAgent(task.agent,buildCollaborationPrompt(task),{isolated:true});renderCollaboration();
     }
-    function startCollaboration(objective) {
-      const sharedContext=createSharedContext(objective,state.collaboration.lead);
-      if(state.collaboration.mode==='agent'){
-        state.orchestration={mode:'agent',objective,tasks:[],index:0,current:null,cancelled:false,lastAgent:null,handoffs:0,mcpCalls:0,maxHandoffs:state.collaboration.rounds,sharedContext};
-        addTrace(state.collaboration.lead,'info','에이전트 협업 시작',{lead:names[state.collaboration.lead],maxHandoffs:state.collaboration.rounds});
-        addMessage('system',`${names[state.collaboration.lead]}가 작업을 시작합니다. 필요한 경우 상대 AI에게 질문하고 답을 받아 계속 진행합니다.`);
-        runAgentTurn({agent:state.collaboration.lead,kind:'agent_work'});return;
+    function startCollaboration(objective, runCollaboration=state.collaboration) {
+      const collaboration=normalizeCollaboration(runCollaboration);
+      const sharedContext=createSharedContext(objective,collaboration.lead);
+      if(collaboration.mode==='agent'){
+        state.orchestration={mode:'agent',objective,tasks:[],index:0,current:null,cancelled:false,lastAgent:null,handoffs:0,mcpCalls:0,maxHandoffs:collaboration.rounds,sharedContext,collaboration};
+        addTrace(collaboration.lead,'info','에이전트 협업 시작',{lead:names[collaboration.lead],maxHandoffs:collaboration.rounds});
+        addMessage('system',`${names[collaboration.lead]}가 작업을 시작합니다. 필요한 경우 상대 AI에게 질문하고 답을 받아 계속 진행합니다.`);
+        runAgentTurn({agent:collaboration.lead,kind:'agent_work'});return;
       }
-      const tasks=collaborationTasks();state.orchestration={mode:state.collaboration.mode,objective,tasks,index:0,current:null,cancelled:false,lastAgent:null,sharedContext};
-      addTrace(state.collaboration.lead,'info',state.collaboration.mode==='debate'?'상호 토론 시작':'교차 검토 시작',{rounds:state.collaboration.rounds,lead:names[state.collaboration.lead],finalizer:state.collaboration.finalizer});
+      const tasks=collaborationTasks(collaboration);state.orchestration={mode:collaboration.mode,objective,tasks,index:0,current:null,cancelled:false,lastAgent:null,sharedContext,collaboration};
+      addTrace(collaboration.lead,'info',collaboration.mode==='debate'?'상호 토론 시작':'교차 검토 시작',{rounds:collaboration.rounds,lead:names[collaboration.lead],finalizer:collaboration.finalizer});
       runNextCollaborationTurn();
     }
     function cancelCollaboration(reason='사용자가 중지함') {
       if(!state.orchestration)return;
-      const agent=state.orchestration.current?.agent||state.collaboration.lead;state.orchestration.cancelled=true;state.orchestration=null;
+      const agent=state.orchestration.current?.agent||state.orchestration.collaboration?.lead||state.collaboration.lead;state.orchestration.cancelled=true;state.orchestration=null;
       addTrace(agent,'error','협업 흐름 중단',reason);addMessage('system',`협업 흐름을 중단했습니다. ${reason}`);renderCollaboration();
     }
     function send() {
       const draft=document.getElementById('draft');const original=draft.value.trim();if(!original)return;
-      const routed=route(original);if(!routed){document.getElementById('routing-error').textContent='작업 내용을 입력해주세요.';return;}
+      const routed=route(original,{defaultTarget:state.defaultTarget});if(!routed){document.getElementById('routing-error').textContent='작업 내용을 입력해주세요.';return;}
       if(routed.errors?.length){document.getElementById('routing-error').textContent=routed.errors[0];return;}
+      let runCollaboration=null;
       if(state.collaboration.mode!=='independent'){
-        const lead=collaborationLeadFor(routed,state.collaboration.lead);
+        const lead=collaborationLeadFor(routed,state.collaboration.lead,state.defaultTarget);
         if(!lead){document.getElementById('routing-error').textContent='협업에서는 #codex 또는 #claude 중 하나만 시작 AI로 호출해주세요.';return;}
-        if(lead!==state.collaboration.lead){state.collaboration.lead=lead;save();renderCollaboration();}
+        // The pin applies only to this run; it never rewrites the conversation's
+        // collaboration setting or changes a queued/running collaboration.
+        runCollaboration={...state.collaboration,lead};
       }
       document.getElementById('routing-error').textContent='';draft.value='';updateRoutingPreview();
       state.forceMessageBottom=true;
@@ -1349,8 +1373,8 @@
             markMessageWorkStarted(userMessageId);
             routed.targets.forEach(agent=>dispatchAgent(agent,buildIndependentPrompt(agent,routed.prompts[agent],independentContext),{sharedContext:independentContext}));
           }
-        } else if(state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length)enqueueCollaboration(routed.prompt,original,userMessageId);
-        else {markMessageWorkStarted(userMessageId);startCollaboration(routed.prompt);}
+        } else if(state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length)enqueueCollaboration(routed.prompt,original,userMessageId,runCollaboration);
+        else {markMessageWorkStarted(userMessageId);startCollaboration(routed.prompt,runCollaboration);}
       } catch(error) {
         const detail=error instanceof Error&&error.message?error.message:String(error||'알 수 없는 오류');
         addTrace('system','error','전송 준비 실패',detail);
@@ -1504,7 +1528,7 @@
       const pending=state.pending[agent];
       if (!pending) { finishAgent(agent,1); return; }
       addTrace(agent,'info','저장된 세션을 찾지 못해 새 세션으로 자동 재시도');
-      post({action:'run',agent,prompt:pending.prompt,config:state.settings[agent],agentConfigs:state.settings,collaboration:state.collaboration,mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,pending.sharedContext),sharedContext:pending.sharedContext||null,session:null});
+      post({action:'run',agent,prompt:pending.prompt,config:state.settings[agent],agentConfigs:state.settings,collaboration:activeCollaboration(),mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,pending.sharedContext),sharedContext:pending.sharedContext||null,session:null});
     }
 
     window.nativeEvent = event => {
@@ -1517,10 +1541,10 @@
         if(loaded.length){
           const selected=loaded.find(item=>item.id===state.activeConversationId)||loaded[0];
           state.activeConversationId=selected.id;state.messages=clone(selected.messages||[]);
-          state.settings=clone(selected.settings||defaults(event.home));state.collaboration=normalizeCollaboration(selected.collaboration);state.sessions=clone(selected.sessions||{codex:null,claude:null});state.sessionStats=clone(selected.sessionStats||{});state.traces=clone(selected.traces||[]);state.sharedContext=clone(selected.sharedContext||null);state.activeSharedDocumentId=selected.activeSharedDocumentId||state.sharedContext?.board?.documentId||null;
+          state.settings=clone(selected.settings||defaults(event.home));state.collaboration=normalizeCollaboration(selected.collaboration);state.defaultTarget=normalizeDefaultTarget(selected.defaultTarget);state.sessions=clone(selected.sessions||{codex:null,claude:null});state.sessionStats=clone(selected.sessionStats||{});state.traces=clone(selected.traces||[]);state.sharedContext=clone(selected.sharedContext||null);state.activeSharedDocumentId=selected.activeSharedDocumentId||state.sharedContext?.board?.documentId||null;
         }else{
           if(!state.settings)state.settings=defaults(event.home);
-          const now=Date.now();const migrated={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:clone(state.messages),settings:clone(state.settings),collaboration:clone(state.collaboration),sessions:clone(state.sessions),sessionStats:clone(state.sessionStats),traces:clone(state.traces),sharedContext:clone(state.sharedContext),activeSharedDocumentId:state.activeSharedDocumentId};
+          const now=Date.now();const migrated={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:clone(state.messages),settings:clone(state.settings),collaboration:clone(state.collaboration),defaultTarget:'all',sessions:clone(state.sessions),sessionStats:clone(state.sessionStats),traces:clone(state.traces),sharedContext:clone(state.sharedContext),activeSharedDocumentId:state.activeSharedDocumentId};
           const firstUser=state.messages.find(message=>message.author==='user')?.text?.replace(/\s+/g,' ').trim();
           if(firstUser)migrated.title=firstUser.slice(0,36)+(firstUser.length>36?'…':'');
           state.conversations=[migrated];state.activeConversationId=migrated.id;
@@ -1601,8 +1625,24 @@
       renderCollaboration();
       if(state.boardVisible)renderSharedBoard();
     }
+    function defaultTargetLabel(target=state.defaultTarget) {
+      return target==='codex'?'Codex':target==='claude'?'Claude':'둘 다';
+    }
+    function collaborationDefaultTargetHint() {
+      return state.defaultTarget==='all'?'첫 발언 설정 사용':`${defaultTargetLabel()} 고정 적용`;
+    }
+    function renderDefaultTarget() {
+      const target=normalizeDefaultTarget(state.defaultTarget);state.defaultTarget=target;
+      document.querySelectorAll('[data-default-target]').forEach(button=>{
+        const active=button.dataset.defaultTarget===target;
+        button.classList.toggle('active',active);
+        button.setAttribute('aria-checked',String(active));
+        button.setAttribute('aria-pressed',String(active));
+      });
+    }
     function renderCollaboration() {
       const c=state.collaboration;const modeButtons=[...document.querySelectorAll('[data-collab-mode]')];if(!modeButtons.length)return;
+      renderDefaultTarget();
       modeButtons.forEach(button=>{const active=button.dataset.collabMode===c.mode;button.classList.toggle('active',active);button.setAttribute('aria-checked',String(active));});
       const independent=c.mode==='independent';const review=c.mode==='review';const agentMode=c.mode==='agent';
       c.helperTimeoutMinutes=helperTimeoutMinutes(c.helperTimeoutMinutes);
@@ -1626,7 +1666,7 @@
       documentLabel.textContent=workDocument?`현재 실행: ${documentTitleOf(workDocument)}${showingDifferentDocument?` · 다음: ${documentTitleOf(selectedDocument)}`:''}`:selectedDocument?`선택 문서: ${documentTitleOf(selectedDocument)}`:'';
       documentLabel.title=workDocument?`현재 AI 작업은 “${documentTitleOf(workDocument)}”에 기록됩니다.${showingDifferentDocument?` 선택한 “${documentTitleOf(selectedDocument)}”은 다음 실행에 사용됩니다.`:''}`:documentLabel.textContent;
       document.getElementById('block-template').disabled=!independent;
-      document.getElementById('compose-hint').textContent=independent?'Enter 전송 · 작업 중 추가 전송은 AI별 순차 대기 · 태그가 없으면 둘 다':agentMode?'#codex·#claude로 이번 작업의 시작 AI 지정 · 태그가 없으면 선택값 사용':'Enter 전송 · 작업 중 추가 전송은 순차 대기 · 협업 순서에 따라 자동 중계';
+      document.getElementById('compose-hint').textContent=independent?`Enter 전송 · 작업 중 추가 전송은 AI별 순차 대기 · 태그가 없으면 ${defaultTargetLabel()}`:agentMode?`#codex·#claude로 이번 작업의 시작 AI 지정 · 태그 없으면 ${collaborationDefaultTargetHint()}`:`Enter 전송 · 작업 중 추가 전송은 순차 대기 · 태그 없으면 ${collaborationDefaultTargetHint()}`;
       const controlsLocked=!!state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length>0;
       document.querySelectorAll('.collab-controls select, .collab-controls input, .collab-mode-btn').forEach(control=>control.disabled=controlsLocked);
       requestAnimationFrame(updateScrollButton);
@@ -1780,13 +1820,12 @@
     function updateRoutingPreview(){
       const draft=document.getElementById('draft');const root=document.getElementById('routing-preview');const toggle=document.getElementById('routing-preview-toggle');const details=document.getElementById('routing-preview-details');
       if(!draft||!root)return;const value=draft.value.trim();if(!value){root.hidden=true;return;}
-      const routed=route(value);if(!routed){root.hidden=true;return;}root.hidden=false;root.classList.toggle('invalid',!!routed.errors?.length);
+      const routed=route(value,{defaultTarget:state.defaultTarget});if(!routed){root.hidden=true;return;}root.hidden=false;root.classList.toggle('invalid',!!routed.errors?.length);
       if(routed.errors?.length)toggle.textContent=`전송 불가 · ${routed.errors.join(' · ')}`;
       else if(state.collaboration.mode!=='independent'){
-        const lead=collaborationLeadFor(routed,state.collaboration.lead);
+        const lead=collaborationLeadFor(routed,state.collaboration.lead,state.defaultTarget);
         if(!lead)toggle.textContent='전송 불가 · 협업에서는 #codex 또는 #claude 중 하나만 시작 AI로 지정';
         else toggle.textContent=`협업 의제 · ${names[lead]} 시작 · ${routed.prompt.length.toLocaleString('ko-KR')}자 · 입력 약 ${window.TriadSessionBudget.estimateTokens(routed.prompt).toLocaleString('ko-KR')} 토큰 · 클릭하여 확인`;
-        if(lead)document.getElementById('collab-lead').value=lead;
       }
       else {
         const counts=routed.targets.map(agent=>promptEstimateLabel(agent,routed.prompts[agent]));
@@ -1850,6 +1889,10 @@
       updateRoutingPreview();
     }
     document.querySelectorAll('[data-tag]').forEach(button=>button.onclick=()=>{const d=document.getElementById('draft');if(!d.value.includes(button.dataset.tag))d.value=`${button.dataset.tag} ${d.value}`;d.focus();updateRoutingPreview();});
+    document.querySelectorAll('[data-default-target]').forEach(button=>button.addEventListener('click',()=>{
+      state.defaultTarget=normalizeDefaultTarget(button.dataset.defaultTarget);
+      save();renderCollaboration();
+    }));
     document.getElementById('block-template').onclick=()=>{const draft=document.getElementById('draft');const prefix=draft.value.trim()?`${draft.value.trimEnd()}\n\n`:'';draft.value=`${prefix}#codex:\n\n#claude:\n`;const caret=prefix.length+'#codex:\n'.length;draft.setSelectionRange(caret,caret);draft.focus();updateRoutingPreview();};
     document.getElementById('attach-file').title='클릭: 문서 자동완성 · Option 클릭: 파일 선택 창';
     document.getElementById('attach-file').onclick=event=>{

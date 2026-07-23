@@ -35,4 +35,10 @@ test('공통 모드 UI는 공통 picker만 활성화하고 에이전트별 works
   assert.match(renderer,/workspaceCard\.querySelector\('\.workspace-separate'\)\.onchange/);
   assert.match(renderer,/event\.agent==='common'\)\{state\.workspace\.commonPath=event\.path;\}/);
   assert.match(renderer,/workspace:effectiveWorkspacePath\('codex'\)\|\|''/);
+  assert.match(renderer,/\.workspace-path-field \{ padding: 7px; border: 1px solid transparent; border-radius: 9px;/);
+  assert.match(renderer,/\.workspace-path-field\.is-disabled \{ border-color:/);
+  assert.match(renderer,/\.workspace-path-field\.is-disabled input:disabled, \.workspace-path-field\.is-disabled button:disabled/);
+  assert.match(renderer,/\.workspace-path-field\.is-disabled \.branch-row\.active, \.workspace-path-field\.is-disabled \.branch-row\.detached/);
+  assert.match(renderer,/field workspace-path-field \$\{separate\?'is-disabled':''\}/);
+  assert.match(renderer,/field workspace-path-field \$\{separate\?'':'is-disabled'\}/);
 });

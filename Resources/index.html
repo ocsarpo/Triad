@@ -467,7 +467,7 @@
       collaboration: {mode:'independent',lead:'codex',rounds:2,finalizer:'claude',helperTimeoutMinutes:5}, defaultTarget:'all', orchestration:null, sharedContext:null,
       sharedDocuments:[], activeSharedDocumentId:null, pendingSharedDocumentDeleteId:null,
       queue: [], queueDrainScheduled:false,
-      backgroundWaits: new Set(),
+      backgroundWaits: new Set(), backgroundDocumentIds: new Map(),
       usage: JSON.parse(localStorage.getItem('triad.usage')||'{"codex":{"windows":[]},"claude":{"windows":[]}}'), usageRefreshing:false, usageTimer:null, lastUsageRefresh:0,
       forceMessageBottom:false,routingPreviewOpen:false,
       traceVisible:localStorage.getItem('triad.traceVisible')!=='false',
@@ -1235,14 +1235,51 @@
       state.queueDrainScheduled=true;
       setTimeout(()=>{state.queueDrainScheduled=false;drainQueues();},0);
     }
+    function contextDocumentId(context) {
+      return context?.documentId||documentIdOf(context?.board)||null;
+    }
+    function independentContextForConversation(conversationId) {
+      return Object.values(state.pending).find(pending=>pending?.conversationId===conversationId&&pending.sharedContext?.board?.phase==='independent')?.sharedContext||null;
+    }
+    function queueTargets(item) {
+      if(item?.kind==='independentBatch')return item.targets||[];
+      if(item?.kind==='agent')return item.agent?[item.agent]:[];
+      return agents;
+    }
+    function queueDocumentId(item) {
+      return item?.documentId||contextDocumentId(item?.sharedContext);
+    }
+    function queueItemsConflict(left,right) {
+      if(left?.kind==='collaboration'||right?.kind==='collaboration')return true;
+      if(queueTargets(left).some(agent=>queueTargets(right).includes(agent)))return true;
+      const leftDocument=queueDocumentId(left);const rightDocument=queueDocumentId(right);
+      return !!leftDocument&&leftDocument===rightDocument;
+    }
+    function runningDocumentConflict(conversationId, documentId, sharedContext=null) {
+      if(!documentId)return false;
+      if(state.backgroundDocumentIds.has(documentId))return true;
+      return Object.values(state.pending).some(pending=>{
+        if(contextDocumentId(pending?.sharedContext)!==documentId)return false;
+        // Two one-agent requests in the same independent run intentionally
+        // share one document and merge their contributions by runId.
+        return !(pending.conversationId===conversationId&&pending.sharedContext?.board?.phase==='independent'&&pending.sharedContext?.runId===sharedContext?.runId);
+      });
+    }
+    function independentRequestQueued(targets, documentId, sharedContext=null) {
+      if(state.orchestration)return true;
+      if(targets.some(agent=>state.running[agent]))return true;
+      if(runningDocumentConflict(state.activeConversationId,documentId,sharedContext))return true;
+      const request={kind:'independentBatch',targets,documentId,sharedContext};
+      return state.queue.some(item=>queueItemsConflict(item,request));
+    }
     function enqueueAgent(agent,prompt,sourceText,messageId,sharedContext=null) {
       const item={id:id(),kind:'agent',agent,prompt,sourceText,messageId,sharedContext,conversationId:state.activeConversationId,config:clone(state.settings[agent]),agentConfigs:clone(state.settings),collaboration:clone(activeCollaboration()),createdAt:Date.now()};
       state.queue.push(item);renderQueue();renderCollaboration();if(state.boardVisible)renderSharedBoard();
       addTrace(agent,'info','순차 대기열 등록',{position:window.TriadQueue.positionFor(state.queue,item),characters:prompt.length});
       return item;
     }
-    function enqueueIndependentBatch(targets,prompts,sourceText,messageId) {
-      const item={id:id(),kind:'independentBatch',targets:[...targets],prompts:clone(prompts),sourceText,messageId,conversationId:state.activeConversationId,settings:clone(state.settings),collaboration:clone(activeCollaboration()),createdAt:Date.now()};
+    function enqueueIndependentBatch(targets,prompts,sourceText,messageId,options={}) {
+      const item={id:id(),kind:'independentBatch',targets:[...targets],prompts:clone(prompts),sourceText,messageId,conversationId:state.activeConversationId,settings:clone(state.settings),collaboration:clone(activeCollaboration()),sharedContext:options.sharedContext||null,documentId:options.documentId||contextDocumentId(options.sharedContext),createdAt:Date.now()};
       state.queue.push(item);renderQueue();renderCollaboration();if(state.boardVisible)renderSharedBoard();
       addTrace(targets[0]||'codex','info','독립 실행 묶음 대기열 등록',{targets,position:state.queue.filter(candidate=>candidate.kind==='independentBatch').length});
       return item;
@@ -1289,7 +1326,7 @@
     function startIndependentBatch(item) {
       return withConversation(item.conversationId,()=>{
         markMessageWorkStarted(item.messageId);
-        const independentContext=createIndependentSharedContext(item.sourceText,item.targets[0]||item.collaboration?.lead);
+        const independentContext=item.sharedContext||createIndependentSharedContext(item.sourceText,item.targets[0]||item.collaboration?.lead);
         addTrace(item.targets[0]||'codex','info','대기 독립 실행 시작',{targets:item.targets,remaining:state.queue.filter(candidate=>candidate.kind==='independentBatch').length});
         for(const agent of item.targets){
           const prompt=buildIndependentPrompt(agent,item.prompts[agent]||item.sourceText,independentContext);
@@ -1300,25 +1337,20 @@
     }
     function drainQueues() {
       if(state.orchestration)return;
-      const collaborationIndex=window.TriadQueue.nextIndex(state.queue,'collaboration');
-      const firstAgentIndex=state.queue.findIndex(item=>item.kind==='agent');
-      const independentBatchIndex=state.queue.findIndex(item=>item.kind==='independentBatch');
-      const beforeBatch=index=>independentBatchIndex>=0&&(index<0||independentBatchIndex<index);
-      if(independentBatchIndex>=0&&beforeBatch(collaborationIndex)&&beforeBatch(firstAgentIndex)){
-        if(agents.some(agent=>state.running[agent]))return;
-        const [item]=state.queue.splice(independentBatchIndex,1);startIndependentBatch(item);return;
-      }
-      if(collaborationIndex>=0&&(firstAgentIndex<0||collaborationIndex<firstAgentIndex)){
-        if(agents.some(agent=>state.running[agent]))return;
-        const [item]=state.queue.splice(collaborationIndex,1);
-        const collaboration=normalizeCollaboration(item.collaboration);
-        withConversation(item.conversationId,()=>{markMessageWorkStarted(item.messageId);renderQueue();renderCollaboration();addTrace(collaboration.lead,'info','대기 협업 시작',{remaining:state.queue.filter(candidate=>candidate.kind==='collaboration').length});startCollaboration(item.objective,collaboration,item.conversationId,item.settings);});return;
-      }
-      agents.forEach(drainAgentQueue);
-      if(!agents.some(agent=>state.running[agent])){
-        const nextCollaboration=window.TriadQueue.nextIndex(state.queue,'collaboration');
-        const nextBatch=state.queue.findIndex(item=>item.kind==='independentBatch');
-        if(nextCollaboration>=0||nextBatch>=0)scheduleQueueDrain();
+      for(let index=0;index<state.queue.length;index++){
+        const item=state.queue[index];const earlier=state.queue.slice(0,index);
+        if(item.kind==='collaboration'){
+          if(earlier.length||agents.some(agent=>state.running[agent]))return;
+          state.queue.splice(index,1);const collaboration=normalizeCollaboration(item.collaboration);
+          withConversation(item.conversationId,()=>{markMessageWorkStarted(item.messageId);renderQueue();renderCollaboration();addTrace(collaboration.lead,'info','대기 협업 시작',{remaining:state.queue.filter(candidate=>candidate.kind==='collaboration').length});startCollaboration(item.objective,collaboration,item.conversationId,item.settings);});return;
+        }
+        if(earlier.some(candidate=>queueItemsConflict(candidate,item)))continue;
+        const targets=queueTargets(item);const documentId=queueDocumentId(item);
+        if(targets.some(agent=>state.running[agent])||runningDocumentConflict(item.conversationId,documentId,item.sharedContext))continue;
+        state.queue.splice(index,1);
+        if(item.kind==='independentBatch')startIndependentBatch(item);
+        else withConversation(item.conversationId,()=>{markMessageWorkStarted(item.messageId);dispatchAgent(item.agent,item.prompt,{sharedContext:item.sharedContext||null,conversationId:item.conversationId,config:item.config,agentConfigs:item.agentConfigs,collaboration:item.collaboration});});
+        scheduleQueueDrain();return;
       }
     }
     function collaborationTasks(collaboration=activeCollaboration()) {
@@ -1451,7 +1483,15 @@
         runCollaboration={...state.collaboration,lead};
       }
       document.getElementById('routing-error').textContent='';draft.value='';updateRoutingPreview();
-      const queued=!!state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length>0;
+      const sameConversationContext=state.collaboration.mode==='independent'?independentContextForConversation(state.activeConversationId):null;
+      // Reusing a run is safe only for an immediately parallel, other-agent
+      // request. A queued follow-up must become a new run after its predecessor
+      // (and contribution grace period) finishes.
+      const reusableContext=sameConversationContext&&routed.targets.every(agent=>!state.running[agent])?sameConversationContext:null;
+      const requestedDocumentId=contextDocumentId(sameConversationContext)||documentIdOf(activeSharedDocument());
+      const queued=state.collaboration.mode==='independent'
+        ? independentRequestQueued(routed.targets,requestedDocumentId,reusableContext)
+        : !!state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length>0;
       state.forceMessageBottom=!queued;
       const active=state.conversations.find(item=>item.id===state.activeConversationId);
       if(active?.title==='새 대화'){
@@ -1464,9 +1504,9 @@
           // Do not create the next document run while a prior run is writing to
           // the same document.  A queued batch creates one fresh run only when
           // every provider is idle, then launches its selected targets together.
-          if(queued)enqueueIndependentBatch(routed.targets,routed.prompts,original,userMessageId);
+          if(queued)enqueueIndependentBatch(routed.targets,routed.prompts,original,userMessageId,{sharedContext:null,documentId:requestedDocumentId});
           else {
-            const independentContext=createIndependentSharedContext(original,routed.targets[0]||state.collaboration.lead);
+            const independentContext=reusableContext||createIndependentSharedContext(original,routed.targets[0]||state.collaboration.lead);
             if(!independentContext?.board||!independentContext.documentId)throw new Error('공유 문서를 준비하지 못했습니다. 문서 목록을 새로고침한 뒤 다시 시도해주세요.');
             markMessageWorkStarted(userMessageId);
             routed.targets.forEach(agent=>dispatchAgent(agent,buildIndependentPrompt(agent,routed.prompts[agent],independentContext),{sharedContext:independentContext}));
@@ -1521,7 +1561,9 @@
       const context=pending?.sharedContext;const board=context?.board;
       if(board?.phase!=='independent'){done();return;}
       const conversationId=pending?.conversationId;
+      const documentId=contextDocumentId(context);
       if(conversationId)state.backgroundWaits.add(conversationId);
+      if(documentId)state.backgroundDocumentIds.set(documentId,(state.backgroundDocumentIds.get(documentId)||0)+1);
       // The broker writes atomically before it emits its watcher event.  Give
       // that event a short window so the next queued run starts from the
       // canonical contribution-bearing document rather than a stale snapshot.
@@ -1538,6 +1580,7 @@
           });
         } finally {
           if(conversationId)state.backgroundWaits.delete(conversationId);
+          if(documentId){const remaining=(state.backgroundDocumentIds.get(documentId)||1)-1;if(remaining>0)state.backgroundDocumentIds.set(documentId,remaining);else state.backgroundDocumentIds.delete(documentId);}
           done();
         }
       },260);

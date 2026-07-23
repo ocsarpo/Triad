@@ -45,8 +45,24 @@ test('종료 이벤트는 실행 ID로 늦은 이벤트를 무시한다', () => 
 });
 
 test('대기열 생명주기 변경의 앱 버전은 이 테스트에서 검증한다', () => {
-  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.42\.0<\/string>/);
-  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>61<\/string>/);
+  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.43\.0<\/string>/);
+  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>62<\/string>/);
+});
+
+test('독립 실행은 대상 슬롯과 공유 문서 충돌을 분리해 판단한다', () => {
+  assert.match(renderer, /function independentContextForConversation\(conversationId\)/);
+  assert.match(renderer, /pending\.sharedContext\?\.board\?\.phase==='independent'/);
+  assert.match(renderer, /function runningDocumentConflict\(conversationId, documentId, sharedContext=null\)/);
+  assert.match(renderer, /pending\.conversationId===conversationId[\s\S]*?pending\.sharedContext\?\.runId===sharedContext\?\.runId/);
+  assert.match(renderer, /function independentRequestQueued\(targets, documentId, sharedContext=null\)/);
+  assert.match(renderer, /if\(targets\.some\(agent=>state\.running\[agent\]\)\)return true/);
+  assert.match(renderer, /const sameConversationContext=state\.collaboration\.mode==='independent'\?independentContextForConversation\(state\.activeConversationId\):null/);
+  assert.match(renderer, /const reusableContext=sameConversationContext&&routed\.targets\.every\(agent=>!state\.running\[agent\]\)\?sameConversationContext:null/);
+  assert.match(renderer, /enqueueIndependentBatch\(routed\.targets,routed\.prompts,original,userMessageId,\{sharedContext:null,documentId:requestedDocumentId\}\)/);
+  assert.match(renderer, /const independentContext=reusableContext\|\|createIndependentSharedContext/);
+  assert.match(renderer, /item\.sharedContext\|\|createIndependentSharedContext/);
+  assert.match(renderer, /targets\.some\(agent=>state\.running\[agent\]\)\|\|runningDocumentConflict\(item\.conversationId,documentId,item\.sharedContext\)/);
+  assert.match(renderer, /backgroundDocumentIds: new Map\(\)/);
 });
 
 test('백그라운드 실행은 시작 대화에 설정과 스트림을 고정한다', () => {
@@ -65,7 +81,7 @@ test('백그라운드 실행은 시작 대화에 설정과 스트림을 고정�
   assert.match(renderer, /state\.backgroundWaits\.has\(conversationId\)/);
   assert.match(renderer, /const conversationId=pending\?\.conversationId;[\s\S]*?state\.backgroundWaits\.add\(conversationId\)/);
   assert.match(renderer, /setTimeout\(\(\)=>\{\s*try \{\s*withConversation\(conversationId,\(\)=>\{/);
-  assert.match(renderer, /state\.backgroundWaits\.delete\(conversationId\);\s*done\(\);/);
+  assert.match(renderer, /state\.backgroundWaits\.delete\(conversationId\);[\s\S]*?state\.backgroundDocumentIds\.delete\(documentId\);[\s\S]*?done\(\);/);
   assert.match(renderer, /setTimeout\(\(\)=>\{\s*withConversation\(flow\.conversationId,\(\)=>\{/);
   assert.match(renderer, /if\(Object\.values\(state\.pending\)\.some\(pending=>pending\?\.conversationId===conversationId\)/);
   assert.doesNotMatch(renderer, /function newConversation\(skipPersist=false\) \{\s*if\(agents\.some/);

@@ -3,12 +3,43 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.TriadDiff = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+  function decodeGitQuotedPath(value) {
+    const source = String(value || '');
+    if (!(source.startsWith('"') && source.endsWith('"'))) return source;
+    const bytes = [];
+    const appendCharacter = character => {
+      const encoded = encodeURIComponent(character);
+      if (encoded.startsWith('%')) {
+        for (const part of encoded.split('%')) if (part) bytes.push(Number.parseInt(part, 16));
+      } else bytes.push(character.charCodeAt(0));
+    };
+    for (let index = 1; index < source.length - 1; index++) {
+      const character = source[index];
+      if (character !== '\\') { appendCharacter(character); continue; }
+      const escaped = source[++index];
+      if (escaped >= '0' && escaped <= '7') {
+        const octal = `${escaped}${source[index + 1] || ''}${source[index + 2] || ''}`;
+        if (/^[0-7]{3}$/.test(octal)) { bytes.push(Number.parseInt(octal, 8)); index += 2; continue; }
+      }
+      bytes.push(({ a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11 }[escaped]) ?? escaped.charCodeAt(0));
+    }
+    try { return decodeURIComponent(bytes.map(byte => `%${byte.toString(16).padStart(2, '0')}`).join('')); }
+    catch { return source.slice(1, -1); }
+  }
+
   function cleanPath(value) {
     let path = String(value || '').trim();
-    if (path.startsWith('"') && path.endsWith('"')) {
-      try { path = JSON.parse(path); } catch { path = path.slice(1, -1); }
-    }
+    path = decodeGitQuotedPath(path);
     return path.replace(/^[ab]\//, '');
+  }
+
+  function pathFromDiffHeader(section) {
+    const header = section.match(/^diff --git\s+(.+)$/m)?.[1];
+    if (!header) return '';
+    const quoted = header.match(/(?:^|\s)("b\/(?:[^"\\]|\\.)*")$/);
+    if (quoted) return cleanPath(quoted[1]);
+    const bStart = header.lastIndexOf(' b/');
+    return cleanPath(bStart >= 0 ? header.slice(bStart + 1) : header);
   }
 
   function nameFor(section, index) {
@@ -16,8 +47,7 @@
     if (next && next !== '/dev/null') return cleanPath(next);
     const previous = section.match(/^---\s+(.+)$/m)?.[1];
     if (previous && previous !== '/dev/null') return cleanPath(previous);
-    const header = section.match(/^diff --git\s+.+?\s+(?:"?b\/)(.+?)"?$/m)?.[1];
-    return cleanPath(header || `변경 파일 ${index + 1}`);
+    return pathFromDiffHeader(section) || `변경 파일 ${index + 1}`;
   }
 
   function filesFor(text) {
@@ -48,7 +78,9 @@
 
   function displayLinesFor(section) {
     const metadata = /^(?:diff --git |index |--- |\+\+\+ |old mode |new mode |new file mode |deleted file mode |similarity index |dissimilarity index )/;
-    return String(section || '').split('\n').filter(line => !metadata.test(line));
+    const lines = String(section || '').split('\n').filter(line => !metadata.test(line));
+    if (lines[lines.length - 1] === '') lines.pop();
+    return lines;
   }
 
   return { filesFor, activeFileIdForOffsets, displayLinesFor };

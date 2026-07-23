@@ -41,3 +41,23 @@ test('파일 이름 변경은 별도 상태로 분류한다', () => {
   const [file]=plain(filesFor('diff --git a/old.kt b/new.kt\nsimilarity index 100%\nrename from old.kt\nrename to new.kt\n'));
   assert.equal(file.status,'renamed');
 });
+
+test('신규 빈 파일과 실행 파일은 내용이 없어도 구획으로 표시한다', () => {
+  const files=plain(filesFor('diff --git a/empty.sh b/empty.sh\nnew file mode 100755\nindex 0000000..e69de29\n'));
+  assert.deepEqual(files.map(file=>({name:file.name,status:file.status,additions:file.additions})),[
+    {name:'empty.sh',status:'new',additions:0}
+  ]);
+});
+
+test('Git C-style quoted 경로의 한글과 공백을 파일명으로 복원한다', () => {
+  const name='새 파일.txt';
+  const escaped=[...Buffer.from(name)].map(byte=>`\\${byte.toString(8).padStart(3,'0')}`).join('');
+  const [file]=plain(filesFor(`diff --git "a/${escaped}" "b/${escaped}"\nnew file mode 100644\nBinary files /dev/null and "b/${escaped}" differ\n`));
+  assert.equal(file.name,name);
+  assert.equal(file.status,'new');
+});
+
+test('새 파일의 마지막 줄 newline 없음 표시는 본문에 남긴다', () => {
+  const lines=plain(displayLinesFor('diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+마지막 줄\n\\ No newline at end of file\n'));
+  assert.deepEqual(lines,['@@ -0,0 +1 @@','+마지막 줄','\\ No newline at end of file']);
+});

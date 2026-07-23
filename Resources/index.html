@@ -754,7 +754,7 @@
         section.appendChild(body);
         content.appendChild(section);
       }
-      if(state.diff.truncated){const line=document.createElement('span');line.className='diff-line diff-empty';line.textContent='\n… diff가 커서 2MB까지만 표시했습니다.';content.appendChild(line);}
+      if(state.diff.truncated){const line=document.createElement('span');line.className='diff-line diff-empty';line.textContent='\n… 전체 diff 또는 신규 파일이 커서 일부만 표시했습니다.';content.appendChild(line);}
     }
     function setActiveDiffFile(fileId,keepVisible=true) {
       if(!fileId||fileId===state.diff.selectedFileId)return;state.diff.selectedFileId=fileId;

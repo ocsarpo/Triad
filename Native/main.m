@@ -33,6 +33,53 @@ static NSTimeInterval TriadTimestampOrZero(id value) {
     return [formatter dateFromString:text].timeIntervalSince1970;
 }
 
+// `git status -z` deliberately bypasses Git's display quoting.  Keep its
+// NUL-delimited paths as data until this boundary so spaces and Korean file
+// names cannot be split or reinterpreted as command arguments.
+static NSArray<NSString *> *TriadNullSeparatedStrings(NSData *data) {
+    if (!data.length) return @[];
+    const uint8_t *bytes = data.bytes;
+    NSMutableArray<NSString *> *values = [NSMutableArray array];
+    NSUInteger start = 0;
+    for (NSUInteger index = 0; index <= data.length; index++) {
+        if (index != data.length && bytes[index] != 0) continue;
+        if (index > start) {
+            NSString *value = [[NSString alloc] initWithBytes:bytes + start
+                                                        length:index - start
+                                                      encoding:NSUTF8StringEncoding];
+            if (value) [values addObject:value];
+        }
+        start = index + 1;
+    }
+    return values;
+}
+
+static NSString *TriadWorkspacePathspec(NSString *workspace, NSString *root) {
+    NSString *normalizedWorkspace = workspace.stringByStandardizingPath;
+    NSString *normalizedRoot = root.stringByStandardizingPath;
+    NSString *rootPrefix = [normalizedRoot stringByAppendingString:@"/"];
+    if ([normalizedWorkspace hasPrefix:rootPrefix]) {
+        return [normalizedWorkspace substringFromIndex:rootPrefix.length];
+    }
+    return @".";
+}
+
+static BOOL TriadPathIsInsideRoot(NSString *relative, NSString *root) {
+    if (!relative.length || [relative hasPrefix:@"/"]) return NO;
+    NSString *rootPath = root.stringByStandardizingPath;
+    NSString *candidate = [[rootPath stringByAppendingPathComponent:relative] stringByStandardizingPath];
+    return [candidate hasPrefix:[rootPath stringByAppendingString:@"/"]];
+}
+
+static NSString *TriadLargeNewFileDiff(NSString *relative, NSDictionary *attributes) {
+    NSNumber *permissions = attributes[NSFilePosixPermissions] ?: @0644;
+    NSString *mode = (permissions.unsignedIntegerValue & 0111) ? @"100755" : @"100644";
+    unsigned long long size = [attributes fileSize];
+    return [NSString stringWithFormat:@"diff --git a/%@ b/%@\nnew file mode %@\n--- /dev/null\n+++ b/%@\n@@ -0,0 +0,0 @@\n새 파일 내용이 %llu bytes로 커서 표시하지 않았습니다.\n", relative, relative, mode, relative, size];
+}
+
+static NSString *const TriadEmptyTreeObject = @"4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate, UNUserNotificationCenterDelegate>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
@@ -345,6 +392,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     NSData *errorData = [error.fileHandleForReading readDataToEndOfFile];
     [task waitUntilExit];
     return @{ @"code": @(task.terminationStatus),
+              @"data": data ?: [NSData data],
               @"output": [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"",
               @"error": [[NSString alloc] initWithData:errorData encoding:NSUTF8StringEncoding] ?: @"" };
 }
@@ -358,35 +406,75 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
             dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"diffResult", @"agent": sourceAgent, @"workspace": workspace, @"text": @"", @"error": @"선택한 작업 폴더가 Git 저장소가 아닙니다." }]; });
             return;
         }
-        NSDictionary *tracked = [self runGit:@[@"diff", @"--no-ext-diff", @"--no-color", @"HEAD", @"--", @"."] workspace:workspace];
-        if ([tracked[@"code"] intValue] != 0) tracked = [self runGit:@[@"diff", @"--no-ext-diff", @"--no-color", @"--", @"."] workspace:workspace];
+        NSDictionary *rootResult = [self runGit:@[@"rev-parse", @"--show-toplevel"] workspace:workspace];
+        NSString *root = [rootResult[@"output"] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if ([rootResult[@"code"] intValue] != 0 || !root.length) {
+            dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"diffResult", @"agent": sourceAgent, @"workspace": workspace, @"text": @"", @"error": @"Git 저장소 루트를 찾을 수 없습니다." }]; });
+            return;
+        }
+        NSString *pathspec = TriadWorkspacePathspec(workspace, root);
+        NSDictionary *head = [self runGit:@[@"rev-parse", @"--verify", @"--quiet", @"HEAD"] workspace:root];
+        NSDictionary *tracked = nil;
+        BOOL incomplete = NO;
+        if ([head[@"code"] intValue] == 0) {
+            tracked = [self runGit:@[@"diff", @"--no-ext-diff", @"--no-color", @"HEAD", @"--", pathspec] workspace:root];
+        } else {
+            // An unborn repository has no HEAD, but its staged files still
+            // belong in the diff.  The empty tree gives the same one-pass
+            // staged+working-tree view without treating them as untracked.
+            tracked = [self runGit:@[@"diff", @"--no-ext-diff", @"--no-color", TriadEmptyTreeObject, @"--", pathspec] workspace:root];
+        }
+        if ([tracked[@"code"] intValue] != 0) {
+            NSLog(@"Triad project diff: tracked diff failed: %@", tracked[@"error"] ?: @"");
+            incomplete = YES;
+        }
         NSMutableString *diff = [NSMutableString stringWithString:tracked[@"output"] ?: @""];
-        NSDictionary *untracked = [self runGit:@[@"ls-files", @"--others", @"--exclude-standard"] workspace:workspace];
-        NSArray<NSString *> *paths = [untracked[@"output"] componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet];
-        NSUInteger included = 0;BOOL truncated = NO;
+        const NSUInteger maximumDiffLength = 2000000;
+        const unsigned long long maximumNewFileSize = 524288;
+        NSDictionary *untracked = [self runGit:@[@"status", @"--porcelain=v1", @"-z", @"--untracked-files=all", @"--", pathspec] workspace:root];
+        if ([untracked[@"code"] intValue] != 0) {
+            NSLog(@"Triad project diff: untracked-file status failed: %@", untracked[@"error"] ?: @"");
+            incomplete = YES;
+        }
+        NSMutableArray<NSString *> *paths = [NSMutableArray array];
+        for (NSString *record in TriadNullSeparatedStrings(untracked[@"data"])) {
+            if ([record hasPrefix:@"?? "]) [paths addObject:[record substringFromIndex:3]];
+        }
+        NSUInteger included = 0;
+        BOOL truncated = incomplete || diff.length > maximumDiffLength;
+        if (truncated) [diff deleteCharactersInRange:NSMakeRange(maximumDiffLength, diff.length - maximumDiffLength)];
         for (NSString *relative in paths) {
             if (relative.length == 0) continue;
-            if (included >= 100 || diff.length > 2000000) { truncated = YES;break; }
-            NSString *absolute = [workspace stringByAppendingPathComponent:relative];
-            BOOL directory = NO;
-            if (![[NSFileManager defaultManager] fileExistsAtPath:absolute isDirectory:&directory] || directory) continue;
+            if (included >= 100 || diff.length >= maximumDiffLength) { truncated = YES; break; }
+            if (!TriadPathIsInsideRoot(relative, root)) continue;
+            NSString *absolute = [root stringByAppendingPathComponent:relative];
             NSDictionary *attributes = [[NSFileManager defaultManager] attributesOfItemAtPath:absolute error:nil];
+            if (!attributes || [attributes[NSFileType] isEqualToString:NSFileTypeDirectory]) continue;
             unsigned long long size = [attributes fileSize];
-            if (size > 524288) {
-                [diff appendFormat:@"\ndiff --git a/%@ b/%@\nnew file mode 100644\nBinary or large file: %@ (%llu bytes)\n", relative, relative, relative, size];included++;continue;
+            NSString *newFileDiff = nil;
+            if (size > maximumNewFileSize) {
+                newFileDiff = TriadLargeNewFileDiff(relative, attributes);
+                truncated = YES;
+            } else {
+                // Git creates the canonical unified header, executable mode,
+                // no-newline marker, and binary-file marker for us.  Passing
+                // the path as an NSTask argument keeps filenames non-executable.
+                NSDictionary *generated = [self runGit:@[@"diff", @"--no-index", @"--no-ext-diff", @"--no-color", @"--", @"/dev/null", relative] workspace:root];
+                newFileDiff = generated[@"output"] ?: @"";
+                if (!newFileDiff.length && [generated[@"code"] intValue] != 0) {
+                    NSLog(@"Triad project diff: untracked file diff failed for %@: %@", relative, generated[@"error"] ?: @"");
+                    newFileDiff = TriadLargeNewFileDiff(relative, attributes);
+                    truncated = YES;
+                }
             }
-            NSData *fileData = [NSData dataWithContentsOfFile:absolute];
-            NSString *content = [[NSString alloc] initWithData:fileData encoding:NSUTF8StringEncoding];
-            if (!content) {
-                [diff appendFormat:@"\ndiff --git a/%@ b/%@\nnew file mode 100644\nBinary file: %@\n", relative, relative, relative];included++;continue;
+            if (newFileDiff.length > maximumDiffLength || diff.length + newFileDiff.length > maximumDiffLength) {
+                truncated = YES;
+                break;
             }
-            NSArray<NSString *> *lines = [content componentsSeparatedByString:@"\n"];
-            NSUInteger lineCount = lines.count - ([content hasSuffix:@"\n"] ? 1 : 0);
-            [diff appendFormat:@"\ndiff --git a/%@ b/%@\nnew file mode 100644\n--- /dev/null\n+++ b/%@\n@@ -0,0 +1,%lu @@\n", relative, relative, relative, (unsigned long)lineCount];
-            for (NSUInteger index = 0; index < lineCount; index++) [diff appendFormat:@"+%@\n", lines[index]];
+            if (diff.length && ![diff hasSuffix:@"\n"]) [diff appendString:@"\n"];
+            [diff appendString:newFileDiff];
             included++;
         }
-        if (diff.length > 2000000) { [diff deleteCharactersInRange:NSMakeRange(2000000, diff.length - 2000000)];truncated = YES; }
         dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"diffResult", @"agent": sourceAgent, @"workspace": workspace, @"text": diff, @"truncated": @(truncated), @"error": @"" }]; });
     });
 }

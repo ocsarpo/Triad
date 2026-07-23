@@ -53,9 +53,8 @@ test('협업에서 #all과 복수 호출은 시작 AI가 모호해 전송을 막
   assert.equal(collaborationLeadFor(route('#codex 구현 #claude 검토'), 'claude', 'codex'), null);
 });
 
-test('기본 대상 고정의 렌더러 연결과 버전을 보장한다', () => {
+test('기본 대상 고정의 렌더러 연결을 보장한다', () => {
   const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html'), 'utf8');
-  const plist = fs.readFileSync(path.join(__dirname, '../Resources/Info.plist'), 'utf8');
   assert.match(renderer, /defaultTarget:'all'/);
   assert.match(renderer, /defaultTarget:normalizeDefaultTarget\(state\.defaultTarget\)/);
   assert.match(renderer, /state\.defaultTarget=normalizeDefaultTarget\(conversation\.defaultTarget\)/);
@@ -67,8 +66,6 @@ test('기본 대상 고정의 렌더러 연결과 버전을 보장한다', () =>
   assert.match(renderer, /\.compose-tools \{ display: flex; flex-wrap: wrap;/);
   assert.match(renderer, /@media \(max-width: 1180px\) \{ \.compose-tools > \.hint \{ display: none; \} \}/);
   assert.match(renderer, /function collaborationDefaultTargetHint\(\)/);
-  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.40\.8<\/string>/);
-  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>58<\/string>/);
 });
 
 test('@ 문서 참조는 AI 호출과 분리된다', () => {

@@ -628,6 +628,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
 - (NSString *)sharedContextPathForConversationId:(NSString *)conversationId createDirectory:(BOOL)createDirectory {
     NSString *safeIdentifier = [self safeSharedContextIdentifier:conversationId];
     if (!safeIdentifier.length) return nil;
+    // Electron migration: replace this platform path lookup with an app.getPath("userData") storage adapter.
     NSURL *applicationSupport = [[NSFileManager defaultManager] URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;
     if (!applicationSupport) return nil;
     NSString *directory = [[[[applicationSupport path] stringByAppendingPathComponent:@"Triad"] stringByAppendingPathComponent:@"Shared Context"] copy];

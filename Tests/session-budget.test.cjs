@@ -51,3 +51,19 @@ test('자동 회전은 auto + resume 세션에서만 경계를 넘을 때 수행
   assert.equal(budget.shouldRotate({ sessionPolicy: 'auto', sessionTurnLimit: 2 }, stats, false), false);
   assert.equal(budget.shouldRotate({ sessionPolicy: 'alwaysNew' }, stats, true), false);
 });
+
+test('기존의 측정되지 않은 resume 세션은 auto 정책에서 한 번 새 세션으로 회전한다', () => {
+  const legacy = budget.normalizeStats({
+    codex: { sessionId: 'thread-legacy', turns: 0, sessionInputTokens: 0 },
+    claude: { sessionId: 'session-legacy', turns: 0, sessionInputTokens: 0 }
+  }, { codex: 'thread-legacy', claude: 'session-legacy' });
+  assert.equal(legacy.codex.requiresFreshSession, true);
+  assert.equal(legacy.claude.requiresFreshSession, true);
+  assert.equal(budget.shouldRotate({ sessionPolicy: 'auto' }, legacy.codex, true), true);
+  assert.equal(budget.shouldRotate({ sessionPolicy: 'continue' }, legacy.codex, true), false);
+
+  const fresh = budget.resetAgent(legacy, 'codex', { incrementRotation: true });
+  assert.equal(fresh.codex.requiresFreshSession, false);
+  const measured = budget.recordCompletion(legacy, 'claude', { sessionId: 'session-legacy' });
+  assert.equal(measured.claude.requiresFreshSession, false);
+});

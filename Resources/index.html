@@ -470,7 +470,7 @@
       return {...config,...window.TriadSessionBudget.normalizePolicy(config)};
     }
     function normalizeSessionStats(value=state.sessionStats) {
-      state.sessionStats=window.TriadSessionBudget.normalizeStats(value);
+      state.sessionStats=window.TriadSessionBudget.normalizeStats(value,state.sessions);
       for(const agent of agents){if(state.sessions?.[agent]&&!state.sessionStats[agent].sessionId)state.sessionStats[agent].sessionId=state.sessions[agent];}
       return state.sessionStats;
     }
@@ -993,7 +993,7 @@
         session=null;
       }else if(!isolated&&window.TriadSessionBudget.shouldRotate(config,state.sessionStats[agent],!!session)){
         const stats=state.sessionStats[agent];
-        rotationReason=stats.turns>=config.sessionTurnLimit?`자동 회전 · ${stats.turns}턴`: `자동 회전 · 입력 ${Math.round(stats.sessionInputTokens/1000)}k`;
+        rotationReason=stats.requiresFreshSession?'자동 회전 · 기존 세션 사용량 미측정':stats.turns>=config.sessionTurnLimit?`자동 회전 · ${stats.turns}턴`: `자동 회전 · 입력 ${Math.round(stats.sessionInputTokens/1000)}k`;
         state.sessions[agent]=null;state.sessionStats=window.TriadSessionBudget.resetAgent(state.sessionStats,agent,{incrementRotation:true});session=null;
       }
       if(rotationReason){addTrace(agent,'info','다음 작업 새 세션',rotationReason);save();}
@@ -1210,18 +1210,28 @@
         if(title)active.title=title.slice(0,36)+(title.length>36?'…':'');
       }
       const userMessageId=addMessage('user',original);
-      if(state.collaboration.mode==='independent'){
-        // Do not create the next document run while a prior run is writing to
-        // the same document.  A queued batch creates one fresh run only when
-        // every provider is idle, then launches its selected targets together.
-        if(state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length)enqueueIndependentBatch(routed.targets,routed.prompts,original,userMessageId);
-        else {
-          const independentContext=createIndependentSharedContext(original,routed.targets[0]||state.collaboration.lead);markMessageWorkStarted(userMessageId);
-          routed.targets.forEach(agent=>dispatchAgent(agent,buildIndependentPrompt(agent,routed.prompts[agent],independentContext),{sharedContext:independentContext}));
-        }
-      } else if(state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length)enqueueCollaboration(routed.prompt,original,userMessageId);
-      else {markMessageWorkStarted(userMessageId);startCollaboration(routed.prompt);}
-      setTimeout(()=>{state.forceMessageBottom=false;drainQueues();},0);
+      try {
+        if(state.collaboration.mode==='independent'){
+          // Do not create the next document run while a prior run is writing to
+          // the same document.  A queued batch creates one fresh run only when
+          // every provider is idle, then launches its selected targets together.
+          if(state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length)enqueueIndependentBatch(routed.targets,routed.prompts,original,userMessageId);
+          else {
+            const independentContext=createIndependentSharedContext(original,routed.targets[0]||state.collaboration.lead);
+            if(!independentContext?.board||!independentContext.documentId)throw new Error('공유 문서를 준비하지 못했습니다. 문서 목록을 새로고침한 뒤 다시 시도해주세요.');
+            markMessageWorkStarted(userMessageId);
+            routed.targets.forEach(agent=>dispatchAgent(agent,buildIndependentPrompt(agent,routed.prompts[agent],independentContext),{sharedContext:independentContext}));
+          }
+        } else if(state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length)enqueueCollaboration(routed.prompt,original,userMessageId);
+        else {markMessageWorkStarted(userMessageId);startCollaboration(routed.prompt);}
+      } catch(error) {
+        const detail=error instanceof Error&&error.message?error.message:String(error||'알 수 없는 오류');
+        addTrace('system','error','전송 준비 실패',detail);
+        addMessage('system',`⚠️ 전송을 준비하지 못했습니다. ${detail}`);
+        document.getElementById('routing-error').textContent=detail;
+      } finally {
+        setTimeout(()=>{state.forceMessageBottom=false;drainQueues();},0);
+      }
     }
 
     function parseLine(agent, line) {

@@ -4,8 +4,24 @@
 #import <UserNotifications/UserNotifications.h>
 #import <CoreServices/CoreServices.h>
 #import <sqlite3.h>
+#import <math.h>
 
 static NSString *const kKeychainService = @"kr.co.ocsarpo.triadroom";
+
+// WKWebView maps JavaScript null to NSNull.  Never send keyed subscripts to
+// untrusted nested request values without narrowing them first.
+static NSDictionary *TriadDictionaryOrNil(id value) {
+    return [value isKindOfClass:[NSDictionary class]] ? value : nil;
+}
+
+static NSString *TriadStringOrNil(id value) {
+    return [value isKindOfClass:[NSString class]] ? value : nil;
+}
+
+static NSString *TriadStringOrDefault(id value, NSString *fallback) {
+    NSString *string = TriadStringOrNil(value);
+    return string ?: fallback;
+}
 
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate, UNUserNotificationCenterDelegate>
 @property(nonatomic, strong) NSWindow *window;
@@ -121,6 +137,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     NSMenuItem *editItem = [[NSMenuItem alloc] initWithTitle:@"편집" action:nil keyEquivalent:@""];
     [mainMenu addItem:editItem];
     NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"편집"];
+    [editMenu addItemWithTitle:@"잘라내기" action:@selector(cut:) keyEquivalent:@"x"];
     [editMenu addItemWithTitle:@"복사" action:@selector(copy:) keyEquivalent:@"c"];
     [editMenu addItemWithTitle:@"붙여넣기" action:@selector(paste:) keyEquivalent:@"v"];
     [editMenu addItem:[NSMenuItem separatorItem]];
@@ -177,7 +194,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
       didReceiveScriptMessage:(WKScriptMessage *)message {
     if (![message.body isKindOfClass:[NSDictionary class]]) return;
     NSDictionary *body = (NSDictionary *)message.body;
-    NSString *action = body[@"action"];
+    NSString *action = TriadStringOrNil(body[@"action"]);
     if ([action isEqualToString:@"run"]) {
         [self runAgent:body];
     } else if ([action isEqualToString:@"stop"]) {
@@ -644,11 +661,12 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
 }
 
 - (NSString *)prepareSharedContextForRequest:(NSDictionary *)request agent:(NSString *)agent {
-    NSDictionary *sharedContext = [request[@"sharedContext"] isKindOfClass:[NSDictionary class]] ? request[@"sharedContext"] : nil;
+    if (![request isKindOfClass:[NSDictionary class]]) return nil;
+    NSDictionary *sharedContext = TriadDictionaryOrNil(request[@"sharedContext"]);
     if (!sharedContext) return nil;
-    NSString *conversationId = sharedContext[@"conversationId"];
-    NSString *runId = sharedContext[@"runId"];
-    NSDictionary *board = [sharedContext[@"board"] isKindOfClass:[NSDictionary class]] ? sharedContext[@"board"] : nil;
+    NSString *conversationId = TriadStringOrNil(sharedContext[@"conversationId"]);
+    NSString *runId = TriadStringOrNil(sharedContext[@"runId"]);
+    NSDictionary *board = TriadDictionaryOrNil(sharedContext[@"board"]);
     if (![conversationId isKindOfClass:[NSString class]] || ![runId isKindOfClass:[NSString class]] || runId.length == 0 || !board) return nil;
     NSString *path = [self sharedContextPathForConversationId:conversationId createDirectory:YES];
     if (!path.length) return nil;
@@ -668,9 +686,15 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
 }
 
 - (NSDictionary *)setupBrokerForAgent:(NSString *)agent request:(NSDictionary *)request {
-    if (![request[@"mcpEnabled"] boolValue]) return nil;
-    NSDictionary *agentConfigs = request[@"agentConfigs"];
-    if (![agentConfigs isKindOfClass:[NSDictionary class]] || ![agentConfigs[@"codex"] isKindOfClass:[NSDictionary class]] || ![agentConfigs[@"claude"] isKindOfClass:[NSDictionary class]]) return nil;
+    if (![request isKindOfClass:[NSDictionary class]]) return nil;
+    NSNumber *mcpEnabled = [request[@"mcpEnabled"] isKindOfClass:[NSNumber class]] ? request[@"mcpEnabled"] : nil;
+    if (!mcpEnabled.boolValue) return nil;
+    NSDictionary *agentConfigs = TriadDictionaryOrNil(request[@"agentConfigs"]);
+    NSDictionary *codexConfig = TriadDictionaryOrNil(agentConfigs[@"codex"]);
+    NSDictionary *claudeConfig = TriadDictionaryOrNil(agentConfigs[@"claude"]);
+    if (!agentConfigs || !codexConfig || !claudeConfig) return nil;
+    NSDictionary *collaboration = TriadDictionaryOrNil(request[@"collaboration"]) ?: @{};
+    NSDictionary *sharedContext = TriadDictionaryOrNil(request[@"sharedContext"]);
     NSString *nodePath = [self firstExecutable:@[
         @"/opt/homebrew/bin/node", @"/usr/local/bin/node",
         [NSHomeDirectory() stringByAppendingPathComponent:@".volta/bin/node"],
@@ -686,15 +710,22 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     NSString *configPath = [base stringByAppendingString:@".json"];
     NSString *statePath = [base stringByAppendingString:@".state.json"];
     NSString *eventsPath = [base stringByAppendingString:@".events.jsonl"];
-    NSInteger callLimit = [request[@"collaboration"][@"rounds"] integerValue];
+    NSNumber *configuredCallLimit = [collaboration[@"rounds"] isKindOfClass:[NSNumber class]] ? collaboration[@"rounds"] : nil;
+    NSInteger callLimit = configuredCallLimit.integerValue;
     if (callLimit < 1) callLimit = 6;
     if (callLimit > 10) callLimit = 10;
+    NSInteger helperTimeoutMinutes = 5;
+    id configuredTimeout = collaboration[@"helperTimeoutMinutes"];
+    if ([configuredTimeout isKindOfClass:[NSNumber class]]) {
+        double minutes = [configuredTimeout doubleValue];
+        if (isfinite(minutes) && floor(minutes) == minutes && minutes >= 1 && minutes <= 120) helperTimeoutMinutes = (NSInteger)minutes;
+    }
     NSString *sharedContextPath = [self prepareSharedContextForRequest:request agent:agent];
-    NSString *collaborationMode = [request[@"collaboration"][@"mode"] isKindOfClass:[NSString class]] ? request[@"collaboration"][@"mode"] : @"independent";
-    NSString *owner = [request[@"sharedContext"][@"owner"] isKindOfClass:[NSString class]] ? request[@"sharedContext"][@"owner"] : agent;
+    NSString *collaborationMode = TriadStringOrDefault(collaboration[@"mode"], @"independent");
+    NSString *owner = TriadStringOrDefault(sharedContext[@"owner"], agent);
     NSMutableDictionary *payload = [@{
         @"nodePath": nodePath, @"brokerPath": brokerPath, @"statePath": statePath, @"eventsPath": eventsPath,
-        @"callLimit": @(callLimit), @"maxDepth": @2, @"timeoutMs": @300000, @"agents": agentConfigs,
+        @"callLimit": @(callLimit), @"maxDepth": @2, @"timeoutMs": @(helperTimeoutMinutes * 60 * 1000), @"helperTimeoutMinutes": @(helperTimeoutMinutes), @"agents": agentConfigs,
         @"collaborationMode": collaborationMode, @"allowAskAgent": @([collaborationMode isEqualToString:@"agent"]), @"owner": owner
     } mutableCopy];
     if (sharedContextPath.length) payload[@"sharedContextPath"] = sharedContextPath;
@@ -772,10 +803,11 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
 }
 
 - (void)runAgent:(NSDictionary *)request {
-    NSString *agent = request[@"agent"];
-    NSString *prompt = request[@"prompt"];
-    NSDictionary *config = request[@"config"];
-    NSString *session = request[@"session"];
+    if (![request isKindOfClass:[NSDictionary class]]) return;
+    NSString *agent = TriadStringOrNil(request[@"agent"]);
+    NSString *prompt = TriadStringOrNil(request[@"prompt"]);
+    NSDictionary *config = TriadDictionaryOrNil(request[@"config"]);
+    NSString *session = TriadStringOrNil(request[@"session"]);
 
     if (![agent isKindOfClass:[NSString class]] ||
         ![prompt isKindOfClass:[NSString class]] ||
@@ -786,7 +818,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
         return;
     }
 
-    NSString *executable = config[@"executablePath"];
+    NSString *executable = TriadStringOrNil(config[@"executablePath"]);
     if (![[NSFileManager defaultManager] isExecutableFileAtPath:executable]) {
         [self emit:@{
             @"type": @"error", @"agent": agent,
@@ -797,19 +829,21 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
 
     NSTask *task = [[NSTask alloc] init];
     task.executableURL = [NSURL fileURLWithPath:executable];
-    NSString *workspace = config[@"workspacePath"] ?: NSHomeDirectory();
+    NSString *workspace = TriadStringOrDefault(config[@"workspacePath"], NSHomeDirectory());
     task.currentDirectoryURL = [NSURL fileURLWithPath:workspace isDirectory:YES];
     [self prepareSharedContextForRequest:request agent:agent];
     NSDictionary *broker = [self setupBrokerForAgent:agent request:request];
     NSArray *brokerArgs = broker ? @[broker[@"brokerPath"], @"--config", broker[@"configPath"], @"--caller", agent, @"--depth", @"0"] : nil;
 
     NSMutableArray<NSString *> *arguments = [NSMutableArray array];
-    NSString *model = config[@"model"] ?: @"";
-    NSString *effort = config[@"effort"] ?: @"medium";
-    NSString *speed = config[@"speedMode"] ?: @"standard";
-    NSString *permission = config[@"permissionMode"] ?: @"workspace-write";
-    BOOL networkAccess = [config[@"networkAccess"] boolValue];
-    BOOL allowLocalBinding = [config[@"allowLocalBinding"] boolValue];
+    NSString *model = TriadStringOrDefault(config[@"model"], @"");
+    NSString *effort = TriadStringOrDefault(config[@"effort"], @"medium");
+    NSString *speed = TriadStringOrDefault(config[@"speedMode"], @"standard");
+    NSString *permission = TriadStringOrDefault(config[@"permissionMode"], @"workspace-write");
+    NSNumber *networkAccessValue = [config[@"networkAccess"] isKindOfClass:[NSNumber class]] ? config[@"networkAccess"] : nil;
+    NSNumber *allowLocalBindingValue = [config[@"allowLocalBinding"] isKindOfClass:[NSNumber class]] ? config[@"allowLocalBinding"] : nil;
+    BOOL networkAccess = networkAccessValue.boolValue;
+    BOOL allowLocalBinding = allowLocalBindingValue.boolValue;
     NSArray<NSString *> *writableRoots = [self writableRootsFromConfig:config];
     NSString *writableRootsConfig = [self writableRootsCodexConfig:config];
 
@@ -905,10 +939,11 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     environment[@"TERM"] = @"dumb";
     environment[@"NO_COLOR"] = @"1";
 
-    NSDictionary *allConfigs = [request[@"agentConfigs"] isKindOfClass:[NSDictionary class]] ? request[@"agentConfigs"] : @{ agent: config };
+    NSDictionary *allConfigs = TriadDictionaryOrNil(request[@"agentConfigs"]) ?: @{ agent: config };
     for (NSString *configuredAgent in @[@"codex", @"claude"]) {
-        NSDictionary *agentConfig = allConfigs[configuredAgent];
-        if (![agentConfig[@"authMode"] isEqualToString:@"apiKey"]) continue;
+        NSDictionary *agentConfig = TriadDictionaryOrNil(allConfigs[configuredAgent]);
+        if (!agentConfig) continue;
+        if (![TriadStringOrNil(agentConfig[@"authMode"]) isEqualToString:@"apiKey"]) continue;
         NSString *token = [self tokenForAgent:configuredAgent];
         if (token.length == 0 && [configuredAgent isEqualToString:agent]) {
             [self cleanupBrokerForAgent:agent];

@@ -8,7 +8,7 @@ vm.runInNewContext(
   fs.readFileSync(path.join(__dirname, '../Resources/collaboration.js'), 'utf8'),
   context
 );
-const { tasksFor, rolesFor, harnessTasks, shouldRunResolution, boardStageError, promptEnvelope, extractHandoff } = context.TriadCollaboration;
+const { tasksFor, rolesFor, harnessTasks, shouldRunResolution, shouldEnableMcp, boardStageError, promptEnvelope, extractHandoff } = context.TriadCollaboration;
 const plain = value => JSON.parse(JSON.stringify(value));
 
 test('상호 토론은 두 AI를 라운드마다 교대시킨다', () => {
@@ -35,6 +35,20 @@ test('교차 검토는 초안, 검토, 수정 순서로 진행한다', () => {
 
 test('독립 실행에는 릴레이 작업이 없다', () => {
   assert.deepEqual(plain(tasksFor({ mode: 'independent', lead: 'codex', rounds: 3 })), []);
+});
+
+test('독립 실행 또는 orchestration 부재에서는 MCP 브로커를 켜지 않는다', () => {
+  assert.equal(shouldEnableMcp(null), false);
+  assert.equal(shouldEnableMcp(undefined), false);
+  assert.equal(shouldEnableMcp({ mode: 'independent' }), false);
+  assert.equal(shouldEnableMcp({ mode: 'review' }), true);
+  assert.equal(shouldEnableMcp({ mode: 'agent' }), true);
+});
+
+test('렌더러의 실행과 재시도 요청은 명시적 MCP predicate를 사용한다', () => {
+  const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html'), 'utf8');
+  assert.doesNotMatch(renderer, /mcpEnabled:state\.orchestration\?\.mode!==['"]independent['"]/);
+  assert.equal((renderer.match(/mcpEnabled:window\.TriadCollaboration\.shouldEnableMcp\(state\.orchestration\)/g) || []).length, 2);
 });
 
 test('공유 보드 하네스는 시작 AI와 무관하게 owner → reviewer → owner 순서다', () => {

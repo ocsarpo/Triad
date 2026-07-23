@@ -179,6 +179,7 @@
     .collab-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
     .collab-controls label { color: var(--muted); font-size: 10px; }
     .collab-controls select { height: 27px; padding: 2px 25px 2px 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); font-size: 10px; }
+    .collab-controls input[type="number"] { width: 48px; height: 27px; padding: 2px 5px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); font-size: 10px; }
     .collab-controls [hidden] { display: none; }
     .collab-modes { display: inline-flex; min-width: 0; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); }
     .collab-mode-btn { height: 23px; padding: 2px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); white-space: nowrap; font-size: 10px; }
@@ -354,6 +355,7 @@
           <label for="collab-lead" id="collab-lead-label">첫 발언</label>
           <select id="collab-lead"><option value="codex">Codex</option><option value="claude">Claude</option></select>
           <span id="collab-rounds-wrap"><label for="collab-rounds" id="collab-rounds-label">라운드</label> <select id="collab-rounds"></select></span>
+          <span id="collab-helper-timeout-wrap"><label for="collab-helper-timeout">보조 AI 제한(분)</label> <input id="collab-helper-timeout" type="number" min="1" max="120" step="1" inputmode="numeric" aria-label="보조 AI 응답 제한 시간(분)"></span>
           <span id="collab-finalizer-wrap"><label for="collab-finalizer">최종 종합</label> <select id="collab-finalizer"><option value="none">없음</option><option value="codex">Codex</option><option value="claude" selected>Claude</option></select></span>
           <span class="collab-state" id="collab-state">각 AI가 독립적으로 응답</span>
         </div>
@@ -413,7 +415,7 @@
       traces: JSON.parse(localStorage.getItem('triad.traces') || '[]'), traceFilter:'all',
       conversations: [], activeConversationId: localStorage.getItem('triad.activeConversationId'),
       storageReady: false, saveTimer: null, conversationSearch: '',
-      collaboration: {mode:'independent',lead:'codex',rounds:6,finalizer:'claude'}, orchestration:null, sharedContext:null,
+      collaboration: {mode:'independent',lead:'codex',rounds:6,finalizer:'claude',helperTimeoutMinutes:5}, orchestration:null, sharedContext:null,
       queue: [],
       usage: JSON.parse(localStorage.getItem('triad.usage')||'{"codex":{"windows":[]},"claude":{"windows":[]}}'), usageRefreshing:false, usageTimer:null, lastUsageRefresh:0,
       forceMessageBottom:false,routingPreviewOpen:false,
@@ -437,6 +439,15 @@
     const post = payload => window.webkit?.messageHandlers?.triad?.postMessage(payload);
     const id = () => crypto.randomUUID();
     const clone = value => JSON.parse(JSON.stringify(value));
+    function helperTimeoutMinutes(value) {
+      const minutes=Number(value);
+      return Number.isInteger(minutes)&&minutes>=1&&minutes<=120?minutes:5;
+    }
+    function normalizeCollaboration(value) {
+      const collaboration={mode:'independent',lead:'codex',rounds:6,finalizer:'claude',...(value||{})};
+      collaboration.helperTimeoutMinutes=helperTimeoutMinutes(collaboration.helperTimeoutMinutes);
+      return collaboration;
+    }
     function conversationSnapshot() {
       const existing=state.conversations.find(item=>item.id===state.activeConversationId);
       const now=Date.now();
@@ -471,7 +482,7 @@
       state.activeConversationId=conversation.id;
       state.messages=clone(conversation.messages||[]);
       state.settings=clone(conversation.settings||state.settings);
-      state.collaboration=clone(conversation.collaboration||{mode:'independent',lead:'codex',rounds:6,finalizer:'claude'});
+      state.collaboration=normalizeCollaboration(conversation.collaboration);
       state.sessions=clone(conversation.sessions||{codex:null,claude:null});
       state.traces=clone(conversation.traces||[]);
       state.sharedContext=clone(conversation.sharedContext||null);
@@ -855,7 +866,7 @@
       const config=state.settings[agent];
       const session=isolated?null:state.sessions[agent];
       addTrace(agent,'info','명령 전달',{model:config.model,effort:config.effort,speed:config.speedMode,workspace:config.workspacePath,writableRoots:config.writableRoots||'',networkAccess:!!config.networkAccess,allowLocalBinding:!!config.allowLocalBinding,session:session?'resume':'new',isolated,mode:state.orchestration?.mode||'independent'});
-      post({action:'run',agent,prompt,config:state.settings[agent],agentConfigs:state.settings,collaboration:state.collaboration,mcpEnabled:state.orchestration?.mode!=='independent',sharedContext:state.orchestration?.sharedContext||null,session});return true;
+      post({action:'run',agent,prompt,config:state.settings[agent],agentConfigs:state.settings,collaboration:state.collaboration,mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration),sharedContext:state.orchestration?.sharedContext||null,session});return true;
     }
     function markMessageWorkStarted(messageId) {
       const message=state.messages.find(item=>item.id===messageId);if(message)message.workStarted=true;
@@ -1142,7 +1153,7 @@
       const pending=state.pending[agent];
       if (!pending) { finishAgent(agent,1); return; }
       addTrace(agent,'info','저장된 세션을 찾지 못해 새 세션으로 자동 재시도');
-      post({action:'run',agent,prompt:pending.prompt,config:state.settings[agent],agentConfigs:state.settings,collaboration:state.collaboration,mcpEnabled:state.orchestration?.mode!=='independent',sharedContext:state.orchestration?.sharedContext||null,session:null});
+      post({action:'run',agent,prompt:pending.prompt,config:state.settings[agent],agentConfigs:state.settings,collaboration:state.collaboration,mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration),sharedContext:state.orchestration?.sharedContext||null,session:null});
     }
 
     window.nativeEvent = event => {
@@ -1155,7 +1166,7 @@
         if(loaded.length){
           const selected=loaded.find(item=>item.id===state.activeConversationId)||loaded[0];
           state.activeConversationId=selected.id;state.messages=clone(selected.messages||[]);
-          state.settings=clone(selected.settings||defaults(event.home));state.collaboration=clone(selected.collaboration||{mode:'independent',lead:'codex',rounds:6,finalizer:'claude'});state.sessions=clone(selected.sessions||{codex:null,claude:null});state.traces=clone(selected.traces||[]);state.sharedContext=clone(selected.sharedContext||null);
+          state.settings=clone(selected.settings||defaults(event.home));state.collaboration=normalizeCollaboration(selected.collaboration);state.sessions=clone(selected.sessions||{codex:null,claude:null});state.traces=clone(selected.traces||[]);state.sharedContext=clone(selected.sharedContext||null);
         }else{
           if(!state.settings)state.settings=defaults(event.home);
           const now=Date.now();const migrated={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:clone(state.messages),settings:clone(state.settings),collaboration:clone(state.collaboration),sessions:clone(state.sessions),traces:clone(state.traces),sharedContext:clone(state.sharedContext)};
@@ -1238,12 +1249,14 @@
       const c=state.collaboration;const modeButtons=[...document.querySelectorAll('[data-collab-mode]')];if(!modeButtons.length)return;
       modeButtons.forEach(button=>{const active=button.dataset.collabMode===c.mode;button.classList.toggle('active',active);button.setAttribute('aria-checked',String(active));});
       const independent=c.mode==='independent';const review=c.mode==='review';const agentMode=c.mode==='agent';
+      c.helperTimeoutMinutes=helperTimeoutMinutes(c.helperTimeoutMinutes);
       const roundSelect=document.getElementById('collab-rounds');const roundValues=agentMode?[2,4,6,8,10]:[1,2,3,4,5];
       if(!roundValues.includes(Number(c.rounds)))c.rounds=agentMode?6:Math.min(5,Math.max(1,Number(c.rounds)||3));
       roundSelect.innerHTML=roundValues.map(value=>`<option value="${value}" ${value===Number(c.rounds)?'selected':''}>${value}</option>`).join('');
       document.getElementById('collab-lead').value=c.lead;document.getElementById('collab-finalizer').value=c.finalizer;
       document.getElementById('collab-lead-label').hidden=independent;document.getElementById('collab-lead').hidden=independent;
       document.getElementById('collab-rounds-wrap').hidden=independent;document.getElementById('collab-finalizer-wrap').hidden=independent||review;
+      document.getElementById('collab-helper-timeout-wrap').hidden=!agentMode;document.getElementById('collab-helper-timeout').value=String(c.helperTimeoutMinutes);
       document.getElementById('collab-finalizer-wrap').hidden=independent||review||agentMode;
       document.getElementById('collab-lead-label').textContent=agentMode?'작업 시작':review?'초안 작성':'첫 발언';
       document.getElementById('collab-rounds-label').textContent=agentMode?'AI 간 호출 한도':'라운드';
@@ -1254,7 +1267,7 @@
       document.getElementById('block-template').disabled=!independent;
       document.getElementById('compose-hint').textContent=independent?'Enter 전송 · 작업 중 추가 전송은 AI별 순차 대기 · 태그가 없으면 둘 다':agentMode?'#codex·#claude로 이번 작업의 시작 AI 지정 · 태그가 없으면 선택값 사용':'Enter 전송 · 작업 중 추가 전송은 순차 대기 · 협업 순서에 따라 자동 중계';
       const controlsLocked=!!state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length>0;
-      document.querySelectorAll('.collab-controls select, .collab-mode-btn').forEach(control=>control.disabled=controlsLocked);
+      document.querySelectorAll('.collab-controls select, .collab-controls input, .collab-mode-btn').forEach(control=>control.disabled=controlsLocked);
       requestAnimationFrame(updateScrollButton);
       updateRoutingPreview();
     }
@@ -1491,6 +1504,13 @@
       state.collaboration.rounds=Number(document.getElementById('collab-rounds').value);
       state.collaboration.finalizer=document.getElementById('collab-finalizer').value;save();renderCollaboration();
     }));
+    const saveHelperTimeout=event=>{
+      state.collaboration.helperTimeoutMinutes=helperTimeoutMinutes(event.target.value);
+      event.target.value=String(state.collaboration.helperTimeoutMinutes);
+      save();
+    };
+    document.getElementById('collab-helper-timeout').addEventListener('change',saveHelperTimeout);
+    document.getElementById('collab-helper-timeout').addEventListener('blur',saveHelperTimeout);
     document.querySelectorAll('[data-collab-mode]').forEach(button=>button.addEventListener('click',()=>{
       if(button.disabled)return;state.collaboration.mode=button.dataset.collabMode;if(state.collaboration.mode==='agent'&&![2,4,6,8,10].includes(Number(state.collaboration.rounds)))state.collaboration.rounds=6;save();renderCollaboration();
     }));

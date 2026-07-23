@@ -51,6 +51,13 @@
     return verdict === 'disagree' || verdict === 'conditional';
   }
 
+  // A missing orchestration is the normal independent-run state.  Optional
+  // chaining with `!==` turns that absence into true, so keep this predicate
+  // explicit at the native-process boundary.
+  function shouldEnableMcp(orchestration) {
+    return !!orchestration && orchestration.mode !== 'independent';
+  }
+
   function requiredBoardField(task) {
     const kind = typeof task === 'string' ? task : task?.kind;
     return ({ proposal: 'proposal', verdict: 'verdict', decision: 'decision' })[kind] || null;
@@ -104,5 +111,5 @@
     }
   }
 
-  return { tasksFor, rolesFor, harnessTasks, shouldRunResolution, requiredBoardField, boardStageError, promptEnvelope, extractHandoff };
+  return { tasksFor, rolesFor, harnessTasks, shouldRunResolution, shouldEnableMcp, requiredBoardField, boardStageError, promptEnvelope, extractHandoff };
 });

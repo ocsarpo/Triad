@@ -168,16 +168,41 @@ function runHelper(agent, prompt, nextDepth) {
   if (!agentConfig || !agentConfig.executablePath) return Promise.reject(new Error(`${agent} 실행 설정이 없습니다.`));
   const args = agent === 'codex' ? buildCodex(agentConfig, nextDepth) : buildClaude(agentConfig, nextDepth);
   return new Promise((resolve, reject) => {
-    const child = spawn(agentConfig.executablePath, args, { cwd: agentConfig.workspacePath, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    let child;
+    try { child = spawn(agentConfig.executablePath, args, { cwd: agentConfig.workspacePath, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] }); }
+    catch (error) { reject(error); return; }
     activeChildren.add(child);
-    let stdout = ''; let stderr = ''; let settled = false;
-    const timeout = setTimeout(() => { if (!settled) child.kill('SIGTERM'); }, Number(config.timeoutMs) || 300000);
+    let stdout = ''; let stderr = ''; let settled = false; let timedOut = false;
+    const configuredTimeout = Number(config.timeoutMs);
+    const timeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 300000;
+    const configuredMinutes = Number(config.helperTimeoutMinutes);
+    const timeoutMinutes = Number.isInteger(configuredMinutes) && configuredMinutes >= 1 && configuredMinutes <= 120
+      ? configuredMinutes : Math.max(1, Math.round(timeoutMs / 60000));
+    let timeout; let forceKill;
+    const settle = callback => {
+      if (settled) return;
+      settled = true;
+      activeChildren.delete(child);
+      clearTimeout(timeout);
+      clearTimeout(forceKill);
+      callback();
+    };
+    timeout = setTimeout(() => {
+      if (settled) return;
+      timedOut = true;
+      try { child.kill('SIGTERM'); } catch {}
+      forceKill = setTimeout(() => {
+        if (!settled) {
+          try { child.kill('SIGKILL'); } catch {}
+        }
+      }, 10000);
+    }, timeoutMs);
     child.stdout.on('data', chunk => { stdout += chunk.toString(); if (stdout.length > 8_000_000) stdout = stdout.slice(-8_000_000); });
     child.stderr.on('data', chunk => { stderr += chunk.toString(); if (stderr.length > 500_000) stderr = stderr.slice(-500_000); });
-    child.on('error', error => { settled = true; clearTimeout(timeout); reject(error); });
+    child.on('error', error => settle(() => reject(error)));
     child.on('close', code => {
-      activeChildren.delete(child);
-      settled = true; clearTimeout(timeout);
+      settle(() => {
+      if (timedOut) return reject(new Error(`보조 AI 응답 제한 ${timeoutMinutes}분을 초과해 종료했습니다.`));
       if (code !== 0) return reject(new Error(stderr.trim() || `${agent} 보조 실행 종료 코드 ${code}`));
       let answer = '';
       for (const line of stdout.split(/\r?\n/u)) {
@@ -192,8 +217,9 @@ function runHelper(agent, prompt, nextDepth) {
       answer = answer.trim();
       if (!answer) return reject(new Error(`${agent}가 답변 없이 종료되었습니다.`));
       resolve(answer);
+      });
     });
-    child.stdin.end(prompt);
+    try { child.stdin.end(prompt); } catch (error) { settle(() => reject(error)); }
   });
 }
 

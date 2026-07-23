@@ -91,3 +91,25 @@ test('allowAskAgent가 false면 공유 보드는 유지하고 ask_agent만 숨�
   const disabled=await request(3,'tools/call',{name:'ask_agent',arguments:{question:'검토해줘'}});
   assert.ok(disabled.error);assert.match(disabled.error.message,/지원하지 않는 도구/);
 });
+
+test('보조 AI 시간 제한은 종료 코드 대신 설정된 제한 시간을 오류로 반환한다', async t => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'triad-broker-timeout-test-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const fake=path.join(directory,'slow-claude');
+  fs.writeFileSync(fake,'#!/bin/sh\ntrap \'exit 0\' TERM\ncat >/dev/null\nwhile :; do :; done\n');
+  fs.chmodSync(fake,0o755);
+  const statePath=path.join(directory,'state.json');const eventsPath=path.join(directory,'events.jsonl');const configPath=path.join(directory,'config.json');
+  fs.writeFileSync(statePath,JSON.stringify({used:0,limit:1}));fs.writeFileSync(eventsPath,'');
+  fs.writeFileSync(configPath,JSON.stringify({nodePath:process.execPath,brokerPath:path.join(__dirname,'../Resources/triad-mcp-server.cjs'),statePath,eventsPath,allowAskAgent:true,callLimit:1,maxDepth:2,timeoutMs:40,helperTimeoutMinutes:7,agents:{codex:{},claude:{executablePath:fake,workspacePath:directory,model:'test',effort:'low',permissionMode:'acceptEdits'}}}));
+  const child=spawn(process.execPath,[path.join(__dirname,'../Resources/triad-mcp-server.cjs'),'--config',configPath,'--caller','codex','--depth','0'],{stdio:['pipe','pipe','pipe']});
+  t.after(()=>child.kill('SIGTERM'));
+  let buffer='';const pending=new Map();
+  child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{buffer+=chunk;const lines=buffer.split(/\r?\n/u);buffer=lines.pop();for(const line of lines){if(!line.trim())continue;const value=JSON.parse(line);pending.get(value.id)?.(value);pending.delete(value.id);}});
+  const request=(id,method,params={})=>new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error(`MCP 응답 시간 초과: ${method}`)),2000);pending.set(id,value=>{clearTimeout(timer);resolve(value);});child.stdin.write(`${JSON.stringify({jsonrpc:'2.0',id,method,params})}\n`);});
+  const result=await request(1,'tools/call',{name:'ask_agent',arguments:{question:'시간 제한 확인'}});
+  assert.equal(result.result.isError,true);
+  assert.match(result.result.content[0].text,/보조 AI 응답 제한 7분을 초과해 종료했습니다/);
+  assert.doesNotMatch(result.result.content[0].text,/종료 코드 143/);
+  const failed=fs.readFileSync(eventsPath,'utf8').trim().split('\n').map(JSON.parse).find(event=>event.eventType==='agent_call_failed');
+  assert.ok(failed);assert.match(failed.error,/7분/);assert.equal(typeof failed.durationMs,'number');
+});

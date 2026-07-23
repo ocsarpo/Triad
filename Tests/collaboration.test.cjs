@@ -62,6 +62,8 @@ test('렌더러의 실행과 재시도 요청은 명시적 MCP predicate와 공�
   assert.match(renderer, /waitForIndependentContribution/);
   assert.match(renderer, /공유 문서 기여 미확인/);
   assert.match(renderer, /const canonical=upsertSharedDocument/);
+  assert.doesNotMatch(renderer, /for\s*\(const document of state\.sharedDocuments\)/);
+  assert.match(renderer, /for\s*\(const sharedDocument of state\.sharedDocuments\)/);
 });
 
 test('공유 보드 프롬프트는 manifest-first이며 독립 실행에 과거 기여를 반복 주입하지 않는다', () => {

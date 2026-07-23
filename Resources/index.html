@@ -807,11 +807,11 @@
       pane.hidden=!state.boardVisible;chat.classList.toggle('board-open',state.boardVisible);if(toggle)toggle.textContent=state.boardVisible?'공유 문서 닫기':'공유 문서';const documentLocked=sharedDocumentsLocked();const newButton=document.getElementById('board-new');if(newButton){newButton.disabled=documentLocked;newButton.title=documentLocked?'AI 작업 또는 대기열이 끝난 뒤 새 문서를 만들 수 있습니다.':'';}
       body.innerHTML='';const board=ensureDocumentBoard(boardFor());const meta=document.getElementById('board-meta');
       const list=document.createElement('nav');list.className='board-list';list.setAttribute('aria-label','공유 문서 목록');
-      for(const document of state.sharedDocuments){
-        const row=document.createElement('button');row.className=`board-document ${documentIdOf(document)===state.activeSharedDocumentId?'active':''}`;row.type='button';row.disabled=documentLocked;row.title=documentLocked?'AI 작업 또는 대기열이 끝난 뒤 문서를 바꿀 수 있습니다.':documentTitleOf(document);
-        const title=document.createElement('strong');title.textContent=documentTitleOf(document);
-        const details=document.createElement('small');details.textContent=`${document.phase||'proposal'} · r${document.revision??0} · ${document.updatedAt?new Date(document.updatedAt).toLocaleDateString('ko-KR',{month:'numeric',day:'numeric'}):'방금'}`;
-        row.append(title,details);row.onclick=()=>setActiveSharedDocument(documentIdOf(document));list.appendChild(row);
+      for(const sharedDocument of state.sharedDocuments){
+        const row=document.createElement('button');row.className=`board-document ${documentIdOf(sharedDocument)===state.activeSharedDocumentId?'active':''}`;row.type='button';row.disabled=documentLocked;row.title=documentLocked?'AI 작업 또는 대기열이 끝난 뒤 문서를 바꿀 수 있습니다.':documentTitleOf(sharedDocument);
+        const title=document.createElement('strong');title.textContent=documentTitleOf(sharedDocument);
+        const details=document.createElement('small');details.textContent=`${sharedDocument.phase||'proposal'} · r${sharedDocument.revision??0} · ${sharedDocument.updatedAt?new Date(sharedDocument.updatedAt).toLocaleDateString('ko-KR',{month:'numeric',day:'numeric'}):'방금'}`;
+        row.append(title,details);row.onclick=()=>setActiveSharedDocument(documentIdOf(sharedDocument));list.appendChild(row);
       }
       if(!state.sharedDocuments.length){const empty=document.createElement('p');empty.className='board-empty';empty.textContent='아직 공유 문서가 없습니다.';list.appendChild(empty);}
       body.appendChild(list);

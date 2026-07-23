@@ -450,6 +450,7 @@
   <script src="queue.js"></script>
   <script src="recent-context.js"></script>
   <script src="run-reference.js"></script>
+  <script src="conversation-order.js"></script>
   <script src="usage.js"></script>
   <script src="session-budget.js"></script>
   <script src="file-search.js"></script>
@@ -648,7 +649,7 @@
     function renderConversations() {
       const root=document.getElementById('conversation-list');if(!root)return;
       const query=state.conversationSearch.trim().toLowerCase();root.innerHTML='';
-      const items=[...state.conversations].sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0)).filter(item=>!query||(item.title||'').toLowerCase().includes(query));
+      const items=window.TriadConversationOrder.sort(state.conversations).filter(item=>!query||(item.title||'').toLowerCase().includes(query));
       for(const item of items){
         const row=document.createElement('div');row.className=`conversation-item ${item.id===state.activeConversationId?'active':''}`;
         row.dataset.conversationId=item.id;
@@ -657,7 +658,7 @@
         const time=document.createElement('span');time.className='conversation-time';
         const running=Object.values(state.pending).some(pending=>pending?.conversationId===item.id)||state.orchestration?.conversationId===item.id;
         const queued=state.queue.some(entry=>entry.conversationId===item.id);
-        time.textContent=running?'실행 중':queued?'대기 중':conversationTime(item.updatedAt||item.createdAt);
+        time.textContent=running?'실행 중':queued?'대기 중':conversationTime(window.TriadConversationOrder.activityAt(item));
         if(running||queued)time.title=running?'AI가 이 대화에서 작업 중입니다.':'이 대화의 작업이 전역 순차 대기열에 있습니다.';
         main.append(title,time);
         const actions=document.createElement('div');actions.className='conversation-actions';
@@ -687,7 +688,7 @@
       if(button&&!button.classList.contains('confirm-delete')){button.classList.add('confirm-delete');button.textContent='삭제?';button.title='한 번 더 누르면 삭제';setTimeout(()=>{if(button.isConnected){button.classList.remove('confirm-delete');button.textContent='×';button.title='삭제';}},2500);return;}
       state.conversations=state.conversations.filter(item=>item.id!==conversationId);post({action:'deleteConversation',id:conversationId});
       if(conversationId===state.activeConversationId){
-        const next=[...state.conversations].sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0))[0];
+        const next=window.TriadConversationOrder.sort(state.conversations)[0];
         if(next)loadConversation(next);else {state.activeConversationId=null;newConversation(true);}
       }else renderConversations();
     }

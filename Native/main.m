@@ -84,6 +84,7 @@ static NSString *const TriadEmptyTreeObject = @"4b825dc642cb6eb9a060e54bf8d69288
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSTask *> *tasks;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *taskMetadata;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSTask *> *authTasks;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSTask *> *brokerEventTasks;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *brokerArtifacts;
@@ -95,6 +96,7 @@ static NSString *const TriadEmptyTreeObject = @"4b825dc642cb6eb9a060e54bf8d69288
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     self.tasks = [NSMutableDictionary dictionary];
+    self.taskMetadata = [NSMutableDictionary dictionary];
     self.authTasks = [NSMutableDictionary dictionary];
     self.brokerEventTasks = [NSMutableDictionary dictionary];
     self.brokerArtifacts = [NSMutableDictionary dictionary];
@@ -255,7 +257,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     if ([action isEqualToString:@"run"]) {
         [self runAgent:body];
     } else if ([action isEqualToString:@"stop"]) {
-        [self stopAgent:body[@"agent"]];
+        [self stopAgent:body[@"agent"] slotId:body[@"slotId"] conversationId:body[@"conversationId"] runId:body[@"runId"]];
     } else if ([action isEqualToString:@"chooseDirectory"]) {
         [self chooseDirectoryForAgent:body[@"agent"]];
     } else if ([action isEqualToString:@"chooseFiles"]) {
@@ -285,11 +287,11 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     } else if ([action isEqualToString:@"authAccount"]) {
         [self runAuthOperation:body[@"operation"] agent:body[@"agent"] config:body[@"config"]];
     } else if ([action isEqualToString:@"projectDiff"]) {
-        [self loadProjectDiff:body[@"workspace"] agent:body[@"agent"]];
+        [self loadProjectDiff:body[@"workspace"] agent:body[@"agent"] conversationId:body[@"conversationId"]];
     } else if ([action isEqualToString:@"gitBranch"]) {
-        [self loadGitBranch:body[@"workspace"] agent:body[@"agent"]];
+        [self loadGitBranch:body[@"workspace"] agent:body[@"agent"] conversationId:body[@"conversationId"]];
     } else if ([action isEqualToString:@"projectFiles"]) {
-        [self loadProjectFiles:body[@"workspace"] agent:body[@"agent"]];
+        [self loadProjectFiles:body[@"workspace"] agent:body[@"agent"] conversationId:body[@"conversationId"]];
     } else if ([action isEqualToString:@"checkUpdate"]) {
         [self checkForUpdates];
     }
@@ -310,13 +312,14 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     }] resume];
 }
 
-- (void)loadProjectFiles:(NSString *)workspace agent:(NSString *)agent {
+- (void)loadProjectFiles:(NSString *)workspace agent:(NSString *)agent conversationId:(NSString *)conversationId {
     if (![workspace isKindOfClass:[NSString class]] || workspace.length == 0 || ![agent isKindOfClass:[NSString class]]) return;
+    NSString *sourceConversationId = TriadStringOrNil(conversationId) ?: @"";
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         NSFileManager *manager = NSFileManager.defaultManager;
         BOOL isDirectory = NO;
         if (![manager fileExistsAtPath:workspace isDirectory:&isDirectory] || !isDirectory) {
-            dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"projectFiles", @"agent": agent, @"workspace": workspace, @"files": @[], @"error": @"작업 폴더를 찾을 수 없습니다." }]; });
+            dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"projectFiles", @"agent": agent, @"conversationId": sourceConversationId, @"workspace": workspace, @"files": @[], @"error": @"작업 폴더를 찾을 수 없습니다." }]; });
             return;
         }
         NSMutableArray *files = [NSMutableArray array];
@@ -353,16 +356,17 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
                 if (files.count >= 20000) { truncated = YES; break; }
             }
         }
-        dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"projectFiles", @"agent": agent, @"workspace": root ?: workspace, @"files": files, @"truncated": @(truncated), @"error": @"" }]; });
+        dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"projectFiles", @"agent": agent, @"conversationId": sourceConversationId, @"workspace": root ?: workspace, @"files": files, @"truncated": @(truncated), @"error": @"" }]; });
     });
 }
 
-- (void)loadGitBranch:(NSString *)workspace agent:(NSString *)agent {
+- (void)loadGitBranch:(NSString *)workspace agent:(NSString *)agent conversationId:(NSString *)conversationId {
     if (![workspace isKindOfClass:[NSString class]] || workspace.length == 0 || ![agent isKindOfClass:[NSString class]]) return;
+    NSString *sourceConversationId = TriadStringOrNil(conversationId) ?: @"";
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         NSDictionary *root = [self runGit:@[@"rev-parse", @"--show-toplevel"] workspace:workspace];
         if ([root[@"code"] intValue] != 0) {
-            dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"branchResult", @"agent": agent, @"workspace": workspace, @"kind": @"none", @"label": @"Git 저장소 아님" }]; });
+            dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"branchResult", @"agent": agent, @"conversationId": sourceConversationId, @"workspace": workspace, @"kind": @"none", @"label": @"Git 저장소 아님" }]; });
             return;
         }
         NSDictionary *branch = [self runGit:@[@"branch", @"--show-current"] workspace:workspace];
@@ -374,7 +378,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
             name = name.length ? [NSString stringWithFormat:@"detached · %@", name] : @"브랜치 확인 불가";
             kind = @"detached";
         }
-        dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"branchResult", @"agent": agent, @"workspace": workspace, @"kind": kind, @"label": name }]; });
+        dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"branchResult", @"agent": agent, @"conversationId": sourceConversationId, @"workspace": workspace, @"kind": kind, @"label": name }]; });
     });
 }
 
@@ -397,19 +401,20 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
               @"error": [[NSString alloc] initWithData:errorData encoding:NSUTF8StringEncoding] ?: @"" };
 }
 
-- (void)loadProjectDiff:(NSString *)workspace agent:(NSString *)agent {
+- (void)loadProjectDiff:(NSString *)workspace agent:(NSString *)agent conversationId:(NSString *)conversationId {
     if (![workspace isKindOfClass:[NSString class]] || workspace.length == 0) return;
     NSString *sourceAgent = [agent isKindOfClass:[NSString class]] ? agent : @"codex";
+    NSString *sourceConversationId = TriadStringOrNil(conversationId) ?: @"";
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSDictionary *check = [self runGit:@[@"rev-parse", @"--is-inside-work-tree"] workspace:workspace];
         if ([check[@"code"] intValue] != 0) {
-            dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"diffResult", @"agent": sourceAgent, @"workspace": workspace, @"text": @"", @"error": @"선택한 작업 폴더가 Git 저장소가 아닙니다." }]; });
+            dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"diffResult", @"agent": sourceAgent, @"conversationId": sourceConversationId, @"workspace": workspace, @"text": @"", @"error": @"선택한 작업 폴더가 Git 저장소가 아닙니다." }]; });
             return;
         }
         NSDictionary *rootResult = [self runGit:@[@"rev-parse", @"--show-toplevel"] workspace:workspace];
         NSString *root = [rootResult[@"output"] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
         if ([rootResult[@"code"] intValue] != 0 || !root.length) {
-            dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"diffResult", @"agent": sourceAgent, @"workspace": workspace, @"text": @"", @"error": @"Git 저장소 루트를 찾을 수 없습니다." }]; });
+            dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"diffResult", @"agent": sourceAgent, @"conversationId": sourceConversationId, @"workspace": workspace, @"text": @"", @"error": @"Git 저장소 루트를 찾을 수 없습니다." }]; });
             return;
         }
         NSString *pathspec = TriadWorkspacePathspec(workspace, root);
@@ -475,7 +480,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
             [diff appendString:newFileDiff];
             included++;
         }
-        dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"diffResult", @"agent": sourceAgent, @"workspace": workspace, @"text": diff, @"truncated": @(truncated), @"error": @"" }]; });
+        dispatch_async(dispatch_get_main_queue(), ^{ [self emit:@{ @"type": @"diffResult", @"agent": sourceAgent, @"conversationId": sourceConversationId, @"workspace": workspace, @"text": diff, @"truncated": @(truncated), @"error": @"" }]; });
     });
 }
 
@@ -927,7 +932,27 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     return path;
 }
 
-- (NSDictionary *)setupBrokerForAgent:(NSString *)agent request:(NSDictionary *)request {
+- (NSString *)slotIdForRequest:(NSDictionary *)request agent:(NSString *)agent conversationId:(NSString *)conversationId runId:(NSString *)runId {
+    NSString *slotId = TriadStringOrNil(request[@"slotId"]);
+    if (slotId.length) return slotId;
+    // Legacy renderers did not send a slot ID.  Keep their single-agent
+    // behavior while making a conversation/run-qualified request distinct.
+    if (conversationId.length || runId.length) {
+        return [NSString stringWithFormat:@"legacy:%@:%@:%@", conversationId ?: @"", agent ?: @"", runId ?: @""];
+    }
+    return [NSString stringWithFormat:@"legacy-agent:%@", agent ?: @""];
+}
+
+- (NSDictionary *)runMetadataForAgent:(NSString *)agent conversationId:(NSString *)conversationId slotId:(NSString *)slotId runId:(NSString *)runId {
+    return @{
+        @"agent": agent ?: @"",
+        @"conversationId": conversationId ?: @"",
+        @"slotId": slotId ?: @"",
+        @"runId": runId ?: @""
+    };
+}
+
+- (NSDictionary *)setupBrokerForAgent:(NSString *)agent slotId:(NSString *)slotId metadata:(NSDictionary *)metadata request:(NSDictionary *)request {
     if (![request isKindOfClass:[NSDictionary class]]) return nil;
     NSNumber *mcpEnabled = [request[@"mcpEnabled"] isKindOfClass:[NSNumber class]] ? request[@"mcpEnabled"] : nil;
     if (!mcpEnabled.boolValue) return nil;
@@ -944,7 +969,8 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     ]];
     NSString *brokerPath = [[NSBundle mainBundle] pathForResource:@"triad-mcp-server" ofType:@"cjs"];
     if (!nodePath.length || !brokerPath.length) {
-        [self emit:@{ @"type": @"brokerWarning", @"agent": agent, @"message": @"AI 간 호출 도구를 시작할 Node.js 또는 브로커 파일을 찾지 못했습니다. 기존 인계 방식으로 진행합니다." }];
+        NSMutableDictionary *warning = [metadata mutableCopy];warning[@"type"] = @"brokerWarning";warning[@"message"] = @"AI 간 호출 도구를 시작할 Node.js 또는 브로커 파일을 찾지 못했습니다. 기존 인계 방식으로 진행합니다.";
+        [self emit:warning];
         return nil;
     }
     NSString *identifier = NSUUID.UUID.UUIDString.lowercaseString;
@@ -981,13 +1007,16 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     [manager setAttributes:permissions ofItemAtPath:configPath error:nil];
     [manager setAttributes:permissions ofItemAtPath:statePath error:nil];
     [manager setAttributes:permissions ofItemAtPath:eventsPath error:nil];
-    NSDictionary *artifacts = @{ @"configPath": configPath, @"statePath": statePath, @"eventsPath": eventsPath, @"nodePath": nodePath, @"brokerPath": brokerPath };
-    self.brokerArtifacts[agent] = artifacts;
-    [self startBrokerEventsForAgent:agent artifacts:artifacts];
+    NSDictionary *artifacts = @{ @"configPath": configPath, @"statePath": statePath, @"eventsPath": eventsPath, @"nodePath": nodePath, @"brokerPath": brokerPath, @"metadata": metadata ?: @{} };
+    // A reused legacy slot can only replace a broker after its previous task
+    // has gone away.  Clean that old watcher before installing the new one.
+    [self cleanupBrokerForSlotId:slotId expectedArtifacts:nil];
+    self.brokerArtifacts[slotId] = artifacts;
+    [self startBrokerEventsForAgent:agent slotId:slotId metadata:metadata artifacts:artifacts];
     return artifacts;
 }
 
-- (void)startBrokerEventsForAgent:(NSString *)agent artifacts:(NSDictionary *)artifacts {
+- (void)startBrokerEventsForAgent:(NSString *)agent slotId:(NSString *)slotId metadata:(NSDictionary *)metadata artifacts:(NSDictionary *)artifacts {
     NSTask *tail = [[NSTask alloc] init];
     tail.executableURL = [NSURL fileURLWithPath:@"/usr/bin/tail"];
     tail.arguments = @[@"-n", @"0", @"-F", artifacts[@"eventsPath"]];
@@ -1008,20 +1037,26 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
                 NSDictionary *event = lineData.length ? [NSJSONSerialization JSONObjectWithData:lineData options:0 error:nil] : nil;
                 if ([event isKindOfClass:[NSDictionary class]]) {
                     NSMutableDictionary *message = [event mutableCopy];message[@"type"] = @"brokerEvent";message[@"rootAgent"] = agent;
+                    [message addEntriesFromDictionary:metadata ?: @{}];
                     [weakSelf emit:message];
                 }
             }
         }
     };
     NSError *error = nil;
-    if ([tail launchAndReturnError:&error]) self.brokerEventTasks[agent] = tail;
-    else [self emit:@{ @"type": @"brokerWarning", @"agent": agent, @"message": error.localizedDescription ?: @"AI 호출 이벤트 감시를 시작하지 못했습니다." }];
+    if ([tail launchAndReturnError:&error]) self.brokerEventTasks[slotId] = tail;
+    else {
+        NSMutableDictionary *warning = [metadata mutableCopy];warning[@"type"] = @"brokerWarning";warning[@"message"] = error.localizedDescription ?: @"AI 호출 이벤트 감시를 시작하지 못했습니다.";
+        [self emit:warning];
+    }
 }
 
-- (void)cleanupBrokerForAgent:(NSString *)agent {
-    NSTask *tail = self.brokerEventTasks[agent];if (tail.isRunning) [tail terminate];
-    [self.brokerEventTasks removeObjectForKey:agent];
-    NSDictionary *artifacts = self.brokerArtifacts[agent];[self.brokerArtifacts removeObjectForKey:agent];
+- (void)cleanupBrokerForSlotId:(NSString *)slotId expectedArtifacts:(NSDictionary *)expectedArtifacts {
+    NSDictionary *artifacts = self.brokerArtifacts[slotId];
+    if (!artifacts || (expectedArtifacts && artifacts != expectedArtifacts)) return;
+    NSTask *tail = self.brokerEventTasks[slotId];if (tail.isRunning) [tail terminate];
+    [self.brokerEventTasks removeObjectForKey:slotId];
+    [self.brokerArtifacts removeObjectForKey:slotId];
     for (NSString *key in @[@"configPath", @"statePath", @"eventsPath"]) {
         NSString *path = artifacts[key];if (path.length) [NSFileManager.defaultManager removeItemAtPath:path error:nil];
     }
@@ -1051,22 +1086,24 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     NSDictionary *config = TriadDictionaryOrNil(request[@"config"]);
     NSString *session = TriadStringOrNil(request[@"session"]);
     NSString *runId = TriadStringOrNil(request[@"runId"]) ?: @"";
+    NSString *conversationId = TriadStringOrNil(request[@"conversationId"]) ?: @"";
 
     if (![agent isKindOfClass:[NSString class]] ||
         ![prompt isKindOfClass:[NSString class]] ||
         ![config isKindOfClass:[NSDictionary class]]) return;
+    NSString *slotId = [self slotIdForRequest:request agent:agent conversationId:conversationId runId:runId];
+    NSDictionary *metadata = [self runMetadataForAgent:agent conversationId:conversationId slotId:slotId runId:runId];
 
-    if (self.tasks[agent] != nil) {
-        [self emit:@{@"type": @"error", @"agent": agent, @"runId": runId, @"message": @"이미 작업 중입니다."}];
+    if (self.tasks[slotId] != nil) {
+        NSMutableDictionary *errorEvent = [metadata mutableCopy];errorEvent[@"type"] = @"error";errorEvent[@"message"] = @"이미 작업 중입니다.";
+        [self emit:errorEvent];
         return;
     }
 
     NSString *executable = TriadStringOrNil(config[@"executablePath"]);
     if (![[NSFileManager defaultManager] isExecutableFileAtPath:executable]) {
-        [self emit:@{
-            @"type": @"error", @"agent": agent, @"runId": runId,
-            @"message": [NSString stringWithFormat:@"CLI 실행 파일을 찾을 수 없습니다: %@", executable ?: @""]
-        }];
+        NSMutableDictionary *errorEvent = [metadata mutableCopy];errorEvent[@"type"] = @"error";errorEvent[@"message"] = [NSString stringWithFormat:@"CLI 실행 파일을 찾을 수 없습니다: %@", executable ?: @""];
+        [self emit:errorEvent];
         return;
     }
 
@@ -1075,7 +1112,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     NSString *workspace = TriadStringOrDefault(config[@"workspacePath"], NSHomeDirectory());
     task.currentDirectoryURL = [NSURL fileURLWithPath:workspace isDirectory:YES];
     [self prepareSharedContextForRequest:request agent:agent];
-    NSDictionary *broker = [self setupBrokerForAgent:agent request:request];
+    NSDictionary *broker = [self setupBrokerForAgent:agent slotId:slotId metadata:metadata request:request];
     NSArray *brokerArgs = broker ? @[broker[@"brokerPath"], @"--config", broker[@"configPath"], @"--caller", agent, @"--depth", @"0"] : nil;
 
     NSMutableArray<NSString *> *arguments = [NSMutableArray array];
@@ -1189,8 +1226,9 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
         if (![TriadStringOrNil(agentConfig[@"authMode"]) isEqualToString:@"apiKey"]) continue;
         NSString *token = [self tokenForAgent:configuredAgent];
         if (token.length == 0 && [configuredAgent isEqualToString:agent]) {
-            [self cleanupBrokerForAgent:agent];
-            [self emit:@{@"type": @"error", @"agent": agent, @"runId": runId, @"message": @"키체인에 저장된 API 키가 없습니다."}];
+            [self cleanupBrokerForSlotId:slotId expectedArtifacts:broker];
+            NSMutableDictionary *errorEvent = [metadata mutableCopy];errorEvent[@"type"] = @"error";errorEvent[@"message"] = @"키체인에 저장된 API 키가 없습니다.";
+            [self emit:errorEvent];
             return;
         }
         if (token.length && [configuredAgent isEqualToString:@"codex"]) environment[@"CODEX_API_KEY"] = token;
@@ -1210,43 +1248,72 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
         NSData *data = handle.availableData;
         if (data.length == 0) return;
         NSString *chunk = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-        if (chunk) [weakSelf emit:@{@"type": @"raw", @"agent": agent, @"chunk": chunk}];
+        if (chunk) { NSMutableDictionary *event = [metadata mutableCopy];event[@"type"] = @"raw";event[@"chunk"] = chunk;[weakSelf emit:event]; }
     };
     stderrPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *handle) {
         NSData *data = handle.availableData;
         if (data.length == 0) return;
         NSString *chunk = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-        if (chunk) [weakSelf emit:@{@"type": @"stderr", @"agent": agent, @"chunk": chunk}];
+        if (chunk) { NSMutableDictionary *event = [metadata mutableCopy];event[@"type"] = @"stderr";event[@"chunk"] = chunk;[weakSelf emit:event]; }
     };
 
     task.terminationHandler = ^(NSTask *finished) {
         stdoutPipe.fileHandleForReading.readabilityHandler = nil;
         stderrPipe.fileHandleForReading.readabilityHandler = nil;
         dispatch_async(dispatch_get_main_queue(), ^{
-            [weakSelf.tasks removeObjectForKey:agent];
-            [weakSelf emit:@{
-                @"type": @"terminated", @"agent": agent, @"runId": runId,
-                @"exitCode": @(finished.terminationStatus)
-            }];
+            if (weakSelf.tasks[slotId] == finished) {
+                [weakSelf.tasks removeObjectForKey:slotId];
+                [weakSelf.taskMetadata removeObjectForKey:slotId];
+            }
+            NSMutableDictionary *terminated = [metadata mutableCopy];terminated[@"type"] = @"terminated";terminated[@"exitCode"] = @(finished.terminationStatus);
+            [weakSelf emit:terminated];
             [weakSelf notifyAgentCompletion:agent exitCode:finished.terminationStatus];
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ [weakSelf cleanupBrokerForAgent:agent]; });
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ [weakSelf cleanupBrokerForSlotId:slotId expectedArtifacts:broker]; });
         });
     };
 
     NSError *error = nil;
     if (![task launchAndReturnError:&error]) {
-        [self cleanupBrokerForAgent:agent];
-        [self emit:@{@"type": @"error", @"agent": agent, @"runId": runId, @"message": error.localizedDescription ?: @"실행 실패"}];
+        [self cleanupBrokerForSlotId:slotId expectedArtifacts:broker];
+        NSMutableDictionary *errorEvent = [metadata mutableCopy];errorEvent[@"type"] = @"error";errorEvent[@"message"] = error.localizedDescription ?: @"실행 실패";
+        [self emit:errorEvent];
         return;
     }
-    self.tasks[agent] = task;
+    self.tasks[slotId] = task;
+    self.taskMetadata[slotId] = metadata;
     NSData *promptData = [prompt dataUsingEncoding:NSUTF8StringEncoding];
     [stdinPipe.fileHandleForWriting writeData:promptData];
     [stdinPipe.fileHandleForWriting closeFile];
 }
 
-- (void)stopAgent:(NSString *)agent {
-    NSTask *task = self.tasks[agent];
+- (void)stopAgent:(NSString *)agent slotId:(NSString *)requestedSlotId conversationId:(NSString *)conversationId runId:(NSString *)runId {
+    NSString *slotId = TriadStringOrNil(requestedSlotId);
+    NSTask *task = nil;
+    if (slotId.length) {
+        NSDictionary *metadata = self.taskMetadata[slotId];
+        BOOL matchesAgent = !agent.length || [metadata[@"agent"] isEqualToString:agent];
+        BOOL matchesConversation = !conversationId.length || [metadata[@"conversationId"] isEqualToString:conversationId];
+        BOOL matchesRun = !runId.length || [metadata[@"runId"] isEqualToString:runId];
+        if (matchesAgent && matchesConversation && matchesRun) task = self.tasks[slotId];
+        else {
+            NSDictionary *eventMetadata = [self runMetadataForAgent:agent conversationId:conversationId slotId:slotId runId:runId];
+            NSMutableDictionary *errorEvent = [eventMetadata mutableCopy];errorEvent[@"type"] = @"error";errorEvent[@"message"] = @"다른 실행 슬롯을 중지할 수 없습니다.";[self emit:errorEvent];
+            return;
+        }
+    } else {
+        NSMutableArray<NSString *> *matches = [NSMutableArray array];
+        [self.taskMetadata enumerateKeysAndObjectsUsingBlock:^(NSString *candidateSlotId, NSDictionary *metadata, BOOL *stop) {
+            if ((!agent.length || [metadata[@"agent"] isEqualToString:agent]) &&
+                (!conversationId.length || [metadata[@"conversationId"] isEqualToString:conversationId]) &&
+                (!runId.length || [metadata[@"runId"] isEqualToString:runId])) [matches addObject:candidateSlotId];
+        }];
+        if (matches.count == 1) { slotId = matches.firstObject;task = self.tasks[slotId]; }
+        else if (matches.count > 1) {
+            NSDictionary *eventMetadata = [self runMetadataForAgent:agent conversationId:conversationId slotId:@"" runId:runId];
+            NSMutableDictionary *errorEvent = [eventMetadata mutableCopy];errorEvent[@"type"] = @"error";errorEvent[@"message"] = @"중지할 실행을 식별하지 못했습니다. 다시 시도해주세요.";[self emit:errorEvent];
+            return;
+        }
+    }
     if (task.isRunning) [task interrupt];
 }
 

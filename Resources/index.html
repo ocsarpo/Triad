@@ -470,6 +470,7 @@
       collaboration: {mode:'independent',lead:'codex',rounds:2,finalizer:'claude',helperTimeoutMinutes:5}, defaultTarget:'all', orchestration:null, sharedContext:null,
       sharedDocuments:[], activeSharedDocumentId:null, pendingSharedDocumentDeleteId:null,
       queue: [], queueDrainScheduled:false,
+      runtimes: {},
       backgroundWaits: new Set(), backgroundDocumentIds: new Map(),
       usage: JSON.parse(localStorage.getItem('triad.usage')||'{"codex":{"windows":[]},"claude":{"windows":[]}}'), usageRefreshing:false, usageTimer:null, lastUsageRefresh:0,
       forceMessageBottom:false,routingPreviewOpen:false,
@@ -491,6 +492,20 @@
       codex: { model:'gpt-5.6-sol', effort:'medium', speedMode:'standard', permissionMode:'workspace-write', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'codex', authMode:'existing', sessionPolicy:'auto', sessionTurnLimit:6, sessionTokenLimit:48000 },
       claude: { model:'sonnet', effort:'medium', speedMode:'standard', permissionMode:'acceptEdits', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'claude', authMode:'existing', sessionPolicy:'auto', sessionTurnLimit:6, sessionTokenLimit:48000 }
     });
+    const freshBranchStatus=()=>({codex:{loading:false,kind:'unknown',label:'확인 전',workspace:''},claude:{loading:false,kind:'unknown',label:'확인 전',workspace:''}});
+    const freshProjectFiles=()=>({codex:{workspace:'',files:[],loading:false,error:''},claude:{workspace:'',files:[],loading:false,error:''}});
+    const freshDiff=()=>({visible:false,agent:'codex',loading:false,text:'',error:'',workspace:'',truncated:false,selectedFileId:null});
+    const runtimeKeys=['running','pending','responseIds','lineBuffers','stderr','retryOnTermination','stopRequested','orchestration','queue','queueDrainScheduled','brokerMessages','branchStatus','projectFiles','diff'];
+    const runtimeSeed=Object.fromEntries(runtimeKeys.map(key=>[key,state[key]]));
+    function runtimeFor(conversationId) {
+      if(!conversationId)return null;
+      if(!state.runtimes[conversationId])state.runtimes[conversationId]={running:{codex:false,claude:false},pending:{},responseIds:{},lineBuffers:{codex:'',claude:''},stderr:{codex:'',claude:''},retryOnTermination:{codex:false,claude:false},stopRequested:{codex:false,claude:false},orchestration:null,queue:[],queueDrainScheduled:false,brokerMessages:{},branchStatus:freshBranchStatus(),projectFiles:freshProjectFiles(),diff:freshDiff()};
+      return state.runtimes[conversationId];
+    }
+    function activateRuntime(conversationId) {
+      runtimeFor(conversationId);
+    }
+    for(const key of runtimeKeys)Object.defineProperty(state,key,{configurable:true,get(){return runtimeFor(state.activeConversationId)?.[key]??runtimeSeed[key];},set(value){const runtime=runtimeFor(state.activeConversationId);if(runtime)runtime[key]=value;else runtimeSeed[key]=value;}});
     const post = payload => window.webkit?.messageHandlers?.triad?.postMessage(payload);
     const hasNativeBridge = () => !!window.webkit?.messageHandlers?.triad;
     const id = () => crypto.randomUUID();
@@ -542,6 +557,7 @@
       state.traces=clone(conversation.traces||[]);
       state.sharedContext=clone(conversation.sharedContext||null);
       state.activeSharedDocumentId=conversation.activeSharedDocumentId||state.sharedContext?.board?.documentId||null;
+      activateRuntime(conversation.id);
     }
     function conversationSnapshot() {
       const existing=state.conversations.find(item=>item.id===state.activeConversationId);
@@ -566,6 +582,8 @@
       localStorage.setItem('triad.traces', JSON.stringify(state.traces.slice(-500)));
       if(state.activeConversationId)localStorage.setItem('triad.activeConversationId',state.activeConversationId);
     }
+    let backgroundRuntimeDepth=0;
+    const isBackgroundRuntime=()=>backgroundRuntimeDepth>0;
     function withConversation(conversationId, work) {
       if(!conversationId)return work();
       if(conversationId===state.activeConversationId)return work();
@@ -585,7 +603,7 @@
       clearTimeout(state.saveTimer);state.saveTimer=null;
       replaceConversationSnapshot(visible);
       if(state.storageReady&&hadVisibleSave)post({action:'saveConversation',conversation:visible});
-      applyConversationSnapshot(target);
+      applyConversationSnapshot(target);backgroundRuntimeDepth+=1;
       try { return work(); }
       finally {
         // Background work can also schedule the shared debounce.  Do not let
@@ -597,12 +615,12 @@
         // debounce timer. Persist this exact target snapshot now so restoring
         // the visible conversation cannot redirect that timer to the wrong chat.
         if(state.storageReady)post({action:'saveConversation',conversation:updated});
-        applyConversationSnapshot(visible);
+        backgroundRuntimeDepth-=1;applyConversationSnapshot(visible);
         restoreActiveLocalCache();
         // A streaming JSON line can arrive many times per second.  The
         // visible chat data did not change, so do not recreate its messages,
         // settings, or trace DOM (which can steal focus from the composer).
-        renderStatus();renderQueue();
+        renderStatus(false);renderQueue();
       }
     }
     function withPendingConversation(agent, work) {
@@ -656,8 +674,8 @@
         const main=document.createElement('div');main.className='conversation-main';main.onclick=()=>selectConversation(item.id);
         const title=document.createElement('span');title.className='conversation-name';title.textContent=item.title||'새 대화';
         const time=document.createElement('span');time.className='conversation-time';
-        const running=Object.values(state.pending).some(pending=>pending?.conversationId===item.id)||state.orchestration?.conversationId===item.id;
-        const queued=state.queue.some(entry=>entry.conversationId===item.id);
+        const runtime=runtimeFor(item.id);const running=Object.keys(runtime.pending).length>0||!!runtime.orchestration;
+        const queued=runtime.queue.length>0;
         time.textContent=running?'실행 중':queued?'대기 중':conversationTime(window.TriadConversationOrder.activityAt(item));
         if(running||queued)time.title=running?'AI가 이 대화에서 작업 중입니다.':'이 대화의 작업이 전역 순차 대기열에 있습니다.';
         main.append(title,time);
@@ -682,7 +700,7 @@
       input.onblur=()=>finish(true);input.focus();input.select();
     }
     function deleteConversation(conversationId) {
-      if(Object.values(state.pending).some(pending=>pending?.conversationId===conversationId)||state.backgroundWaits.has(conversationId)||state.queue.some(item=>item.conversationId===conversationId)||state.orchestration?.conversationId===conversationId)return;
+      const runtime=runtimeFor(conversationId);if(Object.keys(runtime.pending).length||state.backgroundWaits.has(conversationId)||runtime.queue.length||runtime.orchestration)return;
       const conversation=state.conversations.find(item=>item.id===conversationId);if(!conversation)return;
       const button=[...document.querySelectorAll('.conversation-item')].find(item=>item.dataset.conversationId===conversationId)?.querySelector('button[title="삭제"]');
       if(button&&!button.classList.contains('confirm-delete')){button.classList.add('confirm-delete');button.textContent='삭제?';button.title='한 번 더 누르면 삭제';setTimeout(()=>{if(button.isConnected){button.classList.remove('confirm-delete');button.textContent='×';button.title='삭제';}},2500);return;}
@@ -774,8 +792,8 @@
       requestAnimationFrame(()=>{updateScrollButton();window.dispatchEvent(new Event('resize'));});
     }
     function refreshProjectDiff(agent=state.diff.agent) {
-      if(!state.settings?.[agent])return;state.diff.agent=agent;state.diff.loading=true;state.diff.error='';renderDiff();
-      post({action:'projectDiff',agent,workspace:state.settings[agent].workspacePath});
+      if(!state.settings?.[agent])return;state.diff.agent=agent;state.diff.loading=true;state.diff.error='';if(!isBackgroundRuntime())renderDiff();
+      post({action:'projectDiff',agent,workspace:state.settings[agent].workspacePath,conversationId:state.activeConversationId});
     }
     function renderDiff() {
       const pane=document.getElementById('diff-pane');const content=document.getElementById('diff-content');const fileList=document.getElementById('diff-file-list');const chat=document.querySelector('.chat');if(!pane||!content||!fileList||!chat)return;
@@ -1223,7 +1241,7 @@
       const runId=id();
       const responseRecordId=sharedContext?.runId?window.TriadRunReference.recordIdFor({runId:sharedContext.runId},contextDocumentId(sharedContext)):null;state.pending[agent]={prompt,retried:false,isolated,sharedContext,usageRecorded:false,sessionId:session,runId,conversationId,config,agentConfigs,collaboration};state.responseIds[agent]=addMessage(agent,'',true,{recordId:responseRecordId,runId:sharedContext?.runId||null,documentId:contextDocumentId(sharedContext),replyAgent:agent});renderStatus();
       addTrace(agent,'info','명령 전달',{model:config.model,effort:config.effort,speed:config.speedMode,workspace:config.workspacePath,writableRoots:config.writableRoots||'',networkAccess:!!config.networkAccess,allowLocalBinding:!!config.allowLocalBinding,session:session?'resume':'new',isolated,mode:state.orchestration?.mode||'independent'});
-      post({action:'run',agent,prompt,config,agentConfigs,collaboration,mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,sharedContext),sharedContext,session,runId});return true;
+      post({action:'run',agent,conversationId,slotId:`${conversationId}:${agent}`,prompt,config,agentConfigs,collaboration,mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,sharedContext),sharedContext,session,runId});return true;
     }
     function markMessageWorkStarted(messageId) {
       const message=state.messages.find(item=>item.id===messageId);if(!message||message.workStarted)return false;
@@ -1236,8 +1254,8 @@
     }
     function scheduleQueueDrain() {
       if(state.queueDrainScheduled)return;
-      state.queueDrainScheduled=true;
-      setTimeout(()=>{state.queueDrainScheduled=false;drainQueues();},0);
+      const conversationId=state.activeConversationId;state.queueDrainScheduled=true;
+      setTimeout(()=>withConversation(conversationId,()=>{state.queueDrainScheduled=false;drainQueues();}),0);
     }
     function contextDocumentId(context) {
       return context?.documentId||documentIdOf(context?.board)||null;
@@ -1262,12 +1280,12 @@
     function runningDocumentConflict(conversationId, documentId, sharedContext=null) {
       if(!documentId)return false;
       if(state.backgroundDocumentIds.has(documentId))return true;
-      return Object.values(state.pending).some(pending=>{
+      return Object.values(state.runtimes).some(runtime=>Object.values(runtime.pending).some(pending=>{
         if(contextDocumentId(pending?.sharedContext)!==documentId)return false;
         // Two one-agent requests in the same independent run intentionally
         // share one document and merge their contributions by runId.
         return !(pending.conversationId===conversationId&&pending.sharedContext?.board?.phase==='independent'&&pending.sharedContext?.runId===sharedContext?.runId);
-      });
+      }));
     }
     function independentRequestQueued(targets, documentId, sharedContext=null) {
       if(state.orchestration)return true;
@@ -1621,8 +1639,9 @@
       message=friendlyError(message);
       addTrace(agent,'error','실행 실패',message);
       updateMessage(state.responseIds[agent], m => { m.text += (m.text?'\n\n':'') + '⚠️ ' + message; m.streaming=false; });
-      state.running[agent]=false; delete state.pending[agent];delete state.responseIds[agent];renderStatus();
+      state.running[agent]=false; delete state.pending[agent];delete state.responseIds[agent];
       if(state.orchestration){state.orchestration=null;addMessage('system','AI 실행 오류로 협업 흐름을 중단했습니다. 오른쪽 실행 과정에서 오류 원문을 확인할 수 있습니다.');renderCollaboration();}
+      renderStatus(false);renderConversations();
       if(!state.orchestration)waitForIndependentContribution(agent,pending,scheduleQueueDrain);
     }
     function finishStoppedAgent(agent) {
@@ -1631,7 +1650,7 @@
       state.stopRequested[agent]=false;state.retryOnTermination[agent]=false;
       updateMessage(state.responseIds[agent],m=>{m.text+=(m.text?'\n\n':'')+'사용자가 중지했습니다.';m.streaming=false;});
       state.running[agent]=false;delete state.pending[agent];delete state.responseIds[agent];
-      addTrace(agent,'info','사용자 중지','현재 실행만 중지하고 대기 작업은 유지합니다.');renderStatus();
+      addTrace(agent,'info','사용자 중지','현재 실행만 중지하고 대기 작업은 유지합니다.');renderStatus(false);renderConversations();
       // A user-initiated stop is neither a failed contribution nor a stale
       // session.  Do not wait for the independent-board grace period: the
       // next queued run can start as soon as every prior provider is idle.
@@ -1649,7 +1668,7 @@
         if (failed) m.text += (m.text?'\n\n':'') + '⚠️ ' + (providerError || err || `프로세스 종료 코드 ${exitCode}`);
         if (!m.text) m.text='응답 없이 종료되었습니다.'; m.streaming=false;
       });
-      state.running[agent]=false; renderStatus();
+      state.running[agent]=false;
       addTrace(agent,failed?'error':'success',failed?`프로세스 종료 · code ${exitCode}`:'프로세스 정상 종료',failed?(providerError||err):'');
       // Some CLI result streams omit usage.  A successful normal request
       // still occupies one continued-session turn, but never double-count a
@@ -1669,6 +1688,7 @@
       // drainQueues performs that check; a per-agent drain would strand it.
       const continuation=state.orchestration;
       delete state.pending[agent];delete state.responseIds[agent];
+      renderStatus(false);renderConversations();
       if(!continuation)waitForIndependentContribution(agent,pending,scheduleQueueDrain);
     }
     function advanceCollaboration(agent) {
@@ -1731,10 +1751,13 @@
       if(state.stopRequested[agent]){finishStoppedAgent(agent);return;}
       pending.runId=id();
       addTrace(agent,'info','저장된 세션을 찾지 못해 새 세션으로 자동 재시도');
-      post({action:'run',agent,prompt:pending.prompt,config:pending.config||state.settings[agent],agentConfigs:pending.agentConfigs||state.settings,collaboration:pending.collaboration||activeCollaboration(),mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,pending.sharedContext),sharedContext:pending.sharedContext||null,session:null,runId:pending.runId});
+      post({action:'run',agent,conversationId:pending.conversationId,slotId:`${pending.conversationId}:${agent}`,prompt:pending.prompt,config:pending.config||state.settings[agent],agentConfigs:pending.agentConfigs||state.settings,collaboration:pending.collaboration||activeCollaboration(),mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,pending.sharedContext),sharedContext:pending.sharedContext||null,session:null,runId:pending.runId});
     }
 
     window.nativeEvent = event => {
+      if(event?.conversationId&&event.conversationId!==state.activeConversationId&&!event.__triadRuntimeRouted)return withConversation(event.conversationId,()=>window.nativeEvent({...event,__triadRuntimeRouted:true}));
+      if(event?.slotId&&event.agent&&event.slotId!==`${state.activeConversationId}:${event.agent}`)return;
+      if(event?.runId&&event.agent&&['raw','stderr','terminated','error','brokerEvent','brokerWarning','session'].includes(event.type)&&state.pending[event.agent]?.runId!==event.runId)return;
       if (event.type==='boot') {
         document.getElementById('app-version').textContent=`Triad v${event.appVersion||'0.0.0'}`;
         state.codexModels=event.codexModels || [];
@@ -1773,7 +1796,7 @@
           state.settings.codex.model=available[0];
           state.settings.codex.effort=state.codexModels[0].defaultEffort || 'medium';
         }
-        state.tokenStatus=event.tokenStatus;state.storageReady=true;save();
+        activateRuntime(state.activeConversationId);state.tokenStatus=event.tokenStatus;state.storageReady=true;save();
         for(const conversation of loaded)if(recoveredConversationIds.has(conversation.id)||interruptedConversationIds.has(conversation.id))post({action:'saveConversation',conversation});
         renderAll();post({action:'listSharedDocuments'});startUsagePolling();refreshAuthStatuses();refreshBranches();refreshProjectFiles();
       } else if (event.type==='raw') {
@@ -1799,7 +1822,7 @@
       }
       else if(event.type==='projectFiles') {
         state.projectFiles[event.agent]={workspace:event.workspace||state.settings?.[event.agent]?.workspacePath||'',files:event.files||[],loading:false,error:event.error||'',truncated:!!event.truncated};
-        if(autocomplete.open&&autocomplete.type==='file')updateAutocomplete();
+        if(!isBackgroundRuntime()&&autocomplete.open&&autocomplete.type==='file')updateAutocomplete();
       }
       else if(event.type==='brokerEvent')handleBrokerEvent(event);
       else if(event.type==='clipboardResult')completeNativeCopy(event.requestId,!!event.success,event.message||'');
@@ -1821,16 +1844,16 @@
         if(!event.success){state.accountStatus[event.agent]={...state.accountStatus[event.agent],checking:false,busy:false,connected:false,message:event.message||'인증 작업 실패'};renderSettings();addTrace(event.agent,'error','계정 인증 실패',event.message||'');alert(event.message||'계정 인증에 실패했습니다.');}
         else addTrace(event.agent,'success',event.operation==='logout'?'CLI 계정 로그아웃':'CLI 계정 연결 완료');
       }
-      else if(event.type==='diffResult') {state.diff={...state.diff,loading:false,agent:event.agent||state.diff.agent,text:event.text||'',error:event.error||'',workspace:event.workspace||'',truncated:!!event.truncated,selectedFileId:null};renderDiff();}
+      else if(event.type==='diffResult') {state.diff={...state.diff,loading:false,agent:event.agent||state.diff.agent,text:event.text||'',error:event.error||'',workspace:event.workspace||'',truncated:!!event.truncated,selectedFileId:null};if(!isBackgroundRuntime())renderDiff();}
       else if(event.type==='branchResult') {
-        if(state.settings?.[event.agent]?.workspacePath===event.workspace){state.branchStatus[event.agent]={loading:false,kind:event.kind||'unknown',label:event.label||'확인 불가',workspace:event.workspace};renderSettings();}
+        if(state.settings?.[event.agent]?.workspacePath===event.workspace){state.branchStatus[event.agent]={loading:false,kind:event.kind||'unknown',label:event.label||'확인 불가',workspace:event.workspace};if(!isBackgroundRuntime())renderSettings();}
       }
       else if (event.type==='linkError') alert(event.message);
       else if (event.type==='usage') {state.usageRefreshing=false;const normalized=window.TriadUsage.normalizeCodex(event.data);if(normalized.windows.length){setUsage('codex',normalized,event.data);addTrace('codex','success','계정 잔여량 갱신',normalized.windows);}else {state.usage.codex={...(state.usage.codex||{}),error:'계정 한도 정보가 제공되지 않았습니다.',updatedAt:Date.now()};saveUsage();renderUsage();}}
       else if (event.type==='usageError') {state.usageRefreshing=false;state.usage.codex={...(state.usage.codex||{}),error:event.message||'사용량 조회 실패'};saveUsage();renderUsage();addTrace('codex','error','사용량 조회 실패',event.message||'응답 없음');}
     };
 
-    function renderStatus() {
+    function renderStatus(renderConversationList=true) {
       if (!state.settings) return;
       for (const agent of agents) {
         document.getElementById(`pill-${agent}`).classList.toggle('running',state.running[agent]);
@@ -1838,7 +1861,7 @@
         document.getElementById(`stop-${agent}`).hidden=!state.running[agent];
       }
       renderCollaboration();
-      renderConversations();
+      if(renderConversationList)renderConversations();
       if(state.boardVisible)renderSharedBoard();
     }
     function defaultTargetLabel(target=state.defaultTarget) {
@@ -1930,14 +1953,14 @@
     function refreshAuthStatuses(){agents.forEach(requestAuthStatus);}
     function requestBranch(agent) {
       if(!state.settings?.[agent])return;const workspace=state.settings[agent].workspacePath;
-      state.branchStatus[agent]={loading:true,kind:'unknown',label:'브랜치 확인 중…',workspace};renderSettings();
-      post({action:'gitBranch',agent,workspace});
+      state.branchStatus[agent]={loading:true,kind:'unknown',label:'브랜치 확인 중…',workspace};if(!isBackgroundRuntime())renderSettings();
+      post({action:'gitBranch',agent,workspace,conversationId:state.activeConversationId});
     }
     function refreshBranches(){agents.forEach(requestBranch);}
     function requestProjectFiles(agent) {
       const workspace=state.settings?.[agent]?.workspacePath;if(!workspace)return;
       state.projectFiles[agent]={...state.projectFiles[agent],loading:true,error:''};
-      post({action:'projectFiles',agent,workspace});
+      post({action:'projectFiles',agent,workspace,conversationId:state.activeConversationId});
     }
     function refreshProjectFiles(){agents.forEach(requestProjectFiles);}
     function sessionSummary(agent) {
@@ -2032,7 +2055,7 @@
         root.appendChild(card);
       }
     }
-    function renderAll(){renderConversations();renderMessages();renderSettings();renderStatus();renderTraces();renderQueue();renderSharedBoard();}
+    function renderAll(){renderConversations();renderMessages();renderSettings();renderStatus();renderTraces();renderQueue();renderDiff();renderSharedBoard();}
 
     function updateRoutingPreview(){
       const draft=document.getElementById('draft');const root=document.getElementById('routing-preview');const toggle=document.getElementById('routing-preview-toggle');const details=document.getElementById('routing-preview-details');
@@ -2158,7 +2181,7 @@
       if(!state.running[agent]||state.stopRequested[agent])return;
       state.stopRequested[agent]=true;state.retryOnTermination[agent]=false;
       if(state.orchestration)cancelCollaboration('사용자가 중지했습니다.');
-      renderStatus();post({action:'stop',agent});
+      renderStatus();post({action:'stop',agent,conversationId:state.activeConversationId,slotId:`${state.activeConversationId}:${agent}`,runId:state.pending[agent]?.runId||null});
     }
     document.getElementById('stop-codex').onclick=()=>stopAgent('codex');
     document.getElementById('stop-claude').onclick=()=>stopAgent('claude');

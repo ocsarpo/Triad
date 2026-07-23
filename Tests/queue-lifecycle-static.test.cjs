@@ -45,8 +45,8 @@ test('종료 이벤트는 실행 ID로 늦은 이벤트를 무시한다', () => 
 });
 
 test('대기열 생명주기 변경의 앱 버전은 이 테스트에서 검증한다', () => {
-  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.45\.1<\/string>/);
-  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>65<\/string>/);
+  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.46\.0<\/string>/);
+  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>66<\/string>/);
 });
 
 test('독립 실행은 대상 슬롯과 공유 문서 충돌을 분리해 판단한다', () => {
@@ -70,9 +70,10 @@ test('백그라운드 실행은 시작 대화에 설정과 스트림을 고정�
   assert.match(renderer, /if\(!conversationId\)return work\(\);[\s\S]*?if\(!target\)return undefined/);
   assert.match(renderer, /const hadVisibleSave=!!state\.saveTimer;[\s\S]*?clearTimeout\(state\.saveTimer\);state\.saveTimer=null;[\s\S]*?if\(state\.storageReady&&hadVisibleSave\)post\(\{action:'saveConversation',conversation:visible\}\)/);
   assert.match(renderer, /Background work can also schedule the shared debounce[\s\S]*?clearTimeout\(state\.saveTimer\);state\.saveTimer=null;[\s\S]*?conversation:updated/);
-  assert.match(renderer, /visible chat data did not change[\s\S]*?renderStatus\(\);renderQueue\(\);/);
+  assert.match(renderer, /visible chat data did not change[\s\S]*?renderStatus\(false\);renderQueue\(\);/);
   const backgroundRestore=renderer.slice(renderer.indexOf('function withConversation'),renderer.indexOf('function withPendingConversation'));
   assert.doesNotMatch(backgroundRestore, /renderAll\(\)/);
+  assert.doesNotMatch(backgroundRestore, /renderConversations\(\)/);
   assert.match(renderer, /conversationId:state\.activeConversationId,config:clone\(state\.settings\[agent\]\)/);
   assert.match(renderer, /conversationId:state\.activeConversationId,settings:clone\(state\.settings\)/);
   assert.match(renderer, /withPendingConversation\(agent,\(\)=>parseLine\(agent,line\)\)/);
@@ -83,7 +84,7 @@ test('백그라운드 실행은 시작 대화에 설정과 스트림을 고정�
   assert.match(renderer, /setTimeout\(\(\)=>\{\s*try \{\s*withConversation\(conversationId,\(\)=>\{/);
   assert.match(renderer, /state\.backgroundWaits\.delete\(conversationId\);[\s\S]*?state\.backgroundDocumentIds\.delete\(documentId\);[\s\S]*?done\(\);/);
   assert.match(renderer, /setTimeout\(\(\)=>\{\s*withConversation\(flow\.conversationId,\(\)=>\{/);
-  assert.match(renderer, /if\(Object\.values\(state\.pending\)\.some\(pending=>pending\?\.conversationId===conversationId\)/);
+  assert.match(renderer, /const runtime=runtimeFor\(conversationId\);if\(Object\.keys\(runtime\.pending\)\.length\|\|state\.backgroundWaits\.has\(conversationId\)\|\|runtime\.queue\.length\|\|runtime\.orchestration\)return/);
   assert.doesNotMatch(renderer, /function newConversation\(skipPersist=false\) \{\s*if\(agents\.some/);
   assert.doesNotMatch(renderer, /function selectConversation\(conversationId\) \{\s*if\(conversationId===state\.activeConversationId\|\|agents\.some/);
 });

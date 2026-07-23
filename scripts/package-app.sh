@@ -22,6 +22,7 @@ cp "$root/Resources/shared-context.js" "$app/Contents/Resources/shared-context.j
 cp "$root/Resources/linkify.js" "$app/Contents/Resources/linkify.js"
 cp "$root/Resources/diff.js" "$app/Contents/Resources/diff.js"
 cp "$root/Resources/queue.js" "$app/Contents/Resources/queue.js"
+cp "$root/Resources/recent-context.js" "$app/Contents/Resources/recent-context.js"
 cp "$root/Resources/usage.js" "$app/Contents/Resources/usage.js"
 cp "$root/Resources/session-budget.js" "$app/Contents/Resources/session-budget.js"
 cp "$root/Resources/file-search.js" "$app/Contents/Resources/file-search.js"

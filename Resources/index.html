@@ -448,6 +448,7 @@
   <script src="linkify.js"></script>
   <script src="diff.js"></script>
   <script src="queue.js"></script>
+  <script src="recent-context.js"></script>
   <script src="usage.js"></script>
   <script src="session-budget.js"></script>
   <script src="file-search.js"></script>
@@ -1279,7 +1280,7 @@
       return item;
     }
     function enqueueIndependentBatch(targets,prompts,sourceText,messageId,options={}) {
-      const item={id:id(),kind:'independentBatch',targets:[...targets],prompts:clone(prompts),sourceText,messageId,conversationId:state.activeConversationId,settings:clone(state.settings),collaboration:clone(activeCollaboration()),sharedContext:options.sharedContext||null,documentId:options.documentId||contextDocumentId(options.sharedContext),createdAt:Date.now()};
+      const item={id:id(),kind:'independentBatch',targets:[...targets],prompts:clone(prompts),sourceText,messageId,conversationId:state.activeConversationId,settings:clone(state.settings),collaboration:clone(activeCollaboration()),recentContexts:clone(options.recentContexts||{}),sharedContext:options.sharedContext||null,documentId:options.documentId||contextDocumentId(options.sharedContext),createdAt:Date.now()};
       state.queue.push(item);renderQueue();renderCollaboration();if(state.boardVisible)renderSharedBoard();
       addTrace(targets[0]||'codex','info','독립 실행 묶음 대기열 등록',{targets,position:state.queue.filter(candidate=>candidate.kind==='independentBatch').length});
       return item;
@@ -1329,7 +1330,7 @@
         const independentContext=item.sharedContext||createIndependentSharedContext(item.sourceText,item.targets[0]||item.collaboration?.lead);
         addTrace(item.targets[0]||'codex','info','대기 독립 실행 시작',{targets:item.targets,remaining:state.queue.filter(candidate=>candidate.kind==='independentBatch').length});
         for(const agent of item.targets){
-          const prompt=buildIndependentPrompt(agent,item.prompts[agent]||item.sourceText,independentContext);
+          const prompt=buildIndependentPrompt(agent,item.prompts[agent]||item.sourceText,independentContext,item.recentContexts?.[agent]||'');
           dispatchAgent(agent,prompt,{sharedContext:independentContext,conversationId:item.conversationId,config:item.settings?.[agent],agentConfigs:item.settings,collaboration:item.collaboration});
         }
         renderQueue();renderCollaboration();
@@ -1419,10 +1420,11 @@
       }
       return `${context}당신이 이 작업의 시작 담당입니다. 직접 작업을 진행하고 사용자에게 줄 결과를 완성하세요.\n\n${agentHandoffProtocol(task.agent,task.noHandoff)}`;
     }
-    function buildIndependentPrompt(agent, prompt, sharedContext) {
+    function buildIndependentPrompt(agent, prompt, sharedContext, recentContext='') {
       const board=sharedContext?.board;let manifest=null;
       try { manifest=board?window.TriadSharedContext.manifest(board):null; } catch {}
-      return `${prompt}\n\nTriad 독립 실행 공유 문서 manifest:\n${JSON.stringify(manifest)}\n\n전체 채팅이나 상대 AI의 답변은 읽지 마세요. 과거 맥락이 꼭 필요할 때만 shared_context_read로 history 또는 contributions를 선택해 읽고, 그 외에는 필요한 공유 보드 섹션과 프로젝트 파일만 읽으세요. 작업을 마친 뒤 submit_contribution 도구로 runId: ${sharedContext?.runId||''}에 자신의 요약과 근거를 반드시 기록하세요. 이 실행에서는 상대 AI 호출을 하지 마세요.`;
+      const related=recentContext?`\n\n직전 관련 맥락(대명사·수정 지시를 현재 요청과 연결할 때만 사용하고, 프로젝트의 현재 상태는 직접 확인하세요):\n${recentContext}`:'';
+      return `${prompt}${related}\n\nTriad 독립 실행 공유 문서 manifest:\n${JSON.stringify(manifest)}\n\n위 제한된 직전 맥락 외 전체 transcript나 상대 AI의 원문 답변은 요청하거나 읽지 마세요. 과거 맥락이 꼭 필요할 때만 shared_context_read로 history 또는 contributions를 선택해 읽고, 그 외에는 필요한 공유 보드 섹션과 프로젝트 파일만 읽으세요. 작업을 마친 뒤 submit_contribution 도구로 runId: ${sharedContext?.runId||''}에 자신의 요약과 근거를 반드시 기록하세요. 이 실행에서는 상대 AI 호출을 하지 마세요.`;
     }
     function runAgentTurn(task) {
       const flow=state.orchestration;if(!flow||flow.cancelled)return;
@@ -1484,6 +1486,9 @@
       }
       document.getElementById('routing-error').textContent='';draft.value='';updateRoutingPreview();
       const sameConversationContext=state.collaboration.mode==='independent'?independentContextForConversation(state.activeConversationId):null;
+      // Capture before adding this user bubble: both immediate and queued work
+      // get the same bounded, per-agent continuation packet from send time.
+      const recentContexts=Object.fromEntries(routed.targets.map(agent=>[agent,window.TriadRecentContext.packetFor(state.messages,agent)]));
       // Reusing a run is safe only for an immediately parallel, other-agent
       // request. A queued follow-up must become a new run after its predecessor
       // (and contribution grace period) finishes.
@@ -1504,12 +1509,12 @@
           // Do not create the next document run while a prior run is writing to
           // the same document.  A queued batch creates one fresh run only when
           // every provider is idle, then launches its selected targets together.
-          if(queued)enqueueIndependentBatch(routed.targets,routed.prompts,original,userMessageId,{sharedContext:null,documentId:requestedDocumentId});
+          if(queued)enqueueIndependentBatch(routed.targets,routed.prompts,original,userMessageId,{sharedContext:null,documentId:requestedDocumentId,recentContexts});
           else {
             const independentContext=reusableContext||createIndependentSharedContext(original,routed.targets[0]||state.collaboration.lead);
             if(!independentContext?.board||!independentContext.documentId)throw new Error('공유 문서를 준비하지 못했습니다. 문서 목록을 새로고침한 뒤 다시 시도해주세요.');
             markMessageWorkStarted(userMessageId);
-            routed.targets.forEach(agent=>dispatchAgent(agent,buildIndependentPrompt(agent,routed.prompts[agent],independentContext),{sharedContext:independentContext}));
+            routed.targets.forEach(agent=>dispatchAgent(agent,buildIndependentPrompt(agent,routed.prompts[agent],independentContext,recentContexts[agent]),{sharedContext:independentContext}));
           }
         } else if(queued)enqueueCollaboration(routed.prompt,original,userMessageId,runCollaboration);
         else {markMessageWorkStarted(userMessageId);startCollaboration(routed.prompt,runCollaboration);}

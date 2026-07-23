@@ -52,6 +52,18 @@ test('자동 회전은 auto + resume 세션에서만 경계를 넘을 때 수행
   assert.equal(budget.shouldRotate({ sessionPolicy: 'alwaysNew' }, stats, true), false);
 });
 
+test('토큰 기준은 누적 입력이 아니라 직전 요청의 현재 문맥만 사용한다', () => {
+  let stats = budget.normalizeStats({
+    codex: { turns: 2, sessionInputTokens: 47000, lastInputTokens: 23000, sessionId: 'thread-1' }
+  });
+  stats = budget.recordUsage(stats, 'codex', { input_tokens: 26000 });
+  assert.equal(stats.codex.sessionInputTokens, 73000);
+  assert.equal(stats.codex.lastInputTokens, 26000);
+  assert.equal(budget.shouldRotate({ sessionPolicy: 'auto', sessionTurnLimit: 50, sessionTokenLimit: 48000 }, stats.codex, true), false);
+  stats = budget.recordUsage(stats, 'codex', { input_tokens: 48000 });
+  assert.equal(budget.shouldRotate({ sessionPolicy: 'auto', sessionTurnLimit: 50, sessionTokenLimit: 48000 }, stats.codex, true), true);
+});
+
 test('기존의 측정되지 않은 resume 세션은 auto 정책에서 한 번 새 세션으로 회전한다', () => {
   const legacy = budget.normalizeStats({
     codex: { sessionId: 'thread-legacy', turns: 0, sessionInputTokens: 0 },

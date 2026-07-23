@@ -114,7 +114,7 @@
     const normalized = normalizePolicy(policy);
     const current = blankAgentStats(stats);
     return normalized.sessionPolicy === 'auto' && !!hasResumeSession
-      && (current.requiresFreshSession || current.turns >= normalized.sessionTurnLimit || current.sessionInputTokens >= normalized.sessionTokenLimit);
+      && (current.requiresFreshSession || current.turns >= normalized.sessionTurnLimit || current.lastInputTokens >= normalized.sessionTokenLimit);
   }
   return { estimateTokens, logicalInputTokens, outputTokens, normalizePolicy, normalizeStats, recordUsage, recordCompletion, resetAgent, shouldRotate, DEFAULT_POLICY };
 });

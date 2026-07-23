@@ -474,6 +474,11 @@
       for(const agent of agents){if(state.sessions?.[agent]&&!state.sessionStats[agent].sessionId)state.sessionStats[agent].sessionId=state.sessions[agent];}
       return state.sessionStats;
     }
+    function ensureAgentSessionStats(agent) {
+      if(!agents.includes(agent))return null;
+      normalizeSessionStats(state.sessionStats||{});
+      return state.sessionStats?.[agent]||null;
+    }
     function conversationSnapshot() {
       const existing=state.conversations.find(item=>item.id===state.activeConversationId);
       const now=Date.now();
@@ -1019,7 +1024,7 @@
         session=null;
       }else if(!isolated&&window.TriadSessionBudget.shouldRotate(config,state.sessionStats[agent],!!session)){
         const stats=state.sessionStats[agent];
-        rotationReason=stats.requiresFreshSession?'자동 회전 · 기존 세션 사용량 미측정':stats.turns>=config.sessionTurnLimit?`자동 회전 · ${stats.turns}턴`: `자동 회전 · 입력 ${Math.round(stats.sessionInputTokens/1000)}k`;
+        rotationReason=stats.requiresFreshSession?'자동 회전 · 기존 세션 사용량 미측정':stats.turns>=config.sessionTurnLimit?`자동 회전 · ${stats.turns}턴`: `자동 회전 · 현재 문맥 ${Math.round(stats.lastInputTokens/1000)}k`;
         state.sessions[agent]=null;state.sessionStats=window.TriadSessionBudget.resetAgent(state.sessionStats,agent,{incrementRotation:true});session=null;
       }
       if(rotationReason){addTrace(agent,'info','다음 작업 새 세션',rotationReason);save();}
@@ -1265,13 +1270,13 @@
       try { data=JSON.parse(line); } catch { addTrace(agent,'info','비정형 출력',line); return; }
       traceProviderEvent(agent,data,line);
       if (agent==='codex') {
-        if (data.type==='thread.started' && data.thread_id && !state.pending.codex?.isolated) { state.sessions.codex=data.thread_id; state.sessionStats.codex.sessionId=data.thread_id; if(state.pending.codex)state.pending.codex.sessionId=data.thread_id; save(); renderSettings(); }
+        if (data.type==='thread.started' && data.thread_id && !state.pending.codex?.isolated) { state.sessions.codex=data.thread_id; const stats=ensureAgentSessionStats('codex');if(stats)stats.sessionId=data.thread_id; if(state.pending.codex)state.pending.codex.sessionId=data.thread_id; save(); renderSettings(); }
         if (data.type==='item.completed' && data.item?.type==='agent_message' && data.item.text) appendAgentText(agent,data.item.text);
         if (data.type==='error') failAgent(agent,data.error?.message || data.message || 'Codex 실행 오류');
       } else {
         const delta=data.type==='stream_event' && data.event?.type==='content_block_delta' && data.event?.delta?.type==='text_delta' ? data.event.delta.text : null;
         if (data.session_id && !state.pending.claude?.isolated && (delta || data.type==='assistant' || (data.type==='result'&&!data.is_error))) {
-          state.sessions.claude=data.session_id; state.sessionStats.claude.sessionId=data.session_id; if(state.pending.claude)state.pending.claude.sessionId=data.session_id; save(); renderSettings();
+          state.sessions.claude=data.session_id; const stats=ensureAgentSessionStats('claude');if(stats)stats.sessionId=data.session_id; if(state.pending.claude)state.pending.claude.sessionId=data.session_id; save(); renderSettings();
         }
         if (delta) appendAgentText(agent,delta);
         if (data.type==='result' && !currentText(agent) && data.result) appendAgentText(agent,data.result);
@@ -1450,7 +1455,7 @@
         if(state.retryOnTermination[event.agent]) retryAgent(event.agent); else finishAgent(event.agent,event.exitCode);
       }
       else if (event.type==='error') failAgent(event.agent,event.message);
-      else if (event.type==='session') { if(!state.pending[event.agent]?.isolated){state.sessions[event.agent]=event.session;state.sessionStats[event.agent].sessionId=event.session;if(state.pending[event.agent])state.pending[event.agent].sessionId=event.session; save(); renderSettings();} }
+      else if (event.type==='session') { if(!state.pending[event.agent]?.isolated&&agents.includes(event.agent)){state.sessions[event.agent]=event.session;const stats=ensureAgentSessionStats(event.agent);if(stats)stats.sessionId=event.session;if(state.pending[event.agent])state.pending[event.agent].sessionId=event.session; save(); renderSettings();} }
       else if (event.type==='directory') { state.settings[event.agent].workspacePath=event.path; save(); renderSettings(); renderStatus();requestBranch(event.agent);requestProjectFiles(event.agent); }
       else if (event.type==='files') {
         const draft=document.getElementById('draft');
@@ -1584,8 +1589,8 @@
     function sessionSummary(agent) {
       const config=state.settings?.[agent]||{};const stats=state.sessionStats?.[agent]||{};
       const policy={auto:'자동',continue:'계속',alwaysNew:'항상 새'}[config.sessionPolicy]||'자동';
-      const input=Math.round((stats.sessionInputTokens||0)/1000);
-      return `${policy} · ${stats.turns||0}턴 · 입력 ${input}k${state.sessions?.[agent]?'':' · 새 세션'}`;
+      const totalInput=Math.round((stats.sessionInputTokens||0)/1000);const contextInput=Math.round((stats.lastInputTokens||0)/1000);
+      return `${policy} · ${stats.turns||0}턴 · 누적 입력 ${totalInput}k · 현재 문맥 ${contextInput}k${state.sessions?.[agent]?'':' · 새 세션'}`;
     }
     function renderSettings() {
       if (!state.settings) return;
@@ -1644,7 +1649,7 @@
             <summary>세션 <span class="settings-group-summary">${sessionSummary(agent)}</span></summary>
             <div class="settings-group-body">
               <div class="field"><label>세션 정책</label><select data-key="sessionPolicy"><option value="auto" ${c.sessionPolicy==='auto'?'selected':''}>자동 회전 (권장)</option><option value="continue" ${c.sessionPolicy==='continue'?'selected':''}>계속 유지</option><option value="alwaysNew" ${c.sessionPolicy==='alwaysNew'?'selected':''}>항상 새 세션</option></select></div>
-              ${c.sessionPolicy==='auto'?`<div class="row"><div class="field"><label>턴 기준</label><input data-key="sessionTurnLimit" type="number" min="2" max="50" value="${c.sessionTurnLimit}"></div><div class="field"><label>입력 토큰 기준</label><input data-key="sessionTokenLimit" type="number" min="8000" max="500000" step="1000" value="${c.sessionTokenLimit}"></div></div><p class="fast-note">둘 중 하나에 도달한 다음 일반 작업부터 새 세션으로 시작합니다. 정확한 과금값이 아닌 실행 이벤트 기반 추정치입니다.</p>`:''}
+              ${c.sessionPolicy==='auto'?`<div class="row"><div class="field"><label>턴 기준</label><input data-key="sessionTurnLimit" type="number" min="2" max="50" value="${c.sessionTurnLimit}"></div><div class="field"><label>현재 문맥 기준</label><input data-key="sessionTokenLimit" type="number" min="8000" max="500000" step="1000" value="${c.sessionTokenLimit}"></div></div><p class="fast-note">직전 요청의 실측 문맥이 기준(기본 48k)이거나 턴 기준(기본 6턴)에 도달한 다음 일반 작업부터 새 세션으로 시작합니다. 캐시 포함 논리 입력은 문맥 측정용이며 과금 추정이 아닙니다.</p>`:''}
               <div class="session-row"><span>${sessionSummary(agent)}</span><button class="small-btn reset-session" ${state.running[agent]?'disabled':''}>다음 작업부터 새 세션</button></div>
             </div>
           </details>`;

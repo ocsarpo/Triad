@@ -39,6 +39,8 @@ test('공통 모드 UI는 공통 picker만 활성화하고 에이전트별 works
   assert.match(renderer,/\.workspace-path-field\.is-disabled \{ border-color:/);
   assert.match(renderer,/\.workspace-path-field\.is-disabled input:disabled, \.workspace-path-field\.is-disabled button:disabled/);
   assert.match(renderer,/\.workspace-path-field\.is-disabled \.branch-row\.active, \.workspace-path-field\.is-disabled \.branch-row\.detached/);
+  assert.match(renderer,/\.field \.toggle-label \{ display: inline-flex; align-items: center; gap: 6px;/);
+  assert.match(renderer,/\.field \.toggle-label input\[type="checkbox"\] \{ width: 14px; height: 14px; min-height: 0; padding: 0; flex: none;/);
   assert.match(renderer,/field workspace-path-field \$\{separate\?'is-disabled':''\}/);
   assert.match(renderer,/field workspace-path-field \$\{separate\?'':'is-disabled'\}/);
 });

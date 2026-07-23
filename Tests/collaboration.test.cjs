@@ -58,7 +58,16 @@ test('렌더러의 실행과 재시도 요청은 명시적 MCP predicate와 공�
   assert.match(renderer, /nativeSave:false/);
   assert.match(renderer, /waitForIndependentContribution\(agent,pending,\(\)=>setTimeout\(drainQueues,0\)\)/);
   assert.match(renderer, /sharedDocumentsLocked\(\)/);
-  assert.match(renderer, /row\.disabled=documentLocked/);
+  assert.doesNotMatch(renderer, /row\.disabled=documentLocked/);
+  assert.doesNotMatch(renderer, /if\(!force&&sharedDocumentsLocked\(\)\)return/);
+  assert.match(renderer, /activeSharedDocument\(\)\|\|state\.orchestration\?\.sharedContext\?\.board/);
+  assert.match(renderer, /function currentWorkSharedDocument\(\)/);
+  assert.match(renderer, /if\(!state\.running\[agent\]\)continue/);
+  assert.match(renderer, /현재 AI 실행은 기존 작업 문서를 계속 사용합니다/);
+  assert.match(renderer, /documentIdOf\(canonical\)===state\.activeSharedDocumentId/);
+  assert.doesNotMatch(renderer, /documentIdOf\(canonical\)===state\.activeSharedDocumentId\|\|current\?\.documentId/);
+  assert.match(renderer, /if\(state\.orchestration&&documentIdOf\(state\.orchestration\.sharedContext\?\.board\)===documentIdOf\(canonical\)\)/);
+  assert.match(renderer, /the user is browsing a different document/);
   assert.match(renderer, /waitForIndependentContribution/);
   assert.match(renderer, /공유 문서 기여 미확인/);
   assert.match(renderer, /const canonical=upsertSharedDocument/);

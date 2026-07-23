@@ -745,8 +745,9 @@
     function activeSharedDocument() {
       return window.TriadCollaboration.selectedDocument(state.sharedDocuments,state.activeSharedDocumentId);
     }
-    function setActiveSharedDocument(documentId, persist=true, force=false) {
-      if(!force&&sharedDocumentsLocked())return;
+    // Reading another shared document must not affect a run already handed to
+    // an agent: dispatchAgent keeps that run's context in pending/orchestration.
+    function setActiveSharedDocument(documentId, persist=true) {
       state.activeSharedDocumentId=documentId||null;state.pendingSharedDocumentDeleteId=null;
       const board=activeSharedDocument();
       if(board)state.sharedContext={conversationId:board.conversationId,runId:board.runId,owner:board.owner,documentId:documentIdOf(board),board};
@@ -757,7 +758,7 @@
       const existing=window.TriadCollaboration.selectedDocument(state.sharedDocuments,documentIdOf(normalized));
       if(existing&&existing.runId===normalized.runId&&(existing.revision??-1)>(normalized.revision??-1))return existing;
       state.sharedDocuments=window.TriadCollaboration.upsertDocument(state.sharedDocuments,normalized);
-      if(options.select)setActiveSharedDocument(documentIdOf(normalized),false,true);
+      if(options.select)setActiveSharedDocument(documentIdOf(normalized),false);
       if(options.persist!==false)save();
       if(options.nativeSave!==false)post({action:'saveSharedDocument',document:normalized});
       return normalized;
@@ -784,6 +785,20 @@
     function sharedDocumentsLocked() {
       return !!state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length>0;
     }
+    function documentForContext(context) {
+      const documentId=context?.documentId||documentIdOf(context?.board);
+      return window.TriadCollaboration.selectedDocument(state.sharedDocuments,documentId)||context?.board||null;
+    }
+    function currentWorkSharedDocument() {
+      const flowBoard=documentForContext(state.orchestration?.sharedContext);
+      if(flowBoard)return flowBoard;
+      for(const agent of agents){
+        if(!state.running[agent])continue;
+        const pendingBoard=documentForContext(state.pending[agent]?.sharedContext);
+        if(pendingBoard)return pendingBoard;
+      }
+      return null;
+    }
     function updateSharedDocumentTitle(board, input) {
       if(sharedDocumentsLocked())return;
       const title=input.value.trim().slice(0,80);if(!title){input.focus();return;}
@@ -805,10 +820,12 @@
     function renderSharedBoard() {
       const pane=document.getElementById('board-pane');const body=document.getElementById('board-body');const chat=document.querySelector('.chat');const toggle=document.getElementById('board-toggle');if(!pane||!body||!chat)return;
       pane.hidden=!state.boardVisible;chat.classList.toggle('board-open',state.boardVisible);if(toggle)toggle.textContent=state.boardVisible?'공유 문서 닫기':'공유 문서';const documentLocked=sharedDocumentsLocked();const newButton=document.getElementById('board-new');if(newButton){newButton.disabled=documentLocked;newButton.title=documentLocked?'AI 작업 또는 대기열이 끝난 뒤 새 문서를 만들 수 있습니다.':'';}
-      body.innerHTML='';const board=ensureDocumentBoard(boardFor());const meta=document.getElementById('board-meta');
+      // The pane is a document viewer.  An active selection takes precedence
+      // over the document being written by a currently running agent.
+      body.innerHTML='';const board=ensureDocumentBoard(activeSharedDocument()||state.orchestration?.sharedContext?.board||state.sharedContext?.board||null);const meta=document.getElementById('board-meta');
       const list=document.createElement('nav');list.className='board-list';list.setAttribute('aria-label','공유 문서 목록');
       for(const sharedDocument of state.sharedDocuments){
-        const row=document.createElement('button');row.className=`board-document ${documentIdOf(sharedDocument)===state.activeSharedDocumentId?'active':''}`;row.type='button';row.disabled=documentLocked;row.title=documentLocked?'AI 작업 또는 대기열이 끝난 뒤 문서를 바꿀 수 있습니다.':documentTitleOf(sharedDocument);
+        const row=document.createElement('button');row.className=`board-document ${documentIdOf(sharedDocument)===state.activeSharedDocumentId?'active':''}`;row.type='button';row.title=documentLocked?'문서를 열람하고 다음 실행 대상으로 선택합니다. 현재 AI 실행은 기존 작업 문서를 계속 사용합니다.':documentTitleOf(sharedDocument);
         const title=document.createElement('strong');title.textContent=documentTitleOf(sharedDocument);
         const details=document.createElement('small');details.textContent=`${sharedDocument.phase||'proposal'} · r${sharedDocument.revision??0} · ${sharedDocument.updatedAt?new Date(sharedDocument.updatedAt).toLocaleDateString('ko-KR',{month:'numeric',day:'numeric'}):'방금'}`;
         row.append(title,details);row.onclick=()=>setActiveSharedDocument(documentIdOf(sharedDocument));list.appendChild(row);
@@ -886,11 +903,20 @@
           // The broker has already atomically written this board.  Saving the
           // event snapshot again could overwrite a newer contribution.
           const canonical=upsertSharedDocument(board,{select:documentIdOf(board)===state.activeSharedDocumentId,nativeSave:false});
-          if(!state.activeSharedDocumentId||documentIdOf(canonical)===state.activeSharedDocumentId||current?.documentId===documentIdOf(canonical)){
+          // A broker update for a running document must never switch a
+          // user's separate viewer selection.  Only update the active
+          // selection's context, while the orchestration context remains
+          // authoritative for the in-flight run.
+          if(!state.activeSharedDocumentId||documentIdOf(canonical)===state.activeSharedDocumentId){
             const next={conversationId:canonical.conversationId,runId:canonical.runId,owner:canonical.owner,documentId:documentIdOf(canonical),board:canonical};state.sharedContext=next;
-            if(state.orchestration&&documentIdOf(state.orchestration.sharedContext?.board)===documentIdOf(canonical))state.orchestration.sharedContext=next;
-            save();renderSharedBoard();addTrace(event.actor||from,'info','공유 보드 갱신',{section:event.section,phase:canonical.phase,revision:canonical.revision});
+            save();
           }
+          if(state.orchestration&&documentIdOf(state.orchestration.sharedContext?.board)===documentIdOf(canonical)){
+            state.orchestration.sharedContext={conversationId:canonical.conversationId,runId:canonical.runId,owner:canonical.owner,documentId:documentIdOf(canonical),board:canonical};
+          }
+          // The document list and execution trace should still advance when
+          // the user is browsing a different document.
+          renderSharedBoard();addTrace(event.actor||from,'info','공유 보드 갱신',{section:event.section,phase:canonical.phase,revision:canonical.revision});
         }
         renderCollaboration();return;
       }
@@ -1492,8 +1518,11 @@
       if(state.orchestration){const task=state.orchestration.current;status.textContent=task?(state.orchestration.mode==='agent'?`${names[task.agent]} · ${task.label} · AI 호출 ${state.orchestration.handoffs}/${state.orchestration.maxHandoffs}`:`${names[task.agent]} · ${task.label} (${state.orchestration.index}/${state.orchestration.tasks.length})`):'다음 작업 준비 중';status.classList.add('live');}
       else {status.textContent=independent?'각 AI가 독립적으로 응답':agentMode?'필요할 때 서로 질문하고 답을 돌려받아 작업':review?'작성 → 검토 → 수정':'두 AI가 번갈아 토론';status.classList.remove('live');}
       document.querySelectorAll('[data-tag]').forEach(button=>button.disabled=!independent&&button.dataset.tag==='#all');
-      const documentLabel=document.getElementById('collab-document');const documentBoard=activeSharedDocument()||state.sharedContext?.board;
-      documentLabel.hidden=!documentBoard;documentLabel.textContent=documentBoard?`작업 문서: ${documentTitleOf(documentBoard)}`:'';documentLabel.title=documentLabel.textContent;
+      const documentLabel=document.getElementById('collab-document');const workDocument=currentWorkSharedDocument();const selectedDocument=activeSharedDocument()||state.sharedContext?.board;
+      const showingDifferentDocument=workDocument&&selectedDocument&&documentIdOf(workDocument)!==documentIdOf(selectedDocument);
+      documentLabel.hidden=!workDocument&&!selectedDocument;
+      documentLabel.textContent=workDocument?`현재 실행: ${documentTitleOf(workDocument)}${showingDifferentDocument?` · 다음: ${documentTitleOf(selectedDocument)}`:''}`:selectedDocument?`선택 문서: ${documentTitleOf(selectedDocument)}`:'';
+      documentLabel.title=workDocument?`현재 AI 작업은 “${documentTitleOf(workDocument)}”에 기록됩니다.${showingDifferentDocument?` 선택한 “${documentTitleOf(selectedDocument)}”은 다음 실행에 사용됩니다.`:''}`:documentLabel.textContent;
       document.getElementById('block-template').disabled=!independent;
       document.getElementById('compose-hint').textContent=independent?'Enter 전송 · 작업 중 추가 전송은 AI별 순차 대기 · 태그가 없으면 둘 다':agentMode?'#codex·#claude로 이번 작업의 시작 AI 지정 · 태그가 없으면 선택값 사용':'Enter 전송 · 작업 중 추가 전송은 순차 대기 · 협업 순서에 따라 자동 중계';
       const controlsLocked=!!state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length>0;

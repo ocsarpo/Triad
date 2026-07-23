@@ -118,7 +118,19 @@
     .board-head { display: flex; align-items: center; gap: 9px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
     .board-head h2 { margin: 0; font-size: 13px; }
     .board-meta { margin-left: auto; color: var(--muted); font: 9px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .board-body { min-height: 0; overflow-y: auto; padding: 13px 14px 26px; }
+    .board-body { min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(118px, .7fr) minmax(0, 1.3fr); overflow: hidden; }
+    .board-list { min-width: 0; min-height: 0; overflow-y: auto; padding: 8px 6px 18px; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--panel), var(--bg) 20%); }
+    .board-document { width: 100%; margin-bottom: 4px; padding: 8px 8px; overflow: hidden; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text); text-align: left; }
+    .board-document:hover { background: var(--card); }
+    .board-document.active { border-color: color-mix(in srgb, var(--all), transparent 65%); background: color-mix(in srgb, var(--all), transparent 88%); }
+    .board-document strong, .board-document small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .board-document strong { font-size: 10px; }
+    .board-document small { margin-top: 3px; color: var(--muted); font-size: 8px; }
+    .board-detail { min-width: 0; min-height: 0; overflow-y: auto; padding: 13px 14px 26px; }
+    .board-document-head { display: flex; align-items: center; gap: 6px; margin: 0 0 11px; }
+    .board-document-title { min-width: 0; flex: 1; height: 29px; padding: 4px 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); font-size: 11px; font-weight: 700; outline: none; }
+    .board-document-title:focus { border-color: var(--all); box-shadow: 0 0 0 2px color-mix(in srgb, var(--all), transparent 84%); }
+    .board-delete { color: var(--danger); }
     .board-empty { margin: 18px 4px; color: var(--muted); font-size: 11px; line-height: 1.6; }
     .board-summary { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 12px; }
     .board-chip { padding: 3px 6px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: color-mix(in srgb, var(--bg), transparent 22%); font-size: 9px; }
@@ -126,6 +138,8 @@
     .board-section h3 { margin: 0; padding: 7px 9px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 10px; }
     .board-section pre { margin: 0; padding: 8px 9px; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font: 10px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
     .board-section ul { margin: 0; padding: 8px 9px 8px 25px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 10px; line-height: 1.55; }
+    .collab-document { max-width: 190px; overflow: hidden; color: var(--all); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 700; }
+    .collab-document[hidden] { display: none; }
     .app.trace-hidden { grid-template-columns: 230px minmax(520px,1fr) 310px; }
     .app.trace-hidden .trace-panel { display: none; }
     .messages { min-height: 0; overflow-y: auto; padding: 22px max(22px, calc((100% - 800px)/2)); }
@@ -338,8 +352,8 @@
           <div class="diff-head"><h2 id="diff-title">변경 사항</h2><select id="diff-agent"><option value="codex">Codex 폴더</option><option value="claude">Claude 폴더</option></select><span class="diff-workspace" id="diff-workspace"></span><span class="spacer"></span><button class="small-btn" id="diff-refresh">↻</button><button class="small-btn" id="diff-close">닫기</button></div>
           <div class="diff-body"><nav class="diff-file-list" id="diff-file-list" aria-label="변경 파일 목록"></nav><pre class="diff-content" id="diff-content"></pre></div>
         </section>
-        <section class="board-pane" id="board-pane" aria-label="에이전트 공유 보드" hidden>
-          <div class="board-head"><h2>공유 보드</h2><span class="board-meta" id="board-meta"></span><button class="small-btn" id="board-close">닫기</button></div>
+        <section class="board-pane" id="board-pane" aria-label="에이전트 공유 문서" hidden>
+          <div class="board-head"><h2>공유 문서</h2><span class="board-meta" id="board-meta"></span><button class="small-btn" id="board-new">＋ 새 문서</button><button class="small-btn" id="board-close">닫기</button></div>
           <div class="board-body" id="board-body"></div>
         </section>
       </div>
@@ -357,6 +371,7 @@
           <span id="collab-rounds-wrap"><label for="collab-rounds" id="collab-rounds-label">라운드</label> <select id="collab-rounds"></select></span>
           <span id="collab-helper-timeout-wrap"><label for="collab-helper-timeout">보조 AI 제한(분)</label> <input id="collab-helper-timeout" type="number" min="1" max="120" step="1" inputmode="numeric" aria-label="보조 AI 응답 제한 시간(분)"></span>
           <span id="collab-finalizer-wrap"><label for="collab-finalizer">최종 종합</label> <select id="collab-finalizer"><option value="none">없음</option><option value="codex">Codex</option><option value="claude" selected>Claude</option></select></span>
+          <span class="collab-document" id="collab-document" hidden></span>
           <span class="collab-state" id="collab-state">각 AI가 독립적으로 응답</span>
         </div>
         <div class="queue-list" id="queue-list" aria-label="순차 대기열" hidden></div>
@@ -416,6 +431,7 @@
       conversations: [], activeConversationId: localStorage.getItem('triad.activeConversationId'),
       storageReady: false, saveTimer: null, conversationSearch: '',
       collaboration: {mode:'independent',lead:'codex',rounds:6,finalizer:'claude',helperTimeoutMinutes:5}, orchestration:null, sharedContext:null,
+      sharedDocuments:[], activeSharedDocumentId:null, pendingSharedDocumentDeleteId:null,
       queue: [],
       usage: JSON.parse(localStorage.getItem('triad.usage')||'{"codex":{"windows":[]},"claude":{"windows":[]}}'), usageRefreshing:false, usageTimer:null, lastUsageRefresh:0,
       forceMessageBottom:false,routingPreviewOpen:false,
@@ -455,7 +471,8 @@
         id:state.activeConversationId, title:existing?.title||'새 대화',
         createdAt:existing?.createdAt||now, updatedAt:now,
         messages:clone(state.messages.slice(-300)), settings:clone(state.settings), collaboration:clone(state.collaboration),
-        sessions:clone(state.sessions), traces:clone(state.traces.slice(-500)), sharedContext:clone(state.sharedContext)
+        sessions:clone(state.sessions), traces:clone(state.traces.slice(-500)), sharedContext:clone(state.sharedContext),
+        activeSharedDocumentId:state.activeSharedDocumentId
       };
     }
     function persistConversation(immediate=false) {
@@ -486,6 +503,7 @@
       state.sessions=clone(conversation.sessions||{codex:null,claude:null});
       state.traces=clone(conversation.traces||[]);
       state.sharedContext=clone(conversation.sharedContext||null);
+      state.activeSharedDocumentId=conversation.activeSharedDocumentId||state.sharedContext?.board?.documentId||null;
       localStorage.setItem('triad.activeConversationId',conversation.id);
       renderAll();setTimeout(()=>{refreshBranches();refreshProjectFiles();},0);
     }
@@ -493,7 +511,7 @@
       if(agents.some(agent=>state.running[agent])||state.queue.length)return;
       if(!skipPersist)persistConversation(true);
       const now=Date.now();
-      const conversation={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:[],settings:clone(state.settings),collaboration:clone(state.collaboration),sessions:{codex:null,claude:null},traces:[],sharedContext:null};
+      const conversation={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:[],settings:clone(state.settings),collaboration:clone(state.collaboration),sessions:{codex:null,claude:null},traces:[],sharedContext:null,activeSharedDocumentId:null};
       state.conversations.unshift(conversation);loadConversation(conversation);addWelcome();persistConversation(true);
       document.getElementById('draft').focus();
     }
@@ -695,9 +713,73 @@
     function closeDiff(){state.diff.visible=false;renderDiff();requestAnimationFrame(updateScrollButton);}
     function openBoard(){
       if(state.boardVisible){closeBoard();return;}
-      closeDiff();state.boardVisible=true;renderSharedBoard();requestAnimationFrame(updateScrollButton);
+      closeDiff();state.boardVisible=true;post({action:'listSharedDocuments'});renderSharedBoard();requestAnimationFrame(updateScrollButton);
     }
     function closeBoard(){state.boardVisible=false;renderSharedBoard();requestAnimationFrame(updateScrollButton);}
+    function documentIdOf(board) { return window.TriadCollaboration.documentIdOf(board); }
+    function documentTitleOf(board) { return String(board?.title||window.TriadCollaboration.documentTitleFromObjective(board?.objective)||'새 공유 문서'); }
+    function ensureDocumentBoard(board, fallbackTitle='새 공유 문서') {
+      if(!board||typeof board!=='object')return null;
+      if(!documentIdOf(board))board.documentId=board.conversationId||id();
+      if(!board.title)board.title=window.TriadCollaboration.documentTitleFromObjective(board.objective,fallbackTitle);
+      if(!Array.isArray(board.history))board.history=[];
+      return board;
+    }
+    function activeSharedDocument() {
+      return window.TriadCollaboration.selectedDocument(state.sharedDocuments,state.activeSharedDocumentId);
+    }
+    function setActiveSharedDocument(documentId, persist=true, force=false) {
+      if(!force&&sharedDocumentsLocked())return;
+      state.activeSharedDocumentId=documentId||null;state.pendingSharedDocumentDeleteId=null;
+      const board=activeSharedDocument();
+      if(board)state.sharedContext={conversationId:board.conversationId,runId:board.runId,owner:board.owner,documentId:documentIdOf(board),board};
+      if(persist)save();renderSharedBoard();renderCollaboration();
+    }
+    function upsertSharedDocument(board, options={}) {
+      const normalized=ensureDocumentBoard(board);if(!normalized)return null;
+      const existing=window.TriadCollaboration.selectedDocument(state.sharedDocuments,documentIdOf(normalized));
+      if(existing&&existing.runId===normalized.runId&&(existing.revision??-1)>(normalized.revision??-1))return existing;
+      state.sharedDocuments=window.TriadCollaboration.upsertDocument(state.sharedDocuments,normalized);
+      if(options.select)setActiveSharedDocument(documentIdOf(normalized),false,true);
+      if(options.persist!==false)save();
+      if(options.nativeSave!==false)post({action:'saveSharedDocument',document:normalized});
+      return normalized;
+    }
+    function applySharedDocuments(documents) {
+      const normalized=(Array.isArray(documents)?documents:[]).map(item=>ensureDocumentBoard(item)).filter(Boolean);
+      state.sharedDocuments=window.TriadCollaboration.sortDocuments(normalized);
+      const selected=activeSharedDocument();
+      if(!selected){
+        const legacy=state.sharedContext?.board;const legacyId=documentIdOf(legacy);
+        const matched=state.sharedDocuments.find(item=>(legacyId&&documentIdOf(item)===legacyId)||(!legacyId&&legacy?.conversationId&&item.conversationId===legacy.conversationId));
+        if(matched)state.activeSharedDocumentId=documentIdOf(matched);
+        else if(state.activeSharedDocumentId)state.activeSharedDocumentId=null;
+      }
+      const active=activeSharedDocument();if(active)state.sharedContext={conversationId:active.conversationId,runId:active.runId,owner:active.owner,documentId:documentIdOf(active),board:active};
+      save();renderSharedBoard();renderCollaboration();
+    }
+    function createSharedDocument(title='새 공유 문서') {
+      if(sharedDocumentsLocked())return;
+      const board=ensureDocumentBoard(window.TriadSharedContext.createBoard({conversationId:state.activeConversationId||id(),runId:id(),objective:'',owner:state.collaboration.lead,documentId:id(),title}),title);
+      board.documentId ||= id();board.title=title.trim().slice(0,80)||'새 공유 문서';
+      upsertSharedDocument(board,{select:true});addTrace('system','success','공유 문서 생성',{documentId:board.documentId,title:board.title});
+    }
+    function sharedDocumentsLocked() {
+      return !!state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length>0;
+    }
+    function updateSharedDocumentTitle(board, input) {
+      if(sharedDocumentsLocked())return;
+      const title=input.value.trim().slice(0,80);if(!title){input.focus();return;}
+      board.title=title;board.updatedAt=new Date().toISOString();upsertSharedDocument(board,{select:documentIdOf(board)===state.activeSharedDocumentId});renderSharedBoard();
+    }
+    function deleteSharedDocument(board) {
+      if(sharedDocumentsLocked())return;
+      const documentId=documentIdOf(board);if(!documentId)return;
+      if(state.pendingSharedDocumentDeleteId!==documentId){state.pendingSharedDocumentDeleteId=documentId;renderSharedBoard();return;}
+      state.sharedDocuments=state.sharedDocuments.filter(item=>documentIdOf(item)!==documentId);
+      if(state.activeSharedDocumentId===documentId){state.activeSharedDocumentId=null;state.sharedContext=null;}
+      state.pendingSharedDocumentDeleteId=null;post({action:'deleteSharedDocument',documentId});save();renderSharedBoard();renderCollaboration();
+    }
     function boardValue(value) {
       if(value===null||value===undefined||value==='')return '아직 기록되지 않았습니다.';
       if(Array.isArray(value))return value.length?value.map(item=>typeof item==='string'?item:JSON.stringify(item)).join('\n'):'아직 기록되지 않았습니다.';
@@ -705,17 +787,32 @@
     }
     function renderSharedBoard() {
       const pane=document.getElementById('board-pane');const body=document.getElementById('board-body');const chat=document.querySelector('.chat');const toggle=document.getElementById('board-toggle');if(!pane||!body||!chat)return;
-      pane.hidden=!state.boardVisible;chat.classList.toggle('board-open',state.boardVisible);if(toggle)toggle.textContent=state.boardVisible?'공유 보드 닫기':'공유 보드';
-      body.innerHTML='';const board=boardFor();const meta=document.getElementById('board-meta');
-      if(!board){if(meta)meta.textContent='';const empty=document.createElement('p');empty.className='board-empty';empty.textContent='협업 작업을 시작하면 프로젝트 밖의 Triad 공유 보드가 여기에 표시됩니다.';body.appendChild(empty);return;}
+      pane.hidden=!state.boardVisible;chat.classList.toggle('board-open',state.boardVisible);if(toggle)toggle.textContent=state.boardVisible?'공유 문서 닫기':'공유 문서';const documentLocked=sharedDocumentsLocked();const newButton=document.getElementById('board-new');if(newButton){newButton.disabled=documentLocked;newButton.title=documentLocked?'AI 작업 또는 대기열이 끝난 뒤 새 문서를 만들 수 있습니다.':'';}
+      body.innerHTML='';const board=ensureDocumentBoard(boardFor());const meta=document.getElementById('board-meta');
+      const list=document.createElement('nav');list.className='board-list';list.setAttribute('aria-label','공유 문서 목록');
+      for(const document of state.sharedDocuments){
+        const row=document.createElement('button');row.className=`board-document ${documentIdOf(document)===state.activeSharedDocumentId?'active':''}`;row.type='button';row.disabled=documentLocked;row.title=documentLocked?'AI 작업 또는 대기열이 끝난 뒤 문서를 바꿀 수 있습니다.':documentTitleOf(document);
+        const title=document.createElement('strong');title.textContent=documentTitleOf(document);
+        const details=document.createElement('small');details.textContent=`${document.phase||'proposal'} · r${document.revision??0} · ${document.updatedAt?new Date(document.updatedAt).toLocaleDateString('ko-KR',{month:'numeric',day:'numeric'}):'방금'}`;
+        row.append(title,details);row.onclick=()=>setActiveSharedDocument(documentIdOf(document));list.appendChild(row);
+      }
+      if(!state.sharedDocuments.length){const empty=document.createElement('p');empty.className='board-empty';empty.textContent='아직 공유 문서가 없습니다.';list.appendChild(empty);}
+      body.appendChild(list);
+      const detail=document.createElement('div');detail.className='board-detail';body.appendChild(detail);
+      if(!board){if(meta)meta.textContent='';const empty=document.createElement('p');empty.className='board-empty';empty.textContent='새 문서를 만들거나 협업 작업을 시작하면, 이 문서를 두 AI가 이어서 사용합니다.';detail.appendChild(empty);return;}
       if(meta)meta.textContent=`${board.phase||'proposal'} · r${board.revision??0}`;
+      const documentHead=document.createElement('div');documentHead.className='board-document-head';const titleInput=document.createElement('input');titleInput.className='board-document-title';titleInput.value=documentTitleOf(board);titleInput.disabled=documentLocked;titleInput.title=documentLocked?'AI 작업 또는 대기열이 끝난 뒤 제목을 바꿀 수 있습니다.':'';titleInput.setAttribute('aria-label','공유 문서 제목');const saveTitle=document.createElement('button');saveTitle.className='small-btn';saveTitle.textContent='저장';saveTitle.disabled=documentLocked;saveTitle.onclick=()=>updateSharedDocumentTitle(board,titleInput);titleInput.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();updateSharedDocumentTitle(board,titleInput);}};const remove=document.createElement('button');remove.className=`small-btn board-delete ${state.pendingSharedDocumentDeleteId===documentIdOf(board)?'confirm-delete':''}`;remove.textContent=state.pendingSharedDocumentDeleteId===documentIdOf(board)?'삭제 확인':'삭제';remove.disabled=documentLocked;remove.title=documentLocked?'AI 작업 또는 대기열이 끝난 뒤 삭제할 수 있습니다.':'';remove.onclick=()=>deleteSharedDocument(board);documentHead.append(titleInput,saveTitle,remove);detail.appendChild(documentHead);
       const summary=document.createElement('div');summary.className='board-summary';
-      for(const text of [`owner ${names[board.owner]||board.owner}`,`reviewer ${names[board.reviewer]||board.reviewer}`,`phase ${board.phase||'proposal'}`,`revision ${board.revision??0}`]){const chip=document.createElement('span');chip.className='board-chip';chip.textContent=text;summary.appendChild(chip);}body.appendChild(summary);
-      const labels={objective:'의제',constraints:'제약 조건',proposal:'제안',evidence:'근거',verdict:'검토 판정',disputes:'이견·보완',decision:'최종 결정'};
-      for(const key of ['objective','constraints','proposal','evidence','verdict','disputes','decision']){
-        const section=document.createElement('section');section.className='board-section';const title=document.createElement('h3');title.textContent=labels[key];const content=document.createElement(Array.isArray(board[key])?'ul':'pre');
-        if(Array.isArray(board[key])){for(const item of board[key]||[]){const li=document.createElement('li');li.textContent=typeof item==='string'?item:JSON.stringify(item);content.appendChild(li);}if(!board[key]?.length){const li=document.createElement('li');li.textContent='아직 기록되지 않았습니다.';content.appendChild(li);}}
-        else content.textContent=boardValue(board[key]);section.append(title,content);body.appendChild(section);
+      for(const text of [`owner ${names[board.owner]||board.owner}`,`reviewer ${names[board.reviewer]||board.reviewer}`,`phase ${board.phase||'proposal'}`,`revision ${board.revision??0}`]){const chip=document.createElement('span');chip.className='board-chip';chip.textContent=text;summary.appendChild(chip);}detail.appendChild(summary);
+      const labels={objective:'의제',constraints:'제약 조건',proposal:'제안',evidence:'근거',verdict:'검토 판정',disputes:'이견·보완',decision:'최종 결정',contributions:'독립 실행 기여'};
+      for(const key of ['objective','constraints','proposal','evidence','verdict','disputes','decision','contributions']){
+        const section=document.createElement('section');section.className='board-section';const title=document.createElement('h3');title.textContent=labels[key];const content=document.createElement(key==='contributions'?'div':Array.isArray(board[key])?'ul':'pre');
+        if(key==='contributions'){
+          const contributions=board.contributions&&typeof board.contributions==='object'?board.contributions:{};let count=0;
+          for(const actor of agents){for(const item of contributions[actor]||[]){const entry=document.createElement('pre');entry.textContent=`${names[actor]}\n${item.summary||''}${item.evidence?.length?`\n근거: ${item.evidence.map(value=>typeof value==='string'?value:JSON.stringify(value)).join(' · ')}`:''}`;content.appendChild(entry);count+=1;}}
+          if(!count){const empty=document.createElement('pre');empty.textContent='아직 기록되지 않았습니다.';content.appendChild(empty);}
+        } else if(Array.isArray(board[key])){for(const item of board[key]||[]){const li=document.createElement('li');li.textContent=typeof item==='string'?item:JSON.stringify(item);content.appendChild(li);}if(!board[key]?.length){const li=document.createElement('li');li.textContent='아직 기록되지 않았습니다.';content.appendChild(li);}}
+        else content.textContent=boardValue(board[key]);section.append(title,content);detail.appendChild(section);
       }
     }
     function traceProviderEvent(agent, data, rawLine) {
@@ -761,13 +858,21 @@
     function handleBrokerEvent(event) {
       const from=event.from||event.rootAgent||'codex';const to=event.to||(from==='codex'?'claude':'codex');const count=`${event.used||0}/${event.limit||state.collaboration.rounds}`;
       if(event.eventType==='shared_context_updated'){
-        const board=event.board;
+        const board=ensureDocumentBoard(event.board);
         if(board&&typeof board==='object'){
           const current=state.orchestration?.sharedContext||state.sharedContext;
-          if(!current||!current.runId||current.runId===board.runId){
-            const next={conversationId:board.conversationId,runId:board.runId,owner:board.owner,board};state.sharedContext=next;
-            if(state.orchestration)state.orchestration.sharedContext=next;
-            save();renderSharedBoard();addTrace(event.actor||from,'info','공유 보드 갱신',{section:event.section,phase:board.phase,revision:board.revision});
+          const currentBoard=current?.board;const sameDocument=documentIdOf(currentBoard)===documentIdOf(board);
+          // Events are delivered through a file watcher and can arrive after
+          // the next run has already started.  Never let an older run or
+          // revision replace the active document in renderer memory.
+          if(sameDocument&&((current?.runId&&current.runId!==board.runId)||(currentBoard?.revision??-1)>(board.revision??-1))){renderCollaboration();return;}
+          // The broker has already atomically written this board.  Saving the
+          // event snapshot again could overwrite a newer contribution.
+          const canonical=upsertSharedDocument(board,{select:documentIdOf(board)===state.activeSharedDocumentId,nativeSave:false});
+          if(!state.activeSharedDocumentId||documentIdOf(canonical)===state.activeSharedDocumentId||current?.documentId===documentIdOf(canonical)){
+            const next={conversationId:canonical.conversationId,runId:canonical.runId,owner:canonical.owner,documentId:documentIdOf(canonical),board:canonical};state.sharedContext=next;
+            if(state.orchestration&&documentIdOf(state.orchestration.sharedContext?.board)===documentIdOf(canonical))state.orchestration.sharedContext=next;
+            save();renderSharedBoard();addTrace(event.actor||from,'info','공유 보드 갱신',{section:event.section,phase:canonical.phase,revision:canonical.revision});
           }
         }
         renderCollaboration();return;
@@ -862,24 +967,31 @@
       if(state.running[agent])return false;
       state.running[agent]=true;state.stderr[agent]='';state.lineBuffers[agent]='';
       const isolated=options.isolated===true;
-      state.pending[agent]={prompt,retried:false,isolated};state.responseIds[agent]=addMessage(agent,'',true);renderStatus();
+      const sharedContext=options.sharedContext||state.orchestration?.sharedContext||null;
+      state.pending[agent]={prompt,retried:false,isolated,sharedContext};state.responseIds[agent]=addMessage(agent,'',true);renderStatus();
       const config=state.settings[agent];
       const session=isolated?null:state.sessions[agent];
       addTrace(agent,'info','명령 전달',{model:config.model,effort:config.effort,speed:config.speedMode,workspace:config.workspacePath,writableRoots:config.writableRoots||'',networkAccess:!!config.networkAccess,allowLocalBinding:!!config.allowLocalBinding,session:session?'resume':'new',isolated,mode:state.orchestration?.mode||'independent'});
-      post({action:'run',agent,prompt,config:state.settings[agent],agentConfigs:state.settings,collaboration:state.collaboration,mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration),sharedContext:state.orchestration?.sharedContext||null,session});return true;
+      post({action:'run',agent,prompt,config:state.settings[agent],agentConfigs:state.settings,collaboration:state.collaboration,mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,sharedContext),sharedContext,session});return true;
     }
     function markMessageWorkStarted(messageId) {
       const message=state.messages.find(item=>item.id===messageId);if(message)message.workStarted=true;
     }
-    function enqueueAgent(agent,prompt,sourceText,messageId) {
-      const item={id:id(),kind:'agent',agent,prompt,sourceText,messageId,createdAt:Date.now()};
-      state.queue.push(item);renderQueue();
+    function enqueueAgent(agent,prompt,sourceText,messageId,sharedContext=null) {
+      const item={id:id(),kind:'agent',agent,prompt,sourceText,messageId,sharedContext,createdAt:Date.now()};
+      state.queue.push(item);renderQueue();renderCollaboration();if(state.boardVisible)renderSharedBoard();
       addTrace(agent,'info','순차 대기열 등록',{position:window.TriadQueue.positionFor(state.queue,item),characters:prompt.length});
+      return item;
+    }
+    function enqueueIndependentBatch(targets,prompts,sourceText,messageId) {
+      const item={id:id(),kind:'independentBatch',targets:[...targets],prompts:clone(prompts),sourceText,messageId,createdAt:Date.now()};
+      state.queue.push(item);renderQueue();renderCollaboration();if(state.boardVisible)renderSharedBoard();
+      addTrace(targets[0]||'codex','info','독립 실행 묶음 대기열 등록',{targets,position:state.queue.filter(candidate=>candidate.kind==='independentBatch').length});
       return item;
     }
     function enqueueCollaboration(objective,sourceText,messageId) {
       const item={id:id(),kind:'collaboration',objective,sourceText,messageId,collaboration:clone(state.collaboration),createdAt:Date.now()};
-      state.queue.push(item);renderQueue();
+      state.queue.push(item);renderQueue();renderCollaboration();if(state.boardVisible)renderSharedBoard();
       addTrace(state.collaboration.lead,'info','협업 순차 대기열 등록',{position:window.TriadQueue.positionFor(state.queue,item),mode:state.collaboration.mode});
       return item;
     }
@@ -888,8 +1000,8 @@
       root.innerHTML='';root.hidden=state.queue.length===0;
       for(const item of state.queue){
         const row=document.createElement('div');row.className='queue-item';
-        const target=document.createElement('span');const key=item.kind==='collaboration'?'collaboration':item.agent;
-        target.className=`queue-target ${key}`;target.textContent=`${item.kind==='collaboration'?'협업':names[item.agent]} 대기 ${window.TriadQueue.positionFor(state.queue,item)}번`;
+        const target=document.createElement('span');const key=item.kind==='collaboration'||item.kind==='independentBatch'?'collaboration':item.agent;
+        target.className=`queue-target ${key}`;target.textContent=item.kind==='independentBatch'?`독립 실행 대기 ${state.queue.filter(candidate=>candidate.kind==='independentBatch'&&candidate.createdAt<=item.createdAt).length}번`:`${item.kind==='collaboration'?'협업':names[item.agent]} 대기 ${window.TriadQueue.positionFor(state.queue,item)}번`;
         const preview=document.createElement('span');preview.className='queue-preview';preview.textContent=item.sourceText||item.prompt||item.objective||'';
         const cancel=document.createElement('button');cancel.className='queue-cancel';cancel.textContent='취소';cancel.title='실행 전 대기 항목 취소';cancel.onclick=()=>cancelQueued(item.id);
         row.append(target,preview,cancel);root.appendChild(row);
@@ -897,10 +1009,10 @@
     }
     function cancelQueued(itemId) {
       const index=state.queue.findIndex(item=>item.id===itemId);if(index<0)return;
-      const [item]=state.queue.splice(index,1);const agent=item.kind==='collaboration'?(item.collaboration?.lead||state.collaboration.lead):item.agent;
+      const [item]=state.queue.splice(index,1);const agent=item.kind==='collaboration'?(item.collaboration?.lead||state.collaboration.lead):item.kind==='independentBatch'?(item.targets?.[0]||'codex'):item.agent;
       const message=state.messages.find(candidate=>candidate.id===item.messageId);
       if(window.TriadQueue.canRemoveMessage(state.queue,item,message))state.messages=state.messages.filter(candidate=>candidate.id!==item.messageId);
-      addTrace(agent,'info','대기 작업 취소',{target:item.kind==='collaboration'?'협업':names[item.agent]});renderQueue();renderMessages();
+      addTrace(agent,'info','대기 작업 취소',{target:item.kind==='collaboration'?'협업':item.kind==='independentBatch'?'독립 실행':names[item.agent]});renderQueue();renderMessages();renderCollaboration();if(state.boardVisible)renderSharedBoard();
       setTimeout(drainQueues,0);
     }
     function drainAgentQueue(agent) {
@@ -908,12 +1020,28 @@
       const index=window.TriadQueue.nextIndex(state.queue,'agent',agent);if(index<0)return false;
       const [item]=state.queue.splice(index,1);markMessageWorkStarted(item.messageId);renderQueue();
       addTrace(agent,'info','대기 작업 시작',{remaining:state.queue.filter(candidate=>candidate.kind==='agent'&&candidate.agent===agent).length});
-      return dispatchAgent(agent,item.prompt);
+      return dispatchAgent(agent,item.prompt,{sharedContext:item.sharedContext||null});
+    }
+    function startIndependentBatch(item) {
+      markMessageWorkStarted(item.messageId);
+      const independentContext=createIndependentSharedContext(item.sourceText,item.targets[0]||state.collaboration.lead);
+      addTrace(item.targets[0]||'codex','info','대기 독립 실행 시작',{targets:item.targets,remaining:state.queue.filter(candidate=>candidate.kind==='independentBatch').length});
+      for(const agent of item.targets){
+        const prompt=buildIndependentPrompt(agent,item.prompts[agent]||item.sourceText,independentContext);
+        dispatchAgent(agent,prompt,{sharedContext:independentContext});
+      }
+      renderQueue();renderCollaboration();
     }
     function drainQueues() {
       if(state.orchestration)return;
       const collaborationIndex=window.TriadQueue.nextIndex(state.queue,'collaboration');
       const firstAgentIndex=state.queue.findIndex(item=>item.kind==='agent');
+      const independentBatchIndex=state.queue.findIndex(item=>item.kind==='independentBatch');
+      const beforeBatch=index=>independentBatchIndex>=0&&(index<0||independentBatchIndex<index);
+      if(independentBatchIndex>=0&&beforeBatch(collaborationIndex)&&beforeBatch(firstAgentIndex)){
+        if(agents.some(agent=>state.running[agent]))return;
+        const [item]=state.queue.splice(independentBatchIndex,1);startIndependentBatch(item);return;
+      }
       if(collaborationIndex>=0&&(firstAgentIndex<0||collaborationIndex<firstAgentIndex)){
         if(agents.some(agent=>state.running[agent]))return;
         const [item]=state.queue.splice(collaborationIndex,1);markMessageWorkStarted(item.messageId);state.collaboration=clone(item.collaboration);renderQueue();renderCollaboration();
@@ -922,25 +1050,43 @@
       agents.forEach(drainAgentQueue);
       if(!agents.some(agent=>state.running[agent])){
         const nextCollaboration=window.TriadQueue.nextIndex(state.queue,'collaboration');
-        if(nextCollaboration>=0)setTimeout(drainQueues,0);
+        const nextBatch=state.queue.findIndex(item=>item.kind==='independentBatch');
+        if(nextCollaboration>=0||nextBatch>=0)setTimeout(drainQueues,0);
       }
     }
     function collaborationTasks() {
       return window.TriadCollaboration.harnessTasks(state.collaboration.lead);
     }
-    function boardFor(flow=state.orchestration) { return flow?.sharedContext?.board || state.sharedContext?.board || null; }
+    function boardFor(flow=state.orchestration) { return flow?.sharedContext?.board || activeSharedDocument() || state.sharedContext?.board || null; }
     function boardSectionsFor(task) {
       if(task.kind==='proposal')return ['objective','constraints'];
       if(task.kind==='verdict')return ['objective','constraints','proposal','evidence'];
       if(task.kind==='resolve')return ['objective','proposal','evidence','verdict','disputes'];
       return ['objective','constraints','proposal','evidence','verdict','disputes'];
     }
-    function createSharedContext(objective, lead) {
+    function createRunBoard(objective, lead, independent=false) {
       const owner=window.TriadCollaboration.rolesFor(lead).owner;
-      const conversationId=state.activeConversationId||id();const runId=id();
-      const board=window.TriadSharedContext.createBoard({conversationId,runId,objective,owner});
-      state.sharedContext={conversationId,runId,owner,board};save();renderSharedBoard();
-      return state.sharedContext;
+      const continuation=window.TriadCollaboration.continuationInput({conversationId:state.activeConversationId||id(),runId:id(),objective,owner});
+      const existing=activeSharedDocument();const api=window.TriadSharedContext;
+      let board;
+      if(existing&&typeof api[independent?'continueIndependentBoard':'continueBoard']==='function')board=api[independent?'continueIndependentBoard':'continueBoard'](existing,continuation);
+      else {
+        board=api.createBoard({...continuation,...(independent?{phase:'independent'}:{})});
+        if(existing){board.documentId=documentIdOf(existing);board.title=documentTitleOf(existing);board.history=[...(existing.history||[]),{runId:existing.runId,objective:existing.objective,decision:existing.decision,updatedAt:existing.updatedAt}].slice(-20);}
+        else {board.documentId=id();board.title=window.TriadCollaboration.documentTitleFromObjective(objective);board.history=[];}
+      }
+      board=ensureDocumentBoard(board,existing?documentTitleOf(existing):window.TriadCollaboration.documentTitleFromObjective(objective));
+      if(!board.documentId)board.documentId=existing?documentIdOf(existing):id();
+      if(!board.title)board.title=existing?documentTitleOf(existing):window.TriadCollaboration.documentTitleFromObjective(objective);
+      return {conversationId:continuation.conversationId,runId:continuation.runId,owner,documentId:documentIdOf(board),board};
+    }
+    function createSharedContext(objective, lead) {
+      const sharedContext=createRunBoard(objective,lead,false);state.sharedContext=sharedContext;
+      upsertSharedDocument(sharedContext.board,{select:true});save();renderSharedBoard();return sharedContext;
+    }
+    function createIndependentSharedContext(objective, lead) {
+      const sharedContext=createRunBoard(objective,lead,true);state.sharedContext=sharedContext;
+      upsertSharedDocument(sharedContext.board,{select:true});save();renderSharedBoard();return sharedContext;
     }
     function boardPacket(task, flow) {
       const board=boardFor(flow);if(!board)return null;
@@ -972,6 +1118,11 @@
         return `${context}${names[task.from]}에게 요청했던 답변이 도착했습니다.\n\n[${names[task.from]}의 답변]\n${task.received}\n\n이 정보를 반영하여 원래 작업을 계속하고 사용자에게 줄 결과를 완성하세요.\n\n${agentHandoffProtocol(task.agent,task.noHandoff)}`;
       }
       return `${context}당신이 이 작업의 시작 담당입니다. 직접 작업을 진행하고 사용자에게 줄 결과를 완성하세요.\n\n${agentHandoffProtocol(task.agent,task.noHandoff)}`;
+    }
+    function buildIndependentPrompt(agent, prompt, sharedContext) {
+      const board=sharedContext?.board;let packet=null;
+      try { packet=board?window.TriadSharedContext.compactPacket(board,{sections:['objective','constraints','decision'],maxCharacters:12000}):null; } catch {}
+      return `${prompt}\n\nTriad 독립 실행 공유 문서:\n${JSON.stringify(packet)}\n\n전체 채팅이나 상대 AI의 답변은 읽지 마세요. 필요한 공유 보드 섹션과 프로젝트 파일만 읽고, 작업을 마친 뒤 submit_contribution 도구로 runId: ${sharedContext?.runId||''}에 자신의 요약과 근거를 기록하세요. 이 실행에서는 상대 AI 호출을 하지 마세요.`;
     }
     function runAgentTurn(task) {
       const flow=state.orchestration;if(!flow||flow.cancelled)return;
@@ -1032,11 +1183,14 @@
       }
       const userMessageId=addMessage('user',original);
       if(state.collaboration.mode==='independent'){
-        routed.targets.forEach(agent=>{
-          const alreadyQueued=state.queue.some(item=>item.kind==='agent'&&item.agent===agent);
-          if(state.orchestration||state.running[agent]||alreadyQueued)enqueueAgent(agent,routed.prompts[agent],original,userMessageId);
-          else {markMessageWorkStarted(userMessageId);dispatchAgent(agent,routed.prompts[agent]);}
-        });
+        // Do not create the next document run while a prior run is writing to
+        // the same document.  A queued batch creates one fresh run only when
+        // every provider is idle, then launches its selected targets together.
+        if(state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length)enqueueIndependentBatch(routed.targets,routed.prompts,original,userMessageId);
+        else {
+          const independentContext=createIndependentSharedContext(original,routed.targets[0]||state.collaboration.lead);markMessageWorkStarted(userMessageId);
+          routed.targets.forEach(agent=>dispatchAgent(agent,buildIndependentPrompt(agent,routed.prompts[agent],independentContext),{sharedContext:independentContext}));
+        }
       } else if(state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length)enqueueCollaboration(routed.prompt,original,userMessageId);
       else {markMessageWorkStarted(userMessageId);startCollaboration(routed.prompt);}
       setTimeout(()=>{state.forceMessageBottom=false;drainQueues();},0);
@@ -1067,6 +1221,23 @@
     }
     function appendAgentText(agent, text) { updateMessage(state.responseIds[agent], m => m.text += text); }
     function currentText(agent) { return state.messages.find(m=>m.id===state.responseIds[agent])?.text || ''; }
+    function waitForIndependentContribution(agent, pending, done) {
+      const context=pending?.sharedContext;const board=context?.board;
+      if(board?.phase!=='independent'){done();return;}
+      // The broker writes atomically before it emits its watcher event.  Give
+      // that event a short window so the next queued run starts from the
+      // canonical contribution-bearing document rather than a stale snapshot.
+      setTimeout(()=>{
+        const canonical=window.TriadCollaboration.selectedDocument(state.sharedDocuments,context.documentId||documentIdOf(board));
+        const entries=canonical?.contributions?.[agent]||[];
+        const recorded=entries.some(entry=>entry?.runId===context.runId);
+        if(!recorded){
+          addTrace(agent,'error','공유 문서 기여 미확인',{documentId:context.documentId||documentIdOf(board),runId:context.runId});
+          addMessage('system',`⚠️ ${names[agent]}의 공유 문서 기여가 이번 실행에 기록됐는지 확인하지 못했습니다. 답변은 유지되며 다음 작업은 계속 진행합니다.`);
+        }
+        done();
+      },260);
+    }
     function friendlyError(message) {
       if (typeof message !== 'string') return '알 수 없는 실행 오류';
       try { const parsed=JSON.parse(message); return parsed.error?.message || parsed.message || message; } catch {}
@@ -1075,14 +1246,17 @@
       return message;
     }
     function failAgent(agent, message) {
+      const pending=state.pending[agent];
       message=friendlyError(message);
       addTrace(agent,'error','실행 실패',message);
       updateMessage(state.responseIds[agent], m => { m.text += (m.text?'\n\n':'') + '⚠️ ' + message; m.streaming=false; });
       state.running[agent]=false; renderStatus();
       if(state.orchestration){state.orchestration=null;addMessage('system','AI 실행 오류로 협업 흐름을 중단했습니다. 오른쪽 실행 과정에서 오류 원문을 확인할 수 있습니다.');renderCollaboration();}
+      if(!state.orchestration)waitForIndependentContribution(agent,pending,()=>setTimeout(drainQueues,0));
     }
     function finishAgent(agent, exitCode) {
       if (!state.running[agent]) return;
+      const pending=state.pending[agent];
       const err=friendlyError(state.stderr[agent].trim());
       updateMessage(state.responseIds[agent], m => {
         if (exitCode!==0) m.text += (m.text?'\n\n':'') + '⚠️ ' + (err || `프로세스 종료 코드 ${exitCode}`);
@@ -1096,7 +1270,12 @@
       if(state.orchestration){
         if(exitCode===0)advanceCollaboration(agent);
         else cancelCollaboration(`프로세스 종료 코드 ${exitCode}`);
-      } else if(exitCode===0)setTimeout(()=>drainAgentQueue(agent),0);
+      }
+      // A queued independent batch must wait until both providers are idle.
+      // drainQueues performs that check; a per-agent drain would strand it.
+      if(!state.orchestration){
+        waitForIndependentContribution(agent,pending,()=>setTimeout(drainQueues,0));
+      }
     }
     function advanceCollaboration(agent) {
       const flow=state.orchestration;const task=flow?.current;if(!flow||flow.cancelled||task?.agent!==agent)return;
@@ -1153,7 +1332,7 @@
       const pending=state.pending[agent];
       if (!pending) { finishAgent(agent,1); return; }
       addTrace(agent,'info','저장된 세션을 찾지 못해 새 세션으로 자동 재시도');
-      post({action:'run',agent,prompt:pending.prompt,config:state.settings[agent],agentConfigs:state.settings,collaboration:state.collaboration,mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration),sharedContext:state.orchestration?.sharedContext||null,session:null});
+      post({action:'run',agent,prompt:pending.prompt,config:state.settings[agent],agentConfigs:state.settings,collaboration:state.collaboration,mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,pending.sharedContext),sharedContext:pending.sharedContext||null,session:null});
     }
 
     window.nativeEvent = event => {
@@ -1166,10 +1345,10 @@
         if(loaded.length){
           const selected=loaded.find(item=>item.id===state.activeConversationId)||loaded[0];
           state.activeConversationId=selected.id;state.messages=clone(selected.messages||[]);
-          state.settings=clone(selected.settings||defaults(event.home));state.collaboration=normalizeCollaboration(selected.collaboration);state.sessions=clone(selected.sessions||{codex:null,claude:null});state.traces=clone(selected.traces||[]);state.sharedContext=clone(selected.sharedContext||null);
+          state.settings=clone(selected.settings||defaults(event.home));state.collaboration=normalizeCollaboration(selected.collaboration);state.sessions=clone(selected.sessions||{codex:null,claude:null});state.traces=clone(selected.traces||[]);state.sharedContext=clone(selected.sharedContext||null);state.activeSharedDocumentId=selected.activeSharedDocumentId||state.sharedContext?.board?.documentId||null;
         }else{
           if(!state.settings)state.settings=defaults(event.home);
-          const now=Date.now();const migrated={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:clone(state.messages),settings:clone(state.settings),collaboration:clone(state.collaboration),sessions:clone(state.sessions),traces:clone(state.traces),sharedContext:clone(state.sharedContext)};
+          const now=Date.now();const migrated={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:clone(state.messages),settings:clone(state.settings),collaboration:clone(state.collaboration),sessions:clone(state.sessions),traces:clone(state.traces),sharedContext:clone(state.sharedContext),activeSharedDocumentId:state.activeSharedDocumentId};
           const firstUser=state.messages.find(message=>message.author==='user')?.text?.replace(/\s+/g,' ').trim();
           if(firstUser)migrated.title=firstUser.slice(0,36)+(firstUser.length>36?'…':'');
           state.conversations=[migrated];state.activeConversationId=migrated.id;
@@ -1186,7 +1365,7 @@
           state.settings.codex.model=available[0];
           state.settings.codex.effort=state.codexModels[0].defaultEffort || 'medium';
         }
-        state.tokenStatus=event.tokenStatus;state.storageReady=true;save();renderAll();startUsagePolling();refreshAuthStatuses();refreshBranches();refreshProjectFiles();
+        state.tokenStatus=event.tokenStatus;state.storageReady=true;save();renderAll();post({action:'listSharedDocuments'});startUsagePolling();refreshAuthStatuses();refreshBranches();refreshProjectFiles();
       } else if (event.type==='raw') {
         state.lineBuffers[event.agent]+=event.chunk;
         const parts=state.lineBuffers[event.agent].split('\n'); state.lineBuffers[event.agent]=parts.pop(); parts.forEach(line=>parseLine(event.agent,line));
@@ -1211,6 +1390,8 @@
         if(autocomplete.open&&autocomplete.type==='file')updateAutocomplete();
       }
       else if(event.type==='brokerEvent')handleBrokerEvent(event);
+      else if(event.type==='sharedDocuments')applySharedDocuments(event.documents);
+      else if(event.type==='sharedDocumentsError'){addTrace('system','error','공유 문서 목록 오류',event.message||'공유 문서를 불러오지 못했습니다.');}
       else if(event.type==='brokerWarning'){addTrace(event.agent||'codex','error','AI 간 호출 도구 준비 실패',event.message||'');addMessage('system',`⚠️ ${event.message||'AI 간 호출 도구를 준비하지 못했습니다.'}`);}
       else if(event.type==='updateCheck'){
         const banner=document.getElementById('update-banner');const newer=window.TriadVersion.isNewer(event.latest,event.current);banner.hidden=!newer;
@@ -1244,6 +1425,7 @@
         document.getElementById(`stop-${agent}`).hidden=!state.running[agent];
       }
       renderCollaboration();
+      if(state.boardVisible)renderSharedBoard();
     }
     function renderCollaboration() {
       const c=state.collaboration;const modeButtons=[...document.querySelectorAll('[data-collab-mode]')];if(!modeButtons.length)return;
@@ -1264,6 +1446,8 @@
       if(state.orchestration){const task=state.orchestration.current;status.textContent=task?(state.orchestration.mode==='agent'?`${names[task.agent]} · ${task.label} · AI 호출 ${state.orchestration.handoffs}/${state.orchestration.maxHandoffs}`:`${names[task.agent]} · ${task.label} (${state.orchestration.index}/${state.orchestration.tasks.length})`):'다음 작업 준비 중';status.classList.add('live');}
       else {status.textContent=independent?'각 AI가 독립적으로 응답':agentMode?'필요할 때 서로 질문하고 답을 돌려받아 작업':review?'작성 → 검토 → 수정':'두 AI가 번갈아 토론';status.classList.remove('live');}
       document.querySelectorAll('[data-tag]').forEach(button=>button.disabled=!independent&&button.dataset.tag==='#all');
+      const documentLabel=document.getElementById('collab-document');const documentBoard=activeSharedDocument()||state.sharedContext?.board;
+      documentLabel.hidden=!documentBoard;documentLabel.textContent=documentBoard?`작업 문서: ${documentTitleOf(documentBoard)}`:'';documentLabel.title=documentLabel.textContent;
       document.getElementById('block-template').disabled=!independent;
       document.getElementById('compose-hint').textContent=independent?'Enter 전송 · 작업 중 추가 전송은 AI별 순차 대기 · 태그가 없으면 둘 다':agentMode?'#codex·#claude로 이번 작업의 시작 AI 지정 · 태그가 없으면 선택값 사용':'Enter 전송 · 작업 중 추가 전송은 순차 대기 · 협업 순서에 따라 자동 중계';
       const controlsLocked=!!state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length>0;
@@ -1526,6 +1710,7 @@
     document.getElementById('diff-agent').onchange=event=>refreshProjectDiff(event.target.value);
     document.getElementById('diff-content').addEventListener('scroll',syncDiffFileFromScroll,{passive:true});
     document.getElementById('board-toggle').onclick=openBoard;
+    document.getElementById('board-new').onclick=()=>createSharedDocument();
     document.getElementById('board-close').onclick=closeBoard;
     document.addEventListener('keydown',event=>{if(event.key==='Escape'&&state.diff.visible)closeDiff();});
     document.querySelectorAll('[data-trace-filter]').forEach(button=>button.onclick=()=>{

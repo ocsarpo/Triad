@@ -4,7 +4,7 @@
   else root.TriadSharedContext = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   const AGENTS = new Set(['codex', 'claude']);
-  const SECTIONS = ['objective', 'constraints', 'proposal', 'evidence', 'verdict', 'disputes', 'decision'];
+  const SECTIONS = ['objective', 'constraints', 'proposal', 'evidence', 'verdict', 'disputes', 'decision', 'history', 'contributions'];
   const OWNER_SECTIONS = new Set(['constraints', 'proposal', 'evidence', 'decision']);
   const REVIEWER_SECTIONS = new Set(['verdict', 'disputes']);
   const TEXT_LIMIT = 8000;
@@ -12,6 +12,12 @@
   const ITEM_LIMIT = 1000;
   const EVIDENCE_LIMIT = 20;
   const EVIDENCE_ITEM_LIMIT = 2000;
+  const HISTORY_LIMIT = 20;
+  const HISTORY_ITEM_LIMIT = 3000;
+  const CONTRIBUTION_LIMIT = 20;
+  const CONTRIBUTION_SUMMARY_LIMIT = 4000;
+  const CONTRIBUTION_EVIDENCE_LIMIT = 5;
+  const CONTRIBUTION_EVIDENCE_ITEM_LIMIT = 1000;
   const PACKET_LIMIT = 12000;
 
   function clone(value) {
@@ -64,6 +70,100 @@
     return value === undefined || value === null ? '' : requireString(value, name, TEXT_LIMIT);
   }
 
+  function documentIdFor(board) {
+    return board.documentId === undefined || board.documentId === null || board.documentId === ''
+      ? requireString(board.conversationId || '', 'conversationId', 512)
+      : requireString(board.documentId, 'documentId', 512);
+  }
+
+  function titleFor(board) {
+    return board.title === undefined || board.title === null || board.title === ''
+      ? fallbackTitle(board.objective)
+      : requireString(board.title, 'title', 512);
+  }
+
+  function fallbackTitle(objective) {
+    return initialText(objective, 'objective').slice(0, 512);
+  }
+
+  function requireHistory(value) {
+    if (!Array.isArray(value)) throw new TypeError('history은(는) 배열이어야 합니다.');
+    if (value.length > HISTORY_LIMIT) throw new RangeError(`history은(는) 최대 ${HISTORY_LIMIT}개까지 허용됩니다.`);
+    return value.map((item, index) => {
+      const length = jsonLength(item, `history[${index}]`);
+      if (length > HISTORY_ITEM_LIMIT) throw new RangeError(`history[${index}]은(는) ${HISTORY_ITEM_LIMIT}자를 넘을 수 없습니다.`);
+      return clone(item);
+    });
+  }
+
+  function historyFor(board) {
+    return board.history === undefined || board.history === null ? [] : requireHistory(board.history);
+  }
+
+  function requireContributionEvidence(value) {
+    if (!Array.isArray(value)) throw new TypeError('contribution evidence은(는) 배열이어야 합니다.');
+    if (value.length > CONTRIBUTION_EVIDENCE_LIMIT) throw new RangeError(`contribution evidence은(는) 최대 ${CONTRIBUTION_EVIDENCE_LIMIT}개까지 허용됩니다.`);
+    return value.map((item, index) => {
+      const length = jsonLength(item, `contribution evidence[${index}]`);
+      if (length > CONTRIBUTION_EVIDENCE_ITEM_LIMIT) throw new RangeError(`contribution evidence[${index}]은(는) ${CONTRIBUTION_EVIDENCE_ITEM_LIMIT}자를 넘을 수 없습니다.`);
+      return clone(item);
+    });
+  }
+
+  function requireContributionEntry(value, actor, index) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${actor} contribution[${index}]은(는) 객체여야 합니다.`);
+    return {
+      runId: requireString(value.runId || '', `contribution[${index}].runId`, 512),
+      summary: requireString(value.summary, `contribution[${index}].summary`, CONTRIBUTION_SUMMARY_LIMIT),
+      evidence: value.evidence === undefined ? [] : requireContributionEvidence(value.evidence),
+      updatedAt: now(value.updatedAt)
+    };
+  }
+
+  function requireContributions(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('contributions은(는) 객체여야 합니다.');
+    const result = {};
+    for (const actor of AGENTS) {
+      const entries = value[actor] === undefined || value[actor] === null ? [] : value[actor];
+      if (!Array.isArray(entries)) throw new TypeError(`${actor} contributions은(는) 배열이어야 합니다.`);
+      if (entries.length > CONTRIBUTION_LIMIT) throw new RangeError(`${actor} contributions은(는) 최대 ${CONTRIBUTION_LIMIT}개까지 허용됩니다.`);
+      result[actor] = entries.map((entry, index) => requireContributionEntry(entry, actor, index));
+    }
+    return result;
+  }
+
+  function contributionsFor(board) {
+    return board.contributions === undefined || board.contributions === null
+      ? { codex: [], claude: [] } : requireContributions(board.contributions);
+  }
+
+  function historySummary(board, decisionOverride) {
+    const decision = decisionOverride === undefined ? initialText(board.decision, 'decision') : initialText(decisionOverride, 'decision');
+    const summary = {
+      runId: requireString(board.runId || '', 'runId', 512),
+      objective: initialText(board.objective, 'objective'),
+      decision,
+      owner: requireAgent(board.owner, 'owner'),
+      reviewer: board.reviewer === undefined || board.reviewer === null ? null : requireAgent(board.reviewer, 'reviewer'),
+      updatedAt: now(board.updatedAt)
+    };
+    // A run can contain long proposal text. The durable history is a compact
+    // handoff index, so retain both fields while staying within its hard cap.
+    if (jsonLength(summary, 'history') > HISTORY_ITEM_LIMIT) {
+      summary.objective = summary.objective.slice(0, 1200);
+      summary.decision = summary.decision.slice(0, 1200);
+    }
+    if (jsonLength(summary, 'history') > HISTORY_ITEM_LIMIT) {
+      summary.objective = summary.objective.slice(0, 600);
+      summary.decision = summary.decision.slice(0, 600);
+    }
+    if (jsonLength(summary, 'history') > HISTORY_ITEM_LIMIT) {
+      summary.objective = '';
+      summary.decision = '';
+    }
+    return summary;
+  }
+
   function createBoard(input = {}) {
     const owner = requireAgent(input.owner || 'codex', 'owner');
     if (input.reviewer !== undefined && input.reviewer !== null && input.reviewer !== '') {
@@ -71,14 +171,22 @@
     }
     const reviewer = owner === 'codex' ? 'claude' : 'codex';
     const phase = input.phase || 'proposal';
-    if (!['proposal', 'review', 'resolve', 'complete'].includes(phase)) throw new TypeError('허용되지 않는 phase입니다.');
+    if (!['proposal', 'review', 'resolve', 'complete', 'independent'].includes(phase)) throw new TypeError('허용되지 않는 phase입니다.');
     const verdict = input.verdict === undefined ? null : input.verdict;
     if (verdict !== null && !['agree', 'disagree', 'conditional'].includes(verdict)) throw new TypeError('verdict는 agree, disagree, conditional 또는 null이어야 합니다.');
+    const conversationId = requireString(input.conversationId || '', 'conversationId', 512);
+    const objective = initialText(input.objective, 'objective');
     return {
       version: 1,
-      conversationId: requireString(input.conversationId || '', 'conversationId', 512),
+      documentId: input.documentId === undefined || input.documentId === null || input.documentId === ''
+        ? conversationId : requireString(input.documentId, 'documentId', 512),
+      title: input.title === undefined || input.title === null || input.title === ''
+        ? fallbackTitle(objective) : requireString(input.title, 'title', 512),
+      history: input.history === undefined ? [] : requireHistory(input.history),
+      contributions: input.contributions === undefined ? { codex: [], claude: [] } : requireContributions(input.contributions),
+      conversationId,
       runId: requireString(input.runId || '', 'runId', 512),
-      objective: initialText(input.objective, 'objective'),
+      objective,
       owner,
       reviewer,
       phase,
@@ -102,6 +210,80 @@
       if (board.reviewer === board.owner) throw new TypeError('reviewer는 owner와 달라야 합니다.');
     }
     if (!Number.isInteger(board.revision) || board.revision < 0) throw new TypeError('revision은 0 이상의 정수여야 합니다.');
+    // v1의 초기 flat board에는 문서 필드가 없을 수 있다. 읽을 때만 fallback을 적용한다.
+    documentIdFor(board);
+    titleFor(board);
+    historyFor(board);
+    contributionsFor(board);
+  }
+
+  function continueBoard(existing, input = {}) {
+    validateBoard(existing);
+    const priorHistory = historyFor(existing);
+    const priorObjective = initialText(existing.objective, 'objective');
+    const priorDecision = initialText(existing.decision, 'decision');
+    const contributionSummary = contributionSummaryForHistory(existing);
+    const decisionForHistory = [priorDecision.slice(0, 1200), contributionSummary].filter(Boolean).join('\n\n');
+    const history = [...priorHistory];
+    if (priorObjective.trim() || priorDecision.trim() || contributionSummary.trim()) history.push(historySummary(existing, decisionForHistory));
+    const retainedHistory = history.slice(-HISTORY_LIMIT);
+    const owner = requireAgent(input.owner || existing.owner, 'owner');
+    if (input.reviewer !== undefined && input.reviewer !== null && input.reviewer !== '') {
+      throw new TypeError('reviewer는 owner로부터 자동 결정됩니다.');
+    }
+    const board = createBoard({
+      conversationId: input.conversationId === undefined ? existing.conversationId : input.conversationId,
+      runId: input.runId || '',
+      objective: input.objective,
+      owner,
+      documentId: documentIdFor(existing),
+      title: titleFor(existing),
+      constraints: existing.constraints === undefined ? [] : existing.constraints,
+      history: retainedHistory,
+      contributions: { codex: [], claude: [] },
+      updatedAt: input.updatedAt
+    });
+    board.revision = existing.revision + 1;
+    return board;
+  }
+
+  function contributionSummaryForHistory(board) {
+    const contributions = contributionsFor(board);
+    const parts = [];
+    for (const actor of AGENTS) {
+      const latest = contributions[actor][contributions[actor].length - 1];
+      if (latest && latest.summary.trim()) parts.push(`[${actor}] ${latest.summary}`);
+    }
+    return parts.join('\n').slice(0, 1600);
+  }
+
+  function continueIndependentBoard(existing, input = {}) {
+    validateBoard(existing);
+    const priorHistory = historyFor(existing);
+    const priorDecision = initialText(existing.decision, 'decision');
+    const contributionSummary = contributionSummaryForHistory(existing);
+    const decisionForHistory = [priorDecision.slice(0, 1200), contributionSummary].filter(Boolean).join('\n\n');
+    const history = [...priorHistory];
+    if (priorDecision.trim() || contributionSummary.trim()) history.push(historySummary(existing, decisionForHistory));
+    const owner = requireAgent(input.owner || existing.owner, 'owner');
+    if (input.reviewer !== undefined && input.reviewer !== null && input.reviewer !== '') {
+      throw new TypeError('reviewer는 owner로부터 자동 결정됩니다.');
+    }
+    const board = createBoard({
+      conversationId: input.conversationId === undefined ? existing.conversationId : input.conversationId,
+      runId: input.runId || '',
+      objective: input.objective,
+      owner,
+      documentId: documentIdFor(existing),
+      title: titleFor(existing),
+      constraints: existing.constraints === undefined ? [] : existing.constraints,
+      history: history.slice(-HISTORY_LIMIT),
+      contributions: { codex: [], claude: [] },
+      phase: 'independent',
+      updatedAt: input.updatedAt
+    });
+    board.revision = existing.revision + 1;
+    return board;
   }
 
   function requestedSections(sections) {
@@ -112,7 +294,7 @@
   }
 
   function sectionMetrics(board, name) {
-    const value = board[name];
+    const value = name === 'history' ? historyFor(board) : name === 'contributions' ? contributionsFor(board) : board[name];
     const array = Array.isArray(value);
     return {
       name,
@@ -125,6 +307,8 @@
     validateBoard(board);
     return {
       version: board.version,
+      documentId: documentIdFor(board),
+      title: titleFor(board),
       conversationId: board.conversationId,
       runId: board.runId,
       owner: board.owner,
@@ -140,7 +324,7 @@
     validateBoard(board);
     const selected = requestedSections(sections);
     const result = {};
-    for (const name of selected) result[name] = clone(board[name]);
+    for (const name of selected) result[name] = name === 'history' ? historyFor(board) : name === 'contributions' ? contributionsFor(board) : clone(board[name]);
     return result;
   }
 
@@ -173,6 +357,7 @@
     const names = Object.keys(patch.changes);
     if (!names.length) throw new RangeError('최소 하나의 변경 section이 필요합니다.');
     if (names.some(name => !SECTIONS.includes(name))) throw new TypeError('알 수 없는 section은 수정할 수 없습니다.');
+    if (names.includes('history') || names.includes('contributions')) throw new TypeError('history와 contributions는 읽기 전용입니다. 전용 실행/기여 API만 사용할 수 있습니다.');
     if (names.includes('objective')) throw new TypeError('objective는 생성 후 수정할 수 없습니다.');
     const permitted = patch.actor === board.owner ? OWNER_SECTIONS : REVIEWER_SECTIONS;
     if (patch.actor !== board.owner && board.reviewer !== patch.actor) throw new TypeError('이 보드의 reviewer가 아닙니다.');
@@ -180,11 +365,34 @@
 
     const next = clone(board);
     for (const name of names) next[name] = validateChange(name, patch.changes[name]);
-    if (names.includes('decision')) next.phase = 'complete';
-    else if (names.some(name => REVIEWER_SECTIONS.has(name))) next.phase = 'resolve';
-    else if (names.includes('proposal')) next.phase = 'review';
+    if (next.phase !== 'independent') {
+      if (names.includes('decision')) next.phase = 'complete';
+      else if (names.some(name => REVIEWER_SECTIONS.has(name))) next.phase = 'resolve';
+      else if (names.includes('proposal')) next.phase = 'review';
+    }
     next.revision += 1;
     next.updatedAt = now(patch.updatedAt);
+    return next;
+  }
+
+  function appendContribution(board, actor, input = {}) {
+    validateBoard(board);
+    requireAgent(actor, 'actor');
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new TypeError('contribution 입력이 필요합니다.');
+    const summary = requireString(input.summary, 'summary', CONTRIBUTION_SUMMARY_LIMIT);
+    if (!summary.trim()) throw new RangeError('summary는 비어 있을 수 없습니다.');
+    const next = clone(board);
+    const contributions = contributionsFor(board);
+    contributions[actor].push({
+      runId: input.runId === undefined ? requireString(board.runId || '', 'runId', 512) : requireString(input.runId, 'runId', 512),
+      summary,
+      evidence: input.evidence === undefined ? [] : requireContributionEvidence(input.evidence),
+      updatedAt: now(input.updatedAt)
+    });
+    next.contributions = contributions;
+    next.contributions[actor] = next.contributions[actor].slice(-CONTRIBUTION_LIMIT);
+    next.revision += 1;
+    next.updatedAt = now(input.updatedAt);
     return next;
   }
 
@@ -202,6 +410,8 @@
     if (!Number.isInteger(limit) || limit < 1 || limit > PACKET_LIMIT) throw new RangeError(`maxCharacters는 1~${PACKET_LIMIT} 사이의 정수여야 합니다.`);
     const packet = {
       version: board.version,
+      documentId: documentIdFor(board),
+      title: titleFor(board),
       conversationId: board.conversationId,
       runId: board.runId,
       owner: board.owner,
@@ -222,11 +432,20 @@
     ITEM_LIMIT,
     EVIDENCE_LIMIT,
     EVIDENCE_ITEM_LIMIT,
+    HISTORY_LIMIT,
+    HISTORY_ITEM_LIMIT,
+    CONTRIBUTION_LIMIT,
+    CONTRIBUTION_SUMMARY_LIMIT,
+    CONTRIBUTION_EVIDENCE_LIMIT,
+    CONTRIBUTION_EVIDENCE_ITEM_LIMIT,
     PACKET_LIMIT,
     createBoard,
+    continueBoard,
+    continueIndependentBoard,
     manifest,
     readSections,
     applyPatch,
+    appendContribution,
     compactPacket
   };
 });

@@ -23,6 +23,16 @@ static NSString *TriadStringOrDefault(id value, NSString *fallback) {
     return string ?: fallback;
 }
 
+static NSTimeInterval TriadTimestampOrZero(id value) {
+    if ([value isKindOfClass:[NSNumber class]]) return [(NSNumber *)value doubleValue];
+    NSString *text = TriadStringOrNil(value);
+    if (!text.length) return 0;
+    static NSISO8601DateFormatter *formatter;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ formatter = [[NSISO8601DateFormatter alloc] init]; });
+    return [formatter dateFromString:text].timeIntervalSince1970;
+}
+
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate, UNUserNotificationCenterDelegate>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
@@ -213,6 +223,12 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
         [self saveConversation:body[@"conversation"]];
     } else if ([action isEqualToString:@"deleteConversation"]) {
         [self deleteConversation:body[@"id"]];
+    } else if ([action isEqualToString:@"listSharedDocuments"]) {
+        [self emitSharedDocuments];
+    } else if ([action isEqualToString:@"saveSharedDocument"]) {
+        [self saveSharedDocument:body[@"document"]];
+    } else if ([action isEqualToString:@"deleteSharedDocument"]) {
+        [self deleteSharedDocument:body[@"documentId"]];
     } else if ([action isEqualToString:@"openURL"]) {
         [self openExternalURL:body[@"url"]];
     } else if ([action isEqualToString:@"refreshUsage"]) {
@@ -625,8 +641,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
 
 - (void)deleteConversation:(NSString *)identifier {
     if (![identifier isKindOfClass:[NSString class]]) return;
-    NSString *sharedContextPath = [self sharedContextPathForConversationId:identifier createDirectory:NO];
-    if (sharedContextPath.length) [NSFileManager.defaultManager removeItemAtPath:sharedContextPath error:nil];
+    // Shared documents are independent application assets and deliberately outlive a chat.
     if (!self.database) return;
     sqlite3_stmt *statement = NULL;
     if (sqlite3_prepare_v2(self.database, "DELETE FROM conversations WHERE id=?", -1, &statement, NULL) != SQLITE_OK) return;
@@ -636,15 +651,13 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
 }
 
 - (NSString *)safeSharedContextIdentifier:(NSString *)identifier {
-    if (![identifier isKindOfClass:[NSString class]] || identifier.length == 0 || identifier.length > 128) return NSUUID.UUID.UUIDString.lowercaseString;
-    NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"];
-    if ([[identifier stringByTrimmingCharactersInSet:allowed] length] != 0) return NSUUID.UUID.UUIDString.lowercaseString;
+    if (![identifier isKindOfClass:[NSString class]] || identifier.length == 0 || identifier.length > 128) return nil;
+    NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"];
+    if ([[identifier stringByTrimmingCharactersInSet:allowed] length] != 0) return nil;
     return identifier;
 }
 
-- (NSString *)sharedContextPathForConversationId:(NSString *)conversationId createDirectory:(BOOL)createDirectory {
-    NSString *safeIdentifier = [self safeSharedContextIdentifier:conversationId];
-    if (!safeIdentifier.length) return nil;
+- (NSString *)sharedContextDirectoryCreate:(BOOL)createDirectory {
     // Electron migration: replace this platform path lookup with an app.getPath("userData") storage adapter.
     NSURL *applicationSupport = [[NSFileManager defaultManager] URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;
     if (!applicationSupport) return nil;
@@ -657,18 +670,139 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     if (!isDirectory && ![manager fileExistsAtPath:directory isDirectory:&isDirectory]) return nil;
     if (!isDirectory) return nil;
     [manager setAttributes:@{ NSFilePosixPermissions: @0700 } ofItemAtPath:directory error:nil];
+    return directory;
+}
+
+- (NSString *)sharedContextPathForDocumentId:(NSString *)documentId createDirectory:(BOOL)createDirectory {
+    NSString *safeIdentifier = [self safeSharedContextIdentifier:documentId];
+    if (!safeIdentifier.length) return nil;
+    NSString *directory = [self sharedContextDirectoryCreate:createDirectory];
+    if (!directory.length) return nil;
     return [directory stringByAppendingPathComponent:[safeIdentifier stringByAppendingString:@".json"]];
+}
+
+- (NSString *)sharedContextPathForConversationId:(NSString *)conversationId createDirectory:(BOOL)createDirectory {
+    return [self sharedContextPathForDocumentId:conversationId createDirectory:createDirectory];
+}
+
+- (void)emitSharedDocumentsError:(NSString *)message {
+    [self emit:@{ @"type": @"sharedDocumentsError", @"message": message ?: @"공유 문서를 처리하지 못했습니다." }];
+}
+
+- (NSString *)sharedDocumentIdFromDocument:(NSDictionary *)document allowConversationFallback:(BOOL)allowConversationFallback {
+    if (![document isKindOfClass:[NSDictionary class]]) return nil;
+    id documentIdValue = document[@"documentId"];
+    NSString *documentId = TriadStringOrNil(documentIdValue);
+    if (documentIdValue && !documentId.length) return nil;
+    if (!documentId.length) {
+        NSDictionary *board = TriadDictionaryOrNil(document[@"board"]);
+        id boardDocumentIdValue = board[@"documentId"];
+        documentId = TriadStringOrNil(boardDocumentIdValue);
+        if (boardDocumentIdValue && !documentId.length) return nil;
+    }
+    if (!documentId.length && allowConversationFallback) documentId = TriadStringOrNil(document[@"conversationId"]);
+    return [self safeSharedContextIdentifier:documentId];
+}
+
+- (void)emitSharedDocuments {
+    NSString *directory = [self sharedContextDirectoryCreate:NO];
+    if (!directory.length) {
+        [self emit:@{ @"type": @"sharedDocuments", @"documents": @[] }];
+        return;
+    }
+    NSFileManager *manager = NSFileManager.defaultManager;
+    NSArray<NSURL *> *urls = [manager contentsOfDirectoryAtURL:[NSURL fileURLWithPath:directory]
+                                    includingPropertiesForKeys:@[ NSURLIsRegularFileKey, NSURLIsSymbolicLinkKey, NSURLFileSizeKey ]
+                                                       options:NSDirectoryEnumerationSkipsHiddenFiles
+                                                         error:nil];
+    NSMutableArray<NSDictionary *> *documents = [NSMutableArray array];
+    const unsigned long long maxDocumentBytes = 2ULL * 1024ULL * 1024ULL;
+    for (NSURL *url in urls) {
+        if (![[url.pathExtension lowercaseString] isEqualToString:@"json"]) continue;
+        NSNumber *regular = nil;
+        NSNumber *symbolicLink = nil;
+        NSNumber *fileSize = nil;
+        [url getResourceValue:&regular forKey:NSURLIsRegularFileKey error:nil];
+        [url getResourceValue:&symbolicLink forKey:NSURLIsSymbolicLinkKey error:nil];
+        [url getResourceValue:&fileSize forKey:NSURLFileSizeKey error:nil];
+        if (!regular.boolValue || symbolicLink.boolValue || fileSize.unsignedLongLongValue > maxDocumentBytes) continue;
+        NSString *fileId = [self safeSharedContextIdentifier:url.URLByDeletingPathExtension.lastPathComponent];
+        if (!fileId.length) continue;
+        NSData *data = [NSData dataWithContentsOfURL:url options:0 error:nil];
+        if (!data.length || data.length > maxDocumentBytes) continue;
+        NSDictionary *document = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (![document isKindOfClass:[NSDictionary class]]) continue;
+        NSMutableDictionary *normalized = [document mutableCopy];
+        NSString *documentId = [self sharedDocumentIdFromDocument:normalized allowConversationFallback:YES] ?: fileId;
+        if (![documentId isEqualToString:fileId]) continue;
+        normalized[@"documentId"] = documentId;
+        [documents addObject:normalized];
+    }
+    [documents sortUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
+        NSTimeInterval leftUpdated = TriadTimestampOrZero(left[@"updatedAt"]);
+        NSTimeInterval rightUpdated = TriadTimestampOrZero(right[@"updatedAt"]);
+        if (leftUpdated > rightUpdated) return NSOrderedAscending;
+        if (leftUpdated < rightUpdated) return NSOrderedDescending;
+        return [[self sharedDocumentIdFromDocument:left allowConversationFallback:YES] compare:
+                [self sharedDocumentIdFromDocument:right allowConversationFallback:YES]];
+    }];
+    [self emit:@{ @"type": @"sharedDocuments", @"documents": documents }];
+}
+
+- (void)saveSharedDocument:(NSDictionary *)document {
+    if (![document isKindOfClass:[NSDictionary class]]) {
+        [self emitSharedDocumentsError:@"저장할 공유 문서가 올바르지 않습니다."];
+        return;
+    }
+    NSString *documentId = [self sharedDocumentIdFromDocument:document allowConversationFallback:YES];
+    if (!documentId.length) {
+        [self emitSharedDocumentsError:@"공유 문서 ID는 영문, 숫자, -, _만 사용할 수 있습니다."];
+        return;
+    }
+    NSMutableDictionary *stored = [document mutableCopy];
+    stored[@"documentId"] = documentId;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:stored options:0 error:nil];
+    if (!data || data.length > 2 * 1024 * 1024) {
+        [self emitSharedDocumentsError:@"공유 문서는 2MB 이하의 JSON이어야 합니다."];
+        return;
+    }
+    NSString *path = [self sharedContextPathForDocumentId:documentId createDirectory:YES];
+    if (!path.length || ![data writeToFile:path options:NSDataWritingAtomic error:nil]) {
+        [self emitSharedDocumentsError:@"공유 문서를 저장하지 못했습니다."];
+        return;
+    }
+    [NSFileManager.defaultManager setAttributes:@{ NSFilePosixPermissions: @0600 } ofItemAtPath:path error:nil];
+    [self emitSharedDocuments];
+}
+
+- (void)deleteSharedDocument:(NSString *)documentId {
+    NSString *safeDocumentId = [self safeSharedContextIdentifier:documentId];
+    if (!safeDocumentId.length) {
+        [self emitSharedDocumentsError:@"삭제할 공유 문서 ID가 올바르지 않습니다."];
+        return;
+    }
+    NSString *path = [self sharedContextPathForDocumentId:safeDocumentId createDirectory:NO];
+    if (path.length && [[NSFileManager defaultManager] fileExistsAtPath:path] &&
+        ![[NSFileManager defaultManager] removeItemAtPath:path error:nil]) {
+        [self emitSharedDocumentsError:@"공유 문서를 삭제하지 못했습니다."];
+        return;
+    }
+    [self emitSharedDocuments];
 }
 
 - (NSString *)prepareSharedContextForRequest:(NSDictionary *)request agent:(NSString *)agent {
     if (![request isKindOfClass:[NSDictionary class]]) return nil;
     NSDictionary *sharedContext = TriadDictionaryOrNil(request[@"sharedContext"]);
     if (!sharedContext) return nil;
-    NSString *conversationId = TriadStringOrNil(sharedContext[@"conversationId"]);
     NSString *runId = TriadStringOrNil(sharedContext[@"runId"]);
     NSDictionary *board = TriadDictionaryOrNil(sharedContext[@"board"]);
-    if (![conversationId isKindOfClass:[NSString class]] || ![runId isKindOfClass:[NSString class]] || runId.length == 0 || !board) return nil;
-    NSString *path = [self sharedContextPathForConversationId:conversationId createDirectory:YES];
+    if (!runId.length || !board) return nil;
+
+    // A selected application-level document wins over the legacy conversation file.
+    NSString *documentId = TriadStringOrNil(sharedContext[@"documentId"]);
+    if (!documentId.length) documentId = TriadStringOrNil(board[@"documentId"]);
+    if (!documentId.length) documentId = TriadStringOrNil(sharedContext[@"conversationId"]);
+    NSString *path = [self sharedContextPathForDocumentId:documentId createDirectory:YES];
     if (!path.length) return nil;
 
     NSDictionary *existing = nil;
@@ -677,7 +811,10 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
         id value = [NSJSONSerialization JSONObjectWithData:existingData options:0 error:nil];
         if ([value isKindOfClass:[NSDictionary class]]) existing = value;
     }
-    if ([existing[@"runId"] isEqualToString:runId]) return path;
+    // Both agent launches arrive on the main thread.  The first atomic write wins;
+    // the second launch for the same run only reuses that stable document path.
+    NSString *existingRunId = TriadStringOrNil(existing[@"runId"]);
+    if ([existingRunId isEqualToString:runId]) return path;
 
     NSData *data = [NSJSONSerialization dataWithJSONObject:board options:0 error:nil];
     if (!data || ![data writeToFile:path options:NSDataWritingAtomic error:nil]) return nil;

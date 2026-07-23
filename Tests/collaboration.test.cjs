@@ -8,7 +8,7 @@ vm.runInNewContext(
   fs.readFileSync(path.join(__dirname, '../Resources/collaboration.js'), 'utf8'),
   context
 );
-const { tasksFor, rolesFor, harnessTasks, shouldRunResolution, shouldEnableMcp, boardStageError, promptEnvelope, extractHandoff } = context.TriadCollaboration;
+const { tasksFor, rolesFor, harnessTasks, shouldRunResolution, shouldEnableMcp, boardStageError, promptEnvelope, extractHandoff, documentTitleFromObjective, upsertDocument, selectedDocument, continuationInput } = context.TriadCollaboration;
 const plain = value => JSON.parse(JSON.stringify(value));
 
 test('상호 토론은 두 AI를 라운드마다 교대시킨다', () => {
@@ -43,12 +43,42 @@ test('독립 실행 또는 orchestration 부재에서는 MCP 브로커를 켜지
   assert.equal(shouldEnableMcp({ mode: 'independent' }), false);
   assert.equal(shouldEnableMcp({ mode: 'review' }), true);
   assert.equal(shouldEnableMcp({ mode: 'agent' }), true);
+  assert.equal(shouldEnableMcp(null, { board: { documentId: 'doc-1' } }), true);
 });
 
-test('렌더러의 실행과 재시도 요청은 명시적 MCP predicate를 사용한다', () => {
+test('렌더러의 실행과 재시도 요청은 명시적 MCP predicate와 공유 문서를 함께 전달한다', () => {
   const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html'), 'utf8');
   assert.doesNotMatch(renderer, /mcpEnabled:state\.orchestration\?\.mode!==['"]independent['"]/);
-  assert.equal((renderer.match(/mcpEnabled:window\.TriadCollaboration\.shouldEnableMcp\(state\.orchestration\)/g) || []).length, 2);
+  assert.equal((renderer.match(/mcpEnabled:window\.TriadCollaboration\.shouldEnableMcp\(/g) || []).length, 2);
+  assert.match(renderer, /continueBoard/);
+  assert.match(renderer, /continueIndependentBoard/);
+  assert.match(renderer, /submit_contribution/);
+  assert.match(renderer, /runId: \$\{sharedContext\?\.runId/);
+  assert.match(renderer, /enqueueIndependentBatch/);
+  assert.match(renderer, /nativeSave:false/);
+  assert.match(renderer, /waitForIndependentContribution\(agent,pending,\(\)=>setTimeout\(drainQueues,0\)\)/);
+  assert.match(renderer, /sharedDocumentsLocked\(\)/);
+  assert.match(renderer, /row\.disabled=documentLocked/);
+  assert.match(renderer, /waitForIndependentContribution/);
+  assert.match(renderer, /공유 문서 기여 미확인/);
+  assert.match(renderer, /const canonical=upsertSharedDocument/);
+});
+
+test('공유 문서는 최근 수정 순으로 합치고 선택 ID로만 찾는다', () => {
+  const first = { documentId: 'first', updatedAt: '2026-07-21T00:00:00.000Z' };
+  const newer = { documentId: 'newer', updatedAt: '2026-07-22T00:00:00.000Z' };
+  const replaced = { documentId: 'first', updatedAt: '2026-07-23T00:00:00.000Z' };
+  const documents = upsertDocument(upsertDocument([first], newer), replaced);
+  assert.deepEqual(plain(documents.map(item => item.documentId)), ['first', 'newer']);
+  assert.equal(selectedDocument(documents, 'newer').documentId, 'newer');
+  assert.equal(selectedDocument(documents, 'missing'), null);
+});
+
+test('새 실행 시 의제 제목과 run ID만 넘겨 이전 단계 값을 재사용하지 않는다', () => {
+  assert.equal(documentTitleFromObjective('  환불 API 설계를\n상세히 검토해줘'), '환불 API 설계를');
+  assert.deepEqual(plain(continuationInput({ conversationId: 'chat-1', runId: 'run-2', objective: '새 의제', owner: 'claude' })), {
+    conversationId: 'chat-1', runId: 'run-2', objective: '새 의제', owner: 'claude'
+  });
 });
 
 test('공유 보드 하네스는 시작 AI와 무관하게 owner → reviewer → owner 순서다', () => {

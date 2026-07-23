@@ -44,7 +44,7 @@ test('공유 작업 보드는 제한된 MCP 도구와 revision 기반 협업 흐
   const parsed=response=>JSON.parse(response.result.content[0].text);
 
   const listed=await request(1,'tools/list');
-  assert.deepEqual(listed.result.tools.map(tool=>tool.name),['ask_agent','shared_context_manifest','shared_context_read','shared_context_update','submit_verdict']);
+  assert.deepEqual(listed.result.tools.map(tool=>tool.name),['ask_agent','shared_context_manifest','shared_context_read','shared_context_update','submit_verdict','submit_contribution']);
   const manifest=parsed(await request(2,'tools/call',{name:'shared_context_manifest',arguments:{}}));
   assert.equal(manifest.revision,0);
   const read=parsed(await request(3,'tools/call',{name:'shared_context_read',arguments:{sections:['objective','proposal']}}));
@@ -85,11 +85,42 @@ test('allowAskAgent가 false면 공유 보드는 유지하고 ask_agent만 숨�
   child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{buffer+=chunk;const lines=buffer.split(/\r?\n/u);buffer=lines.pop();for(const line of lines){if(!line.trim())continue;const value=JSON.parse(line);pending.get(value.id)?.(value);pending.delete(value.id);}});
   const request=(id,method,params={})=>new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error(`MCP 응답 시간 초과: ${method}`)),4000);pending.set(id,value=>{clearTimeout(timer);resolve(value);});child.stdin.write(`${JSON.stringify({jsonrpc:'2.0',id,method,params})}\n`);});
   const listed=await request(1,'tools/list');
-  assert.deepEqual(listed.result.tools.map(tool=>tool.name),['shared_context_manifest','shared_context_read','shared_context_update','submit_verdict']);
+  assert.deepEqual(listed.result.tools.map(tool=>tool.name),['shared_context_manifest','shared_context_read','shared_context_update','submit_verdict','submit_contribution']);
   const manifest=await request(2,'tools/call',{name:'shared_context_manifest',arguments:{}});
   assert.equal(manifest.result.isError,false);
-  const disabled=await request(3,'tools/call',{name:'ask_agent',arguments:{question:'검토해줘'}});
+  const contribution=await request(3,'tools/call',{name:'submit_contribution',arguments:{summary:'독립 실행 결과',evidence:['근거']}});
+  assert.equal(contribution.result.isError,false);
+  const saved=JSON.parse(fs.readFileSync(sharedContextPath,'utf8'));
+  assert.deepEqual(saved.contributions,{codex:[{runId:'run-1',summary:'독립 실행 결과',evidence:['근거'],updatedAt:saved.contributions.codex[0].updatedAt}],claude:[]});
+  const disabled=await request(4,'tools/call',{name:'ask_agent',arguments:{question:'검토해줘'}});
   assert.ok(disabled.error);assert.match(disabled.error.message,/지원하지 않는 도구/);
+});
+
+test('동시에 제출한 Codex와 Claude contribution은 최신 보드에 병합된다', async t => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'triad-broker-contribution-test-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const statePath=path.join(directory,'state.json');const eventsPath=path.join(directory,'events.jsonl');const configPath=path.join(directory,'config.json');const sharedContextPath=path.join(directory,'shared-context.json');
+  fs.writeFileSync(statePath,JSON.stringify({used:0,limit:1}));fs.writeFileSync(eventsPath,'');
+  fs.writeFileSync(sharedContextPath,JSON.stringify({version:1,conversationId:'chat-1',runId:'run-1',objective:'독립 실행',owner:'codex',reviewer:'claude',phase:'independent',revision:0,constraints:[],proposal:'',evidence:[],verdict:null,disputes:[],decision:'',updatedAt:'2026-07-23T00:00:00.000Z'}));
+  fs.writeFileSync(configPath,JSON.stringify({nodePath:process.execPath,brokerPath:path.join(__dirname,'../Resources/triad-mcp-server.cjs'),statePath,eventsPath,sharedContextPath,allowAskAgent:false,agents:{codex:{},claude:{}}}));
+  const start=caller=>{
+    const child=spawn(process.execPath,[path.join(__dirname,'../Resources/triad-mcp-server.cjs'),'--config',configPath,'--caller',caller,'--depth','0'],{stdio:['pipe','pipe','pipe']});
+    t.after(()=>child.kill('SIGTERM'));
+    let buffer='';const pending=new Map();
+    child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{buffer+=chunk;const lines=buffer.split(/\r?\n/u);buffer=lines.pop();for(const line of lines){if(!line.trim())continue;const value=JSON.parse(line);pending.get(value.id)?.(value);pending.delete(value.id);}});
+    return (id,method,params={})=>new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error(`MCP 응답 시간 초과: ${caller}`)),4000);pending.set(id,value=>{clearTimeout(timer);resolve(value);});child.stdin.write(`${JSON.stringify({jsonrpc:'2.0',id,method,params})}\n`);});
+  };
+  const codexRequest=start('codex');const claudeRequest=start('claude');
+  const [codex,claude]=await Promise.all([
+    codexRequest(1,'tools/call',{name:'submit_contribution',arguments:{summary:'Codex 결과'}}),
+    claudeRequest(1,'tools/call',{name:'submit_contribution',arguments:{summary:'Claude 결과'}})
+  ]);
+  assert.equal(codex.result.isError,false);assert.equal(claude.result.isError,false);
+  const merged=JSON.parse(fs.readFileSync(sharedContextPath,'utf8'));
+  assert.equal(merged.revision,2);
+  assert.equal(merged.phase,'independent');
+  assert.equal(merged.contributions.codex[0].summary,'Codex 결과');
+  assert.equal(merged.contributions.claude[0].summary,'Claude 결과');
 });
 
 test('보조 AI 시간 제한은 종료 코드 대신 설정된 제한 시간을 오류로 반환한다', async t => {

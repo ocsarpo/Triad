@@ -17,7 +17,7 @@ function loadSharedContext() {
     console,
   }, { filename: sourcePath });
   const api = module.exports;
-  for (const name of ['manifest', 'readSections', 'applyPatch', 'compactPacket']) {
+  for (const name of ['manifest', 'readSections', 'applyPatch', 'compactPacket', 'continueBoard', 'continueIndependentBoard', 'appendContribution']) {
     if (typeof api[name] !== 'function') throw new Error(`공유 작업 보드 모듈을 불러올 수 없습니다: ${name}`);
   }
   return api;
@@ -38,7 +38,7 @@ const target = caller === 'codex' ? 'claude' : 'codex';
 // Cross-agent calls are opt-in: a missing setting must not expose ask_agent.
 const askAgentEnabled = config.allowAskAgent === true;
 const activeChildren = new Set();
-const boardSections = ['objective', 'constraints', 'proposal', 'evidence', 'verdict', 'disputes', 'decision'];
+const boardSections = ['objective', 'constraints', 'proposal', 'evidence', 'verdict', 'disputes', 'decision', 'history', 'contributions'];
 
 function emitEvent(value) {
   try { fs.appendFileSync(config.eventsPath, `${JSON.stringify(value)}\n`, { encoding: 'utf8' }); } catch {}
@@ -77,6 +77,20 @@ function updateSharedBoard(input, actor = caller) {
     fs.renameSync(temporary, config.sharedContextPath);
     try { fs.chmodSync(config.sharedContextPath, 0o600); } catch {}
     emitEvent({ eventType: 'shared_context_updated', board: updated, actor, section: input.section || Object.keys(input.changes || {}), timestamp: Date.now() });
+    return updated;
+  });
+}
+
+function appendSharedContribution(input, actor = caller) {
+  if (!sharedBoardEnabled()) throw new Error('공유 작업 보드가 설정되지 않았습니다.');
+  return withFileLock(config.sharedContextPath, () => {
+    const board = readSharedBoard();
+    const updated = sharedContext.appendContribution(board, actor, input || {});
+    const temporary = `${config.sharedContextPath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify(updated), { mode: 0o600 });
+    fs.renameSync(temporary, config.sharedContextPath);
+    try { fs.chmodSync(config.sharedContextPath, 0o600); } catch {}
+    emitEvent({ eventType: 'shared_context_updated', board: updated, actor, section: ['contributions'], timestamp: Date.now() });
     return updated;
   });
 }
@@ -281,6 +295,11 @@ function sharedTools() {
       name: 'submit_verdict',
       description: '검증자는 agree, disagree, conditional 중 하나와 최대 3개 finding을 제출합니다.',
       inputSchema: { type: 'object', properties: { verdict: { type: 'string', enum: ['agree', 'disagree', 'conditional'] }, findings: { type: 'array', items: { type: 'string' }, maxItems: 3 }, expectedRevision: { type: 'integer', minimum: 0 } }, required: ['verdict', 'expectedRevision'], additionalProperties: false }
+    },
+    {
+      name: 'submit_contribution',
+      description: '현재 AI의 독립 실행 결과를 공유 문서에 병합합니다. 다른 AI의 기여는 수정할 수 없으며 revision 충돌 없이 최신 보드에 추가됩니다.',
+      inputSchema: { type: 'object', properties: { summary: { type: 'string', minLength: 1, maxLength: 4000 }, evidence: { type: 'array', maxItems: 5 }, runId: { type: 'string', maxLength: 512 } }, required: ['summary'], additionalProperties: false }
     }
   ];
 }
@@ -292,7 +311,7 @@ function askAgentTool() {
     context: { type: 'string', maxLength: 2000, description: '질문 해결에 필요한 최대 2,000자의 최소 문맥' },
     to: { type: 'string', enum: [target] }
   };
-  if (sharedBoardEnabled()) properties.sections = { type: 'array', items: { type: 'string', enum: boardSections }, maxItems: boardSections.length, description: '보조 AI에 전달할 공유 보드 섹션. 생략하면 objective, constraints, proposal, evidence.' };
+  if (sharedBoardEnabled()) properties.sections = { type: 'array', items: { type: 'string', enum: boardSections }, maxItems: boardSections.length, description: '보조 AI에 전달할 공유 보드 섹션. 생략하면 objective, constraints, proposal, evidence이며 history와 contributions는 명시 요청 때만 전달됩니다.' };
   return { name: 'ask_agent', description: `작업 도중 상대 AI(${target})의 정보, 검토, 도구 사용이 필요할 때 호출합니다. 공유 작업 보드 패킷과 최소 문맥만 전달하며 답변은 이 도구 결과로 돌아옵니다.`, inputSchema: { type: 'object', properties, required: ['question'], additionalProperties: false } };
 }
 
@@ -307,6 +326,7 @@ function sharedToolResult(name, input) {
     if (!Array.isArray(findings) || findings.length > 3 || findings.some(value => typeof value !== 'string')) throw new Error('findings는 최대 3개의 문자열이어야 합니다.');
     return sharedContext.manifest(updateSharedBoard({ changes: { verdict, disputes: findings }, expectedRevision: input?.expectedRevision }));
   }
+  if (name === 'submit_contribution') return sharedContext.manifest(appendSharedContribution(input));
   throw new Error('지원하지 않는 공유 작업 보드 도구입니다.');
 }
 
@@ -326,7 +346,7 @@ process.stdin.on('data', chunk => {
       if (request.params?.name === 'ask_agent') {
         if (!askAgentEnabled) send(request.id, null, new Error('지원하지 않는 도구입니다.'));
         else askAgent(request.params.arguments).then(text => send(request.id, { content: [{ type: 'text', text }], isError: false })).catch(error => send(request.id, { content: [{ type: 'text', text: error.message || String(error) }], isError: true }));
-      } else if (sharedBoardEnabled() && ['shared_context_manifest', 'shared_context_read', 'shared_context_update', 'submit_verdict'].includes(request.params?.name)) {
+      } else if (sharedBoardEnabled() && ['shared_context_manifest', 'shared_context_read', 'shared_context_update', 'submit_verdict', 'submit_contribution'].includes(request.params?.name)) {
         try { send(request.id, { content: [{ type: 'text', text: JSON.stringify(sharedToolResult(request.params.name, request.params.arguments)) }], isError: false }); }
         catch (error) { send(request.id, { content: [{ type: 'text', text: error.message || String(error) }], isError: true }); }
       } else send(request.id, null, new Error('지원하지 않는 도구입니다.'));

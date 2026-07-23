@@ -54,8 +54,10 @@
   // A missing orchestration is the normal independent-run state.  Optional
   // chaining with `!==` turns that absence into true, so keep this predicate
   // explicit at the native-process boundary.
-  function shouldEnableMcp(orchestration) {
-    return !!orchestration && orchestration.mode !== 'independent';
+  function shouldEnableMcp(orchestration, sharedContext) {
+    // An independent run can have a shared document too.  It never receives
+    // ask_agent, but it does receive the narrow read/contribution tools.
+    return !!sharedContext || (!!orchestration && orchestration.mode !== 'independent');
   }
 
   function requiredBoardField(task) {
@@ -91,6 +93,52 @@
     };
   }
 
+  function documentTitleFromObjective(value, fallback = '새 공유 문서') {
+    const firstLine = String(value || '').split(/\r?\n/u).map(line => line.trim()).find(Boolean) || '';
+    const normalized = firstLine.replace(/\s+/gu, ' ').trim();
+    if (!normalized) return fallback;
+    return normalized.length > 48 ? `${normalized.slice(0, 47)}…` : normalized;
+  }
+
+  function documentIdOf(document) {
+    return typeof document?.documentId === 'string' && document.documentId
+      ? document.documentId
+      : (typeof document?.id === 'string' ? document.id : '');
+  }
+
+  function sortDocuments(documents) {
+    return [...(Array.isArray(documents) ? documents : [])].sort((left, right) => {
+      const rightTime = Date.parse(right?.updatedAt || '') || 0;
+      const leftTime = Date.parse(left?.updatedAt || '') || 0;
+      if (rightTime !== leftTime) return rightTime - leftTime;
+      return documentIdOf(left).localeCompare(documentIdOf(right));
+    });
+  }
+
+  function upsertDocument(documents, document) {
+    const documentId = documentIdOf(document);
+    if (!documentId) return sortDocuments(documents);
+    const next = (Array.isArray(documents) ? documents : []).filter(item => documentIdOf(item) !== documentId);
+    next.push(document);
+    return sortDocuments(next);
+  }
+
+  function selectedDocument(documents, activeDocumentId) {
+    return (Array.isArray(documents) ? documents : []).find(document => documentIdOf(document) === activeDocumentId) || null;
+  }
+
+  // A document run is deliberately represented by fresh IDs and objective
+  // input.  The storage layer's continueBoard resets proposal/verdict/decision
+  // for this run while retaining durable decisions/history from earlier runs.
+  function continuationInput(input = {}) {
+    return {
+      conversationId: String(input.conversationId || ''),
+      runId: String(input.runId || ''),
+      objective: String(input.objective || ''),
+      owner: input.owner === 'claude' ? 'claude' : 'codex'
+    };
+  }
+
   function extractHandoff(text, from) {
     const source = String(text || '');
     const match = source.match(/\[\[TRIAD_HANDOFF\]\]\s*([\s\S]*?)\s*\[\[\/TRIAD_HANDOFF\]\]/u);
@@ -111,5 +159,10 @@
     }
   }
 
-  return { tasksFor, rolesFor, harnessTasks, shouldRunResolution, shouldEnableMcp, requiredBoardField, boardStageError, promptEnvelope, extractHandoff };
+  return {
+    tasksFor, rolesFor, harnessTasks, shouldRunResolution, shouldEnableMcp,
+    requiredBoardField, boardStageError, promptEnvelope, extractHandoff,
+    documentTitleFromObjective, documentIdOf, sortDocuments, upsertDocument,
+    selectedDocument, continuationInput
+  };
 });

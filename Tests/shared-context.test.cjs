@@ -153,7 +153,7 @@ test('continueBoard는 문서 정체성과 제약을 유지하고 새 실행 단
   assert.equal(continued.decision, '');
   assert.deepEqual(plain(continued.contributions), { codex: [], claude: [] });
   assert.deepEqual(plain(continued.history), [{
-    runId: 'run-1', objective: '초기 분석', decision: '초기 결론', owner: 'claude', reviewer: 'codex', updatedAt: '2026-07-23T00:00:00.000Z'
+    recordId: 'TR-run-1', runId: 'run-1', objective: '초기 분석', decision: '초기 결론', owner: 'claude', reviewer: 'codex', updatedAt: '2026-07-23T00:00:00.000Z'
   }]);
 });
 

@@ -39,6 +39,6 @@ test('전송 시점 패킷은 즉시 실행과 대기열에 같은 agent별 snap
   assert.match(renderer, /const recentContexts=Object\.fromEntries\(routed\.targets\.map\(agent=>\[agent,window\.TriadRecentContext\.packetFor\(state\.messages,agent\)\]\)\)/);
   assert.match(renderer, /recentContexts:clone\(options\.recentContexts\|\|\{\}\)/);
   assert.match(renderer, /item\.recentContexts\?\.\[agent\]\|\|''/);
-  assert.match(renderer, /buildIndependentPrompt\(agent,routed\.prompts\[agent\],independentContext,recentContexts\[agent\]\)/);
+  assert.match(renderer, /buildIndependentPrompt\(agent,routed\.prompts\[agent\],independentContext,recentContexts\[agent\],referencePacket\)/);
   assert.match(packager, /Resources\/recent-context\.js/);
 });

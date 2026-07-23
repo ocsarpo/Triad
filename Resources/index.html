@@ -148,7 +148,7 @@
     .board-history-entry[open] summary::before { transform: rotate(90deg); }
     .board-history-headline { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 10px; font-weight: 700; }
     .board-history-entry time { flex: none; color: var(--muted); font-size: 8px; }
-    .board-history-meta { padding: 0 9px 8px 25px; color: var(--muted); font-size: 8px; }
+    .board-history-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 0 9px 8px 25px; color: var(--muted); font-size: 8px; }
     .board-history-entry > h4 { margin: 0; padding: 8px 9px 0; color: var(--muted); font-size: 9px; }
     .board-history-content { max-height: 220px; margin: 0; padding: 8px 9px; overflow: auto; border-top: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font: 10px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
     .collab-document { max-width: 190px; overflow: hidden; color: var(--all); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 700; }
@@ -449,6 +449,7 @@
   <script src="diff.js"></script>
   <script src="queue.js"></script>
   <script src="recent-context.js"></script>
+  <script src="run-reference.js"></script>
   <script src="usage.js"></script>
   <script src="session-budget.js"></script>
   <script src="file-search.js"></script>
@@ -945,7 +946,7 @@
     function renderHistoryEntry(item,index) {
       const entry=item&&typeof item==='object'?item:{};const details=document.createElement('details');details.className='board-history-entry';
       const summary=document.createElement('summary');const headline=document.createElement('span');headline.className='board-history-headline';headline.textContent=entry.objective||'이전 실행';const time=document.createElement('time');time.textContent=boardTimestamp(entry.updatedAt);summary.append(headline,time);details.appendChild(summary);
-      const meta=document.createElement('div');meta.className='board-history-meta';const people=[entry.owner&&`담당 ${names[entry.owner]||entry.owner}`,entry.reviewer&&`검토 ${names[entry.reviewer]||entry.reviewer}`].filter(Boolean);meta.textContent=[`실행 ${index}`,entry.runId&&`run ${entry.runId}`,...people].filter(Boolean).join(' · ');details.appendChild(meta);
+      const meta=document.createElement('div');meta.className='board-history-meta';const people=[entry.owner&&`담당 ${names[entry.owner]||entry.owner}`,entry.reviewer&&`검토 ${names[entry.reviewer]||entry.reviewer}`].filter(Boolean);const recordId=window.TriadRunReference.recordIdFor(entry);meta.textContent=[`실행 ${index}`,recordId,entry.runId&&`run ${entry.runId}`,...people].filter(Boolean).join(' · ');const reference=document.createElement('button');reference.className='small-btn';reference.textContent='참고';reference.title='이 실행 기록을 다음 AI 요청에 참고합니다.';reference.onclick=event=>{event.preventDefault();event.stopPropagation();const draft=document.getElementById('draft');draft.value=`${draft.value}${draft.value.trim()?' ':''}@실행[${recordId}] `;draft.focus();updateRoutingPreview();};meta.appendChild(reference);details.appendChild(meta);
       const decisionTitle=document.createElement('h4');decisionTitle.textContent='결론';const decision=document.createElement('pre');decision.className='board-history-content';decision.textContent=entry.decision||'결론이 기록되지 않았습니다.';details.append(decisionTitle,decision);
       const contribution=historyContributionText(entry.contributions);
       if(contribution){const contributionTitle=document.createElement('h4');contributionTitle.textContent='AI 기여 요약';const contributionBody=document.createElement('pre');contributionBody.className='board-history-content';contributionBody.textContent=contribution;details.append(contributionTitle,contributionBody);}
@@ -1021,7 +1022,7 @@
     }
 
     function addMessage(author, text, streaming=false, options={}) {
-      const message = { id:id(), author, text, streaming, deferred:options.deferred===true, workStarted:options.workStarted===true, createdAt:Date.now() };
+      const message = { id:id(), author, text, streaming, deferred:options.deferred===true, workStarted:options.workStarted===true, ...(options.recordId?{recordId:options.recordId,runId:options.runId||null,documentId:options.documentId||null,replyAgent:options.replyAgent||author}:{}), createdAt:Date.now() };
       state.messages.push(message); save(); renderMessages(); return message.id;
     }
     function updateMessage(messageId, updater) {
@@ -1144,6 +1145,7 @@
         copy.addEventListener('mousedown',event=>event.stopPropagation());
         copy.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();copyMessageText(m.id,String(m.text||''));});
         who.appendChild(copy);
+        if(m.author!=='user'&&m.author!=='system'&&m.recordId){const reply=document.createElement('button');reply.type='button';reply.className='bubble-copy';reply.textContent='답장';reply.title='이 AI에게 이 실행 기록을 참고해 답장합니다.';reply.onclick=event=>{event.preventDefault();event.stopPropagation();const draft=document.getElementById('draft');const agentTag=`#${m.replyAgent||m.author}`;const text=draft.value;const targetPrefix=/(?:^|\s)#(?:codex|claude)(?=\s|$)/.test(text)?'':`${agentTag} `;const reference=`@실행[${m.recordId}]`;draft.value=text.includes(reference)?`${text}${text.trim()?' ':''}${targetPrefix}`:`${text}${text.trim()?' ':''}${targetPrefix}${reference} `;draft.focus();updateRoutingPreview();};who.appendChild(reply);}
         const bubble = document.createElement('div'); bubble.className='bubble'; renderMarkdownText(bubble,m.text || '생각 중…');
         wrap.append(who,bubble); el.appendChild(wrap); root.appendChild(el);
       }
@@ -1218,7 +1220,7 @@
       }
       if(rotationReason){addTrace(agent,'info','다음 작업 새 세션',rotationReason);save();}
       const runId=id();
-      state.pending[agent]={prompt,retried:false,isolated,sharedContext,usageRecorded:false,sessionId:session,runId,conversationId,config,agentConfigs,collaboration};state.responseIds[agent]=addMessage(agent,'',true);renderStatus();
+      const responseRecordId=sharedContext?.runId?window.TriadRunReference.recordIdFor({runId:sharedContext.runId},contextDocumentId(sharedContext)):null;state.pending[agent]={prompt,retried:false,isolated,sharedContext,usageRecorded:false,sessionId:session,runId,conversationId,config,agentConfigs,collaboration};state.responseIds[agent]=addMessage(agent,'',true,{recordId:responseRecordId,runId:sharedContext?.runId||null,documentId:contextDocumentId(sharedContext),replyAgent:agent});renderStatus();
       addTrace(agent,'info','명령 전달',{model:config.model,effort:config.effort,speed:config.speedMode,workspace:config.workspacePath,writableRoots:config.writableRoots||'',networkAccess:!!config.networkAccess,allowLocalBinding:!!config.allowLocalBinding,session:session?'resume':'new',isolated,mode:state.orchestration?.mode||'independent'});
       post({action:'run',agent,prompt,config,agentConfigs,collaboration,mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,sharedContext),sharedContext,session,runId});return true;
     }
@@ -1280,13 +1282,13 @@
       return item;
     }
     function enqueueIndependentBatch(targets,prompts,sourceText,messageId,options={}) {
-      const item={id:id(),kind:'independentBatch',targets:[...targets],prompts:clone(prompts),sourceText,messageId,conversationId:state.activeConversationId,settings:clone(state.settings),collaboration:clone(activeCollaboration()),recentContexts:clone(options.recentContexts||{}),sharedContext:options.sharedContext||null,documentId:options.documentId||contextDocumentId(options.sharedContext),createdAt:Date.now()};
+      const item={id:id(),kind:'independentBatch',targets:[...targets],prompts:clone(prompts),sourceText,objective:options.objective||sourceText,messageId,conversationId:state.activeConversationId,settings:clone(state.settings),collaboration:clone(activeCollaboration()),recentContexts:clone(options.recentContexts||{}),referencePacket:clone(options.referencePacket||[]),sharedContext:options.sharedContext||null,documentId:options.documentId||contextDocumentId(options.sharedContext),createdAt:Date.now()};
       state.queue.push(item);renderQueue();renderCollaboration();if(state.boardVisible)renderSharedBoard();
       addTrace(targets[0]||'codex','info','독립 실행 묶음 대기열 등록',{targets,position:state.queue.filter(candidate=>candidate.kind==='independentBatch').length});
       return item;
     }
-    function enqueueCollaboration(objective,sourceText,messageId,collaboration=state.collaboration) {
-      const item={id:id(),kind:'collaboration',objective,sourceText,messageId,conversationId:state.activeConversationId,settings:clone(state.settings),collaboration:clone(collaboration),createdAt:Date.now()};
+    function enqueueCollaboration(objective,sourceText,messageId,collaboration=state.collaboration,referencePacket=[]) {
+      const item={id:id(),kind:'collaboration',objective,sourceText,messageId,conversationId:state.activeConversationId,settings:clone(state.settings),collaboration:clone(collaboration),referencePacket:clone(referencePacket),createdAt:Date.now()};
       state.queue.push(item);renderQueue();renderCollaboration();if(state.boardVisible)renderSharedBoard();
       addTrace(collaboration.lead,'info','협업 순차 대기열 등록',{position:window.TriadQueue.positionFor(state.queue,item),mode:collaboration.mode});
       return item;
@@ -1327,10 +1329,10 @@
     function startIndependentBatch(item) {
       return withConversation(item.conversationId,()=>{
         markMessageWorkStarted(item.messageId);
-        const independentContext=item.sharedContext||createIndependentSharedContext(item.sourceText,item.targets[0]||item.collaboration?.lead);
+        const independentContext=item.sharedContext||createIndependentSharedContext(item.objective,item.targets[0]||item.collaboration?.lead);
         addTrace(item.targets[0]||'codex','info','대기 독립 실행 시작',{targets:item.targets,remaining:state.queue.filter(candidate=>candidate.kind==='independentBatch').length});
         for(const agent of item.targets){
-          const prompt=buildIndependentPrompt(agent,item.prompts[agent]||item.sourceText,independentContext,item.recentContexts?.[agent]||'');
+          const prompt=buildIndependentPrompt(agent,item.prompts[agent]||item.sourceText,independentContext,item.recentContexts?.[agent]||'',item.referencePacket||[]);
           dispatchAgent(agent,prompt,{sharedContext:independentContext,conversationId:item.conversationId,config:item.settings?.[agent],agentConfigs:item.settings,collaboration:item.collaboration});
         }
         renderQueue();renderCollaboration();
@@ -1343,7 +1345,7 @@
         if(item.kind==='collaboration'){
           if(earlier.length||agents.some(agent=>state.running[agent]))return;
           state.queue.splice(index,1);const collaboration=normalizeCollaboration(item.collaboration);
-          withConversation(item.conversationId,()=>{markMessageWorkStarted(item.messageId);renderQueue();renderCollaboration();addTrace(collaboration.lead,'info','대기 협업 시작',{remaining:state.queue.filter(candidate=>candidate.kind==='collaboration').length});startCollaboration(item.objective,collaboration,item.conversationId,item.settings);});return;
+          withConversation(item.conversationId,()=>{markMessageWorkStarted(item.messageId);renderQueue();renderCollaboration();addTrace(collaboration.lead,'info','대기 협업 시작',{remaining:state.queue.filter(candidate=>candidate.kind==='collaboration').length});startCollaboration(item.objective,collaboration,item.conversationId,item.settings,item.referencePacket||[]);});return;
         }
         if(earlier.some(candidate=>queueItemsConflict(candidate,item)))continue;
         const targets=queueTargets(item);const documentId=queueDocumentId(item);
@@ -1397,7 +1399,7 @@
     function buildCollaborationPrompt(task) {
       const flow=state.orchestration;const board=boardFor(flow);const packet=boardPacket(task,flow);
       const role=task.agent===board?.owner?'owner/proposer':'reviewer';
-      const common=`사용자 의제:\n${flow.objective}\n\n당신의 역할: ${role}\n공유 보드 단계: ${task.phase}\n공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(packet)}\n\n공유 보드는 프로젝트가 아니라 Triad가 관리합니다. 전체 채팅 기록이나 다른 AI의 원문 답변을 요청하거나 반복하지 마세요. 필요한 프로젝트 근거는 직접 필요한 파일·라인만 읽으세요.`;
+      const references=flow.referencePacket?.length?`\n\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(flow.referencePacket)}`:'';const common=`사용자 의제:\n${flow.objective}${references}\n\n당신의 역할: ${role}\n공유 보드 단계: ${task.phase}\n공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(packet)}\n\n공유 보드는 프로젝트가 아니라 Triad가 관리합니다. 전체 채팅 기록이나 다른 AI의 원문 답변을 요청하거나 반복하지 마세요. 필요한 프로젝트 근거는 직접 필요한 파일·라인만 읽으세요.`;
       if(task.kind==='proposal')return `${common}\n\ninline에는 제약만 있습니다. 필요한 경우 shared_context_read로 필요한 섹션만 읽으세요. 먼저 shared_context_update 도구로 proposal과 필요한 constraints/evidence를 작성하세요. 그 뒤 사용자에게는 실행 가능한 제안과 근거만 간결하게 설명하세요.`;
       if(task.kind==='verdict')return `${common}\n\nshared_context_read로 proposal과 evidence만 읽고 반례·누락만 검토하세요. submit_verdict 도구로 agree | disagree | conditional 중 하나와 최대 3개의 findings를 기록하세요. agree라면 새 동의 라운드를 시작하지 마세요.`;
       if(task.kind==='resolve')return `${common}\n\nshared_context_read로 verdict와 disputes만 읽고 해결하세요. 필요한 변경은 shared_context_update로 proposal/evidence에 반영하고, 해결 결과를 짧게 남기세요.`;
@@ -1411,7 +1413,7 @@
     function buildAgentPrompt(task) {
       const flow=state.orchestration;
       const packet=boardPacket(task,flow);const board=boardFor(flow);
-      const context=`사용자의 원래 작업:\n${flow.objective}\n\n당신의 역할: ${task.agent===board?.owner?'owner/proposer':'reviewer'}\n공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(packet)}\n\n전체 채팅 기록은 제공되지 않습니다. 필요한 프로젝트 파일만 직접 읽고, 확인한 근거는 공유 보드에 짧게 기록하세요.\n\n`;
+      const references=flow.referencePacket?.length?`\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(flow.referencePacket)}\n`:'';const context=`사용자의 원래 작업:\n${flow.objective}${references}\n당신의 역할: ${task.agent===board?.owner?'owner/proposer':'reviewer'}\n공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(packet)}\n\n전체 채팅 기록은 제공되지 않습니다. 필요한 프로젝트 파일만 직접 읽고, 확인한 근거는 공유 보드에 짧게 기록하세요.\n\n`;
       if(task.kind==='agent_answer'){
         return `${context}${names[task.requester]}가 당신에게 다음 작업을 요청했습니다.\n질문: ${task.question}\n${task.reason?`요청 이유: ${task.reason}\n`:''}\n연결된 MCP나 작업 도구가 필요하면 실제로 사용해 확인하세요. 추측으로 조회 결과를 만들지 말고, 실패하면 실제 오류를 설명하세요. 질문에 답하면 앱이 그 답을 ${names[task.requester]}에게 자동으로 돌려줍니다.\n\n${agentHandoffProtocol(task.agent,task.noHandoff)}`;
       }
@@ -1420,11 +1422,11 @@
       }
       return `${context}당신이 이 작업의 시작 담당입니다. 직접 작업을 진행하고 사용자에게 줄 결과를 완성하세요.\n\n${agentHandoffProtocol(task.agent,task.noHandoff)}`;
     }
-    function buildIndependentPrompt(agent, prompt, sharedContext, recentContext='') {
+    function buildIndependentPrompt(agent, prompt, sharedContext, recentContext='', referencePacket=[]) {
       const board=sharedContext?.board;let manifest=null;
       try { manifest=board?window.TriadSharedContext.manifest(board):null; } catch {}
-      const related=recentContext?`\n\n직전 관련 맥락(대명사·수정 지시를 현재 요청과 연결할 때만 사용하고, 프로젝트의 현재 상태는 직접 확인하세요):\n${recentContext}`:'';
-      return `${prompt}${related}\n\nTriad 독립 실행 공유 문서 manifest:\n${JSON.stringify(manifest)}\n\n위 제한된 직전 맥락 외 전체 transcript나 상대 AI의 원문 답변은 요청하거나 읽지 마세요. 과거 맥락이 꼭 필요할 때만 shared_context_read로 history 또는 contributions를 선택해 읽고, 그 외에는 필요한 공유 보드 섹션과 프로젝트 파일만 읽으세요. 작업을 마친 뒤 submit_contribution 도구로 runId: ${sharedContext?.runId||''}에 자신의 요약과 근거를 반드시 기록하세요. 이 실행에서는 상대 AI 호출을 하지 마세요.`;
+      const related=recentContext?`\n\n직전 관련 맥락(대명사·수정 지시를 현재 요청과 연결할 때만 사용하고, 프로젝트의 현재 상태는 직접 확인하세요):\n${recentContext}`:'';const references=referencePacket.length?`\n\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(referencePacket)}`:'';
+      return `${prompt}${related}${references}\n\nTriad 독립 실행 공유 문서 manifest:\n${JSON.stringify(manifest)}\n\n위 제한된 직전 맥락 외 전체 transcript나 상대 AI의 원문 답변은 요청하거나 읽지 마세요. 과거 맥락이 꼭 필요할 때만 shared_context_read로 history 또는 contributions를 선택해 읽고, 그 외에는 필요한 공유 보드 섹션과 프로젝트 파일만 읽으세요. 작업을 마친 뒤 submit_contribution 도구로 runId: ${sharedContext?.runId||''}에 자신의 요약과 근거를 반드시 기록하세요. 이 실행에서는 상대 AI 호출을 하지 마세요.`;
     }
     function runAgentTurn(task) {
       const flow=state.orchestration;if(!flow||flow.cancelled)return;
@@ -1453,16 +1455,16 @@
       task.label=labels[task.kind];addTrace(task.agent,'info',`${task.label} 시작`,{turn:flow.index,total:flow.tasks.length});
       dispatchAgent(task.agent,buildCollaborationPrompt(task),{isolated:true,conversationId:flow.conversationId,config:flow.settings?.[task.agent],agentConfigs:flow.settings,collaboration:flow.collaboration});renderCollaboration();
     }
-    function startCollaboration(objective, runCollaboration=state.collaboration, conversationId=state.activeConversationId, settings=state.settings) {
+    function startCollaboration(objective, runCollaboration=state.collaboration, conversationId=state.activeConversationId, settings=state.settings, referencePacket=[]) {
       const collaboration=normalizeCollaboration(runCollaboration);
       const sharedContext=createSharedContext(objective,collaboration.lead);
       if(collaboration.mode==='agent'){
-        state.orchestration={mode:'agent',objective,tasks:[],index:0,current:null,cancelled:false,lastAgent:null,handoffs:0,mcpCalls:0,maxHandoffs:collaboration.rounds,sharedContext,collaboration,conversationId,settings:clone(settings)};
+        state.orchestration={mode:'agent',objective,tasks:[],index:0,current:null,cancelled:false,lastAgent:null,handoffs:0,mcpCalls:0,maxHandoffs:collaboration.rounds,sharedContext,collaboration,conversationId,settings:clone(settings),referencePacket:clone(referencePacket)};
         addTrace(collaboration.lead,'info','에이전트 협업 시작',{lead:names[collaboration.lead],maxHandoffs:collaboration.rounds});
         addMessage('system',`${names[collaboration.lead]}가 작업을 시작합니다. 필요한 경우 상대 AI에게 질문하고 답을 받아 계속 진행합니다.`);
         runAgentTurn({agent:collaboration.lead,kind:'agent_work'});return;
       }
-      const tasks=collaborationTasks(collaboration);state.orchestration={mode:collaboration.mode,objective,tasks,index:0,current:null,cancelled:false,lastAgent:null,sharedContext,collaboration,conversationId,settings:clone(settings)};
+      const tasks=collaborationTasks(collaboration);state.orchestration={mode:collaboration.mode,objective,tasks,index:0,current:null,cancelled:false,lastAgent:null,sharedContext,collaboration,conversationId,settings:clone(settings),referencePacket:clone(referencePacket)};
       addTrace(collaboration.lead,'info',collaboration.mode==='debate'?'상호 토론 시작':'교차 검토 시작',{rounds:collaboration.rounds,lead:names[collaboration.lead],finalizer:collaboration.finalizer});
       runNextCollaborationTurn();
     }
@@ -1474,7 +1476,11 @@
     }
     function send() {
       const draft=document.getElementById('draft');const original=draft.value.trim();if(!original)return;
-      const routed=route(original,{defaultTarget:state.defaultTarget});if(!routed){document.getElementById('routing-error').textContent='작업 내용을 입력해주세요.';return;}
+      const references=window.TriadRunReference.extract(original);
+      if(references.tooMany){document.getElementById('routing-error').textContent='실행 기록은 최대 3개까지 참고할 수 있습니다.';return;}
+      if(!references.clean){document.getElementById('routing-error').textContent='실행 기록 참조와 함께 작업 내용을 입력해주세요.';return;}
+      let referencePacket=[];try { referencePacket=window.TriadRunReference.packet(window.TriadRunReference.resolve(state.sharedDocuments,references.ids)); } catch(error) { document.getElementById('routing-error').textContent=error.message;return; }
+      const routed=route(references.clean,{defaultTarget:state.defaultTarget});if(!routed){document.getElementById('routing-error').textContent='작업 내용을 입력해주세요.';return;}
       if(routed.errors?.length){document.getElementById('routing-error').textContent=routed.errors[0];return;}
       let runCollaboration=null;
       if(state.collaboration.mode!=='independent'){
@@ -1509,15 +1515,15 @@
           // Do not create the next document run while a prior run is writing to
           // the same document.  A queued batch creates one fresh run only when
           // every provider is idle, then launches its selected targets together.
-          if(queued)enqueueIndependentBatch(routed.targets,routed.prompts,original,userMessageId,{sharedContext:null,documentId:requestedDocumentId,recentContexts});
+          if(queued)enqueueIndependentBatch(routed.targets,routed.prompts,original,userMessageId,{objective:references.clean,sharedContext:null,documentId:requestedDocumentId,recentContexts,referencePacket});
           else {
-            const independentContext=reusableContext||createIndependentSharedContext(original,routed.targets[0]||state.collaboration.lead);
+            const independentContext=reusableContext||createIndependentSharedContext(references.clean,routed.targets[0]||state.collaboration.lead);
             if(!independentContext?.board||!independentContext.documentId)throw new Error('공유 문서를 준비하지 못했습니다. 문서 목록을 새로고침한 뒤 다시 시도해주세요.');
             markMessageWorkStarted(userMessageId);
-            routed.targets.forEach(agent=>dispatchAgent(agent,buildIndependentPrompt(agent,routed.prompts[agent],independentContext,recentContexts[agent]),{sharedContext:independentContext}));
+            routed.targets.forEach(agent=>dispatchAgent(agent,buildIndependentPrompt(agent,routed.prompts[agent],independentContext,recentContexts[agent],referencePacket),{sharedContext:independentContext}));
           }
-        } else if(queued)enqueueCollaboration(routed.prompt,original,userMessageId,runCollaboration);
-        else {markMessageWorkStarted(userMessageId);startCollaboration(routed.prompt,runCollaboration);}
+        } else if(queued)enqueueCollaboration(routed.prompt,original,userMessageId,runCollaboration,referencePacket);
+        else {markMessageWorkStarted(userMessageId);startCollaboration(routed.prompt,runCollaboration,state.activeConversationId,state.settings,referencePacket);}
       } catch(error) {
         markMessageWorkStarted(userMessageId);
         const detail=error instanceof Error&&error.message?error.message:String(error||'알 수 없는 오류');

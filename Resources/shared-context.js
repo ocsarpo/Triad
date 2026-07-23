@@ -163,6 +163,7 @@
     const decision = decisionOverride === undefined ? initialText(board.decision, 'decision') : initialText(decisionOverride, 'decision');
     const contributions = historyContributionsFor(board);
     const summary = {
+      recordId: board.runId ? `TR-${board.runId}` : '',
       runId: requireString(board.runId || '', 'runId', 512),
       objective: initialText(board.objective, 'objective'),
       decision,

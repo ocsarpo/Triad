@@ -60,8 +60,8 @@ test('기본 대상 고정의 렌더러 연결을 보장한다', () => {
   assert.match(renderer, /state\.defaultTarget=normalizeDefaultTarget\(conversation\.defaultTarget\)/);
   assert.match(renderer, /data-default-target="codex"/);
   assert.match(renderer, /aria-pressed/);
-  assert.match(renderer, /route\(original,\{defaultTarget:state\.defaultTarget\}\)/);
-  assert.match(renderer, /startCollaboration\(routed\.prompt,runCollaboration\)/);
+  assert.match(renderer, /route\(references\.clean,\{defaultTarget:state\.defaultTarget\}\)/);
+  assert.match(renderer, /startCollaboration\(routed\.prompt,runCollaboration,state\.activeConversationId,state\.settings,referencePacket\)/);
   assert.match(renderer, /const collaboration=clone\(options\.collaboration\|\|activeCollaboration\(\)\)/);
   assert.match(renderer, /\.compose-tools \{ display: flex; flex-wrap: wrap;/);
   assert.match(renderer, /@media \(max-width: 1180px\) \{ \.compose-tools > \.hint \{ display: none; \} \}/);

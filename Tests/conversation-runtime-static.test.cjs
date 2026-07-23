@@ -53,3 +53,31 @@ test('종료·실패·중지는 pending 제거 뒤 대화 목록 배지를 한 �
   const stream=renderer.slice(renderer.indexOf("else if (event.type==='raw')"),renderer.indexOf("else if (event.type==='stderr')"));
   assert.doesNotMatch(stream,/renderConversations\(\)/);
 });
+
+test('백그라운드 이벤트는 대화 데이터만 바꾸고 현재 채팅 DOM 렌더링을 억제한다',()=>{
+  const background=renderer.slice(renderer.indexOf('function withConversation'),renderer.indexOf('function withPendingConversation'));
+  assert.match(background,/backgroundVisibleConversationId=visible\.id/);
+  assert.match(background,/backgroundRuntimeDepth-=1;if\(!backgroundRuntimeDepth\)backgroundVisibleConversationId=null;applyConversationSnapshot\(visible\)/);
+  assert.match(background,/renderStatus\(false\);renderQueue\(\)/);
+  assert.doesNotMatch(background,/renderMessages\(\)/);
+  for(const name of ['renderMessages','renderTraces','renderSettings','renderSharedBoard','renderCollaboration','renderQueue']){
+    assert.match(renderer,new RegExp(`function ${name}\\([^)]*\\) \\{\\n\\s*if\\(isBackgroundRuntime\\(\\)\\)return;`));
+  }
+  assert.match(renderer,/function renderStatus\(renderConversationList=true\) \{\s*if\(isBackgroundRuntime\(\)\)\{if\(renderConversationList\)renderConversations\(\);return;\}/);
+});
+
+test('실제 백그라운드 응답만 읽지 않음으로 저장하고 선택 시 해제한다',()=>{
+  assert.match(renderer,/unread:!!state\.unread/);
+  assert.match(renderer,/state\.messages=clone\(removeDeferredOrphans\(conversation\.messages\|\|\[\]\)\);state\.unread=!!conversation\.unread/);
+  assert.match(renderer,/function markUnreadForBackgroundMessage\(author,text\)/);
+  assert.match(renderer,/if\(!isBackgroundRuntime\(\)\|\|!String\(text\|\|''\)\.trim\(\)\|\|!\(author==='system'\|\|agents\.includes\(author\)\)\)return/);
+  assert.match(renderer,/if\(state\.unread\)return;/);
+  assert.match(renderer,/conversation\.unread=true;\s*renderConversations\(\)/);
+  assert.match(renderer,/persistConversation\(true\);loadConversation\(target\);if\(state\.unread\)\{state\.unread=false;persistConversation\(true\);\}/);
+});
+
+test('대화 목록은 답변 중·새 답변 조합을 명확히 표시한다',()=>{
+  assert.match(renderer,/const unread=!!item\.unread&&!active/);
+  assert.match(renderer,/running\?\(unread\?'답변 중 · 새 답변':'답변 중'\):queued\?'대기 중':unread\?'새 답변'/);
+  assert.match(renderer,/conversation-unread-dot/);
+});

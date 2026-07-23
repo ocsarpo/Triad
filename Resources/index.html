@@ -54,6 +54,8 @@
     .conversation-main { min-width: 0; cursor: pointer; }
     .conversation-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
     .conversation-time { display: block; margin-top: 2px; color: var(--muted); font-size: 9px; }
+    .conversation-time.unread { color: var(--all); font-weight: 750; }
+    .conversation-unread-dot { display: inline-block; width: 6px; height: 6px; margin: 0 4px 1px 0; border-radius: 50%; background: var(--all); vertical-align: middle; }
     .conversation-rename { width: 100%; min-width: 0; height: 25px; padding: 3px 6px; outline: none; border: 1px solid var(--all); border-radius: 6px; background: var(--card); color: var(--text); font: 650 11px/1.3 -apple-system, BlinkMacSystemFont, sans-serif; box-shadow: 0 0 0 2px color-mix(in srgb, var(--all), transparent 84%); }
     .conversation-actions { display: flex; align-items: flex-start; gap: 1px; opacity: 0; }
     .conversation-item:hover .conversation-actions, .conversation-item.active .conversation-actions { opacity: 1; }
@@ -466,7 +468,7 @@
       sessions: JSON.parse(localStorage.getItem('triad.sessions') || '{"codex":null,"claude":null}'),
       sessionStats: JSON.parse(localStorage.getItem('triad.sessionStats') || '{}'),
       traces: JSON.parse(localStorage.getItem('triad.traces') || '[]'), traceFilter:'all',
-      conversations: [], activeConversationId: localStorage.getItem('triad.activeConversationId'),
+      conversations: [], activeConversationId: localStorage.getItem('triad.activeConversationId'), unread:false,
       storageReady: false, saveTimer: null, conversationSearch: '',
       collaboration: {mode:'independent',lead:'codex',rounds:2,finalizer:'claude',helperTimeoutMinutes:5}, defaultTarget:'all', orchestration:null, sharedContext:null,
       sharedDocuments:[], activeSharedDocumentId:null, pendingSharedDocumentDeleteId:null,
@@ -559,7 +561,7 @@
     // letting an arriving stream event write into whichever chat is visible.
     function applyConversationSnapshot(conversation) {
       state.activeConversationId=conversation.id;
-      state.messages=clone(removeDeferredOrphans(conversation.messages||[]));
+      state.messages=clone(removeDeferredOrphans(conversation.messages||[]));state.unread=!!conversation.unread;
       state.settings=clone(conversation.settings||state.settings);
       state.collaboration=normalizeCollaboration(conversation.collaboration);
       state.defaultTarget=normalizeDefaultTarget(conversation.defaultTarget);
@@ -577,7 +579,7 @@
         id:state.activeConversationId, title:existing?.title||'새 대화',
         createdAt:existing?.createdAt||now, updatedAt:now,
         messages:clone(state.messages.slice(-300)), settings:clone(state.settings), collaboration:clone(state.collaboration), defaultTarget:normalizeDefaultTarget(state.defaultTarget),
-        sessions:clone(state.sessions), sessionStats:clone(state.sessionStats), traces:clone(state.traces.slice(-500)), sharedContext:clone(state.sharedContext),
+        sessions:clone(state.sessions), sessionStats:clone(state.sessionStats), traces:clone(state.traces.slice(-500)), sharedContext:clone(state.sharedContext), unread:!!state.unread,
         activeSharedDocumentId:state.activeSharedDocumentId
       };
     }
@@ -594,7 +596,9 @@
       if(state.activeConversationId)localStorage.setItem('triad.activeConversationId',state.activeConversationId);
     }
     let backgroundRuntimeDepth=0;
+    let backgroundVisibleConversationId=null;
     const isBackgroundRuntime=()=>backgroundRuntimeDepth>0;
+    const visibleConversationId=()=>backgroundVisibleConversationId||state.activeConversationId;
     function withConversation(conversationId, work) {
       if(!conversationId)return work();
       if(conversationId===state.activeConversationId)return work();
@@ -614,6 +618,7 @@
       clearTimeout(state.saveTimer);state.saveTimer=null;
       replaceConversationSnapshot(visible);
       if(state.storageReady&&hadVisibleSave)post({action:'saveConversation',conversation:visible});
+      if(!backgroundRuntimeDepth)backgroundVisibleConversationId=visible.id;
       applyConversationSnapshot(target);backgroundRuntimeDepth+=1;
       try { return work(); }
       finally {
@@ -626,7 +631,7 @@
         // debounce timer. Persist this exact target snapshot now so restoring
         // the visible conversation cannot redirect that timer to the wrong chat.
         if(state.storageReady)post({action:'saveConversation',conversation:updated});
-        backgroundRuntimeDepth-=1;applyConversationSnapshot(visible);
+        backgroundRuntimeDepth-=1;if(!backgroundRuntimeDepth)backgroundVisibleConversationId=null;applyConversationSnapshot(visible);
         restoreActiveLocalCache();
         // A streaming JSON line can arrive many times per second.  The
         // visible chat data did not change, so do not recreate its messages,
@@ -661,14 +666,14 @@
     function newConversation(skipPersist=false) {
       if(!skipPersist)persistConversation(true);
       const now=Date.now();
-      const conversation={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:[createWelcomeMessage()],settings:clone(state.settings),collaboration:clone(state.collaboration),defaultTarget:'all',sessions:{codex:null,claude:null},sessionStats:window.TriadSessionBudget.normalizeStats(),traces:[],sharedContext:null,activeSharedDocumentId:null};
+      const conversation={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:[createWelcomeMessage()],settings:clone(state.settings),collaboration:clone(state.collaboration),defaultTarget:'all',sessions:{codex:null,claude:null},sessionStats:window.TriadSessionBudget.normalizeStats(),traces:[],sharedContext:null,activeSharedDocumentId:null,unread:false};
       state.conversations.unshift(conversation);loadConversation(conversation);persistConversation(true);
       document.getElementById('draft').focus();
     }
     function selectConversation(conversationId) {
       if(conversationId===state.activeConversationId)return;
       const target=state.conversations.find(item=>item.id===conversationId);if(!target)return;
-      persistConversation(true);loadConversation(target);
+      persistConversation(true);loadConversation(target);if(state.unread){state.unread=false;persistConversation(true);}
     }
     function conversationTime(timestamp) {
       const date=new Date(timestamp);const today=new Date();
@@ -680,15 +685,17 @@
       const query=state.conversationSearch.trim().toLowerCase();root.innerHTML='';
       const items=window.TriadConversationOrder.sort(state.conversations).filter(item=>!query||(item.title||'').toLowerCase().includes(query));
       for(const item of items){
-        const row=document.createElement('div');row.className=`conversation-item ${item.id===state.activeConversationId?'active':''}`;
+        const active=item.id===visibleConversationId();const row=document.createElement('div');row.className=`conversation-item ${active?'active':''}`;
         row.dataset.conversationId=item.id;
         const main=document.createElement('div');main.className='conversation-main';main.onclick=()=>selectConversation(item.id);
         const title=document.createElement('span');title.className='conversation-name';title.textContent=item.title||'새 대화';
         const time=document.createElement('span');time.className='conversation-time';
         const runtime=runtimeFor(item.id);const running=Object.keys(runtime.pending).length>0||!!runtime.orchestration;
         const queued=runtime.queue.length>0;
-        time.textContent=running?'실행 중':queued?'대기 중':conversationTime(window.TriadConversationOrder.activityAt(item));
-        if(running||queued)time.title=running?'AI가 이 대화에서 작업 중입니다.':'이 대화의 작업이 전역 순차 대기열에 있습니다.';
+        const unread=!!item.unread&&!active;
+        time.textContent=running?(unread?'답변 중 · 새 답변':'답변 중'):queued?'대기 중':unread?'새 답변':conversationTime(window.TriadConversationOrder.activityAt(item));
+        if(unread){time.classList.add('unread');const dot=document.createElement('span');dot.className='conversation-unread-dot';dot.setAttribute('aria-label','새 답변');time.prepend(dot);}
+        if(running||queued||unread)time.title=running?(unread?'AI가 답변 중이며 새 응답이 도착했습니다.':'AI가 이 대화에서 답변 중입니다.'):queued?'이 대화의 작업이 전역 순차 대기열에 있습니다.':'새 AI 응답이 있습니다.';
         main.append(title,time);
         const actions=document.createElement('div');actions.className='conversation-actions';
         const rename=document.createElement('button');rename.className='conversation-action';rename.title='이름 변경';rename.textContent='✎';rename.onclick=()=>renameConversation(item.id);
@@ -777,6 +784,7 @@
       state.traces=state.traces.slice(-500); save(); renderTraces();
     }
     function renderTraces() {
+      if(isBackgroundRuntime())return;
       const root=document.getElementById('trace-list'); if(!root)return;
       const items=state.traces.filter(item=>state.traceFilter==='all'||item.agent===state.traceFilter);
       root.innerHTML='';
@@ -983,6 +991,7 @@
       return details;
     }
     function renderSharedBoard() {
+      if(isBackgroundRuntime())return;
       const pane=document.getElementById('board-pane');const body=document.getElementById('board-body');const chat=document.querySelector('.chat');const toggle=document.getElementById('board-toggle');if(!pane||!body||!chat)return;
       pane.hidden=!state.boardVisible;chat.classList.toggle('board-open',state.boardVisible);if(toggle)toggle.textContent=state.boardVisible?'공유 문서 닫기':'공유 문서';const documentLocked=sharedDocumentsLocked();const newButton=document.getElementById('board-new');if(newButton){newButton.disabled=documentLocked;newButton.title=documentLocked?'AI 작업 또는 대기열이 끝난 뒤 새 문서를 만들 수 있습니다.':'';}
       // The pane is a document viewer.  An active selection takes precedence
@@ -1051,13 +1060,19 @@
       }
     }
 
+    function markUnreadForBackgroundMessage(author,text) {
+      if(!isBackgroundRuntime()||!String(text||'').trim()||!(author==='system'||agents.includes(author)))return;
+      if(state.unread)return;
+      state.unread=true;const conversation=state.conversations.find(item=>item.id===state.activeConversationId);if(conversation)conversation.unread=true;
+      renderConversations();
+    }
     function addMessage(author, text, streaming=false, options={}) {
       const message = { id:id(), author, text, streaming, deferred:options.deferred===true, workStarted:options.workStarted===true, ...(options.recordId?{recordId:options.recordId,runId:options.runId||null,documentId:options.documentId||null,replyAgent:options.replyAgent||author}:{}), createdAt:Date.now() };
-      state.messages.push(message); save(); renderMessages(); return message.id;
+      state.messages.push(message);markUnreadForBackgroundMessage(author,text);save();renderMessages(); return message.id;
     }
     function updateMessage(messageId, updater) {
       const message = state.messages.find(m => m.id === messageId); if (!message) return;
-      updater(message); save(); renderMessages();
+      const before=message.text;updater(message);if(message.text!==before)markUnreadForBackgroundMessage(message.author,message.text);save();renderMessages();
     }
     function handleBrokerEvent(event) {
       const conversationId=event.board?.conversationId||state.pending[event.rootAgent||event.from]?.conversationId;
@@ -1161,6 +1176,7 @@
       post({action:'copyText',requestId,text});
     }
     function renderMessages() {
+      if(isBackgroundRuntime())return;
       const root=document.getElementById('messages');const followBottom=state.forceMessageBottom||messagesNearBottom(root);const previousScrollTop=root.scrollTop;root.innerHTML='';
       for (const m of state.messages) {
         if(!window.TriadQueue.shouldRenderMessage(m))continue;
@@ -1320,6 +1336,7 @@
       return item;
     }
     function renderQueue() {
+      if(isBackgroundRuntime())return;
       const root=document.getElementById('queue-list');if(!root)return;
       root.innerHTML='';root.hidden=state.queue.length===0;
       for(const item of state.queue){
@@ -1771,6 +1788,7 @@
         state.claudeModels=event.claudeModels || [];
         const recoveredConversationIds=new Set();
         const interruptedConversationIds=new Set();
+        const viewedConversationIds=new Set();
         const loaded=(Array.isArray(event.conversations)?event.conversations:[]).map(conversation=>{
           const withoutDeferred=removeDeferredOrphans(conversation.messages||[]);
           const messages=seedInitialWelcome(withoutDeferred);
@@ -1783,11 +1801,12 @@
         state.conversations=loaded;
         if(loaded.length){
           const selected=loaded.find(item=>item.id===state.activeConversationId)||loaded[0];
-          state.activeConversationId=selected.id;state.messages=clone(removeDeferredOrphans(selected.messages||[]));
+          if(selected.unread){selected.unread=false;viewedConversationIds.add(selected.id);}
+          state.activeConversationId=selected.id;state.messages=clone(removeDeferredOrphans(selected.messages||[]));state.unread=!!selected.unread;
           state.settings=clone(selected.settings||defaults(event.home));state.collaboration=normalizeCollaboration(selected.collaboration);state.defaultTarget=normalizeDefaultTarget(selected.defaultTarget);state.sessions=clone(selected.sessions||{codex:null,claude:null});state.sessionStats=clone(selected.sessionStats||{});state.traces=clone(selected.traces||[]);state.sharedContext=clone(selected.sharedContext||null);state.activeSharedDocumentId=selected.activeSharedDocumentId||state.sharedContext?.board?.documentId||null;
         }else{
           if(!state.settings)state.settings=defaults(event.home);
-          const now=Date.now();const migrated={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:clone(seedInitialWelcome(removeDeferredOrphans(state.messages))),settings:clone(state.settings),collaboration:clone(state.collaboration),defaultTarget:'all',sessions:clone(state.sessions),sessionStats:clone(state.sessionStats),traces:clone(state.traces),sharedContext:clone(state.sharedContext),activeSharedDocumentId:state.activeSharedDocumentId};
+          const now=Date.now();const migrated={id:id(),title:'새 대화',createdAt:now,updatedAt:now,messages:clone(seedInitialWelcome(removeDeferredOrphans(state.messages))),settings:clone(state.settings),collaboration:clone(state.collaboration),defaultTarget:'all',sessions:clone(state.sessions),sessionStats:clone(state.sessionStats),traces:clone(state.traces),sharedContext:clone(state.sharedContext),activeSharedDocumentId:state.activeSharedDocumentId,unread:false};
           const firstUser=migrated.messages.find(message=>message.author==='user')?.text?.replace(/\s+/g,' ').trim();
           if(firstUser)migrated.title=firstUser.slice(0,36)+(firstUser.length>36?'…':'');
           state.conversations=[migrated];state.activeConversationId=migrated.id;
@@ -1805,7 +1824,7 @@
           state.settings.codex.effort=state.codexModels[0].defaultEffort || 'medium';
         }
         activateRuntime(state.activeConversationId);state.tokenStatus=event.tokenStatus;state.storageReady=true;save();
-        for(const conversation of loaded)if(recoveredConversationIds.has(conversation.id)||interruptedConversationIds.has(conversation.id))post({action:'saveConversation',conversation});
+        for(const conversation of loaded)if(recoveredConversationIds.has(conversation.id)||interruptedConversationIds.has(conversation.id)||viewedConversationIds.has(conversation.id))post({action:'saveConversation',conversation});
         renderAll();post({action:'listSharedDocuments'});startUsagePolling();refreshAuthStatuses();refreshBranches();refreshProjectFiles();
       } else if (event.type==='raw') {
         state.lineBuffers[event.agent]+=event.chunk;
@@ -1862,6 +1881,7 @@
     };
 
     function renderStatus(renderConversationList=true) {
+      if(isBackgroundRuntime()){if(renderConversationList)renderConversations();return;}
       if (!state.settings) return;
       for (const agent of agents) {
         document.getElementById(`pill-${agent}`).classList.toggle('running',state.running[agent]);
@@ -1888,6 +1908,7 @@
       });
     }
     function renderCollaboration() {
+      if(isBackgroundRuntime())return;
       const c=state.collaboration;const modeButtons=[...document.querySelectorAll('[data-collab-mode]')];if(!modeButtons.length)return;
       renderDefaultTarget();
       modeButtons.forEach(button=>{const active=button.dataset.collabMode===c.mode;button.classList.toggle('active',active);button.setAttribute('aria-checked',String(active));});
@@ -1978,6 +1999,7 @@
       return `${policy} · ${stats.turns||0}턴 · 누적 입력 ${totalInput}k · 현재 문맥 ${contextInput}k${state.sessions?.[agent]?'':' · 새 세션'}`;
     }
     function renderSettings() {
+      if(isBackgroundRuntime())return;
       if (!state.settings) return;
       const root=document.getElementById('settings'); root.innerHTML='';
       for (const agent of agents) {

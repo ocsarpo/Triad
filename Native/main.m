@@ -231,6 +231,8 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
         [self deleteSharedDocument:body[@"documentId"]];
     } else if ([action isEqualToString:@"openURL"]) {
         [self openExternalURL:body[@"url"]];
+    } else if ([action isEqualToString:@"copyText"]) {
+        [self copyText:body[@"text"] requestId:body[@"requestId"]];
     } else if ([action isEqualToString:@"refreshUsage"]) {
         [self refreshCodexUsage:body[@"config"]];
     } else if ([action isEqualToString:@"authAccount"]) {
@@ -476,6 +478,21 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
         return;
     }
     [[NSWorkspace sharedWorkspace] openURL:components.URL];
+}
+
+- (void)copyText:(NSString *)text requestId:(NSString *)requestId {
+    NSString *safeRequestId = TriadStringOrDefault(requestId, @"");
+    if (![text isKindOfClass:[NSString class]]) {
+        [self emit:@{ @"type": @"clipboardResult", @"requestId": safeRequestId,
+                      @"success": @NO, @"message": @"복사할 원문이 없습니다." }];
+        return;
+    }
+    NSPasteboard *pasteboard = NSPasteboard.generalPasteboard;
+    [pasteboard clearContents];
+    BOOL success = [pasteboard setString:text forType:NSPasteboardTypeString];
+    [self emit:@{ @"type": @"clipboardResult", @"requestId": safeRequestId,
+                  @"success": @(success),
+                  @"message": success ? @"" : @"macOS 클립보드에 원문을 쓰지 못했습니다." }];
 }
 
 - (void)refreshCodexUsage:(NSDictionary *)config {

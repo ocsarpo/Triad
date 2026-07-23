@@ -153,6 +153,13 @@
     .message.user { justify-content: flex-end; }
     .bubble-wrap { max-width: min(82%, 760px); }
     .who { display: flex; align-items: center; gap: 7px; margin: 0 2px 5px; font-size: 11px; font-weight: 700; }
+    .bubble-copy {
+      margin-left: auto; padding: 2px 6px; border: 1px solid color-mix(in srgb, currentColor, transparent 70%);
+      border-radius: 6px; background: transparent; color: inherit; font: inherit; font-size: 9px; font-weight: 700;
+      opacity: .72;
+    }
+    .bubble-copy:hover:not(:disabled), .bubble-copy:focus-visible { opacity: 1; background: color-mix(in srgb, currentColor, transparent 91%); }
+    .bubble-copy:disabled { cursor: default; opacity: .5; }
     .user .who { justify-content: flex-end; color: var(--all); }
     .codex .who { color: var(--codex); }
     .claude .who { color: var(--claude); }
@@ -441,6 +448,7 @@
       running: { codex: false, claude: false },
       responseIds: {}, lineBuffers: { codex: '', claude: '' }, stderr: { codex: '', claude: '' },
       brokerMessages:{},
+      clipboardRequests:{}, copyFeedback:{},
       pending: {}, retryOnTermination: { codex:false, claude:false },
       tokenStatus: { codex: false, claude: false },
       accountStatus: {codex:{checking:false,connected:false,message:''},claude:{checking:false,connected:false,message:''}}, codexModels: [], claudeModels: [],
@@ -455,6 +463,7 @@
       claude: { model:'sonnet', effort:'medium', speedMode:'standard', permissionMode:'acceptEdits', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'claude', authMode:'existing', sessionPolicy:'auto', sessionTurnLimit:6, sessionTokenLimit:48000 }
     });
     const post = payload => window.webkit?.messageHandlers?.triad?.postMessage(payload);
+    const hasNativeBridge = () => !!window.webkit?.messageHandlers?.triad;
     const id = () => crypto.randomUUID();
     const clone = value => JSON.parse(JSON.stringify(value));
     function helperTimeoutMinutes(value) {
@@ -951,6 +960,48 @@
       if(!root||!button||!composer)return;
       button.hidden=messagesNearBottom(root);button.style.bottom='12px';
     }
+    function setCopyFeedback(messageId, feedback, resetAfter=0) {
+      state.copyFeedback[messageId]=feedback;renderMessages();
+      if(resetAfter){
+        setTimeout(()=>{
+          if(state.copyFeedback[messageId]!==feedback)return;
+          delete state.copyFeedback[messageId];renderMessages();
+        },resetAfter);
+      }
+    }
+    function applyCopyFeedback(button, messageId, hasText) {
+      const feedback=state.copyFeedback[messageId];
+      button.textContent=feedback?.label||'전체 복사';button.title=feedback?.title||'마크다운과 줄바꿈을 포함한 원문 전체 복사';
+      button.disabled=!hasText||!!feedback?.pending;
+    }
+    async function copyTextFallback(text) {
+      if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);return;}
+      const input=document.createElement('textarea');input.value=text;input.setAttribute('readonly','');
+      input.style.cssText='position:fixed;left:-9999px;top:0;opacity:0';document.body.appendChild(input);input.select();
+      try { if(!document.execCommand('copy'))throw new Error('브라우저가 복사를 허용하지 않았습니다.'); }
+      finally { input.remove(); }
+    }
+    function finishCopy(messageId, success, detail='') {
+      if(success)setCopyFeedback(messageId,{label:'복사됨',title:'원문 전체를 클립보드에 복사했습니다.',pending:false},1100);
+      else setCopyFeedback(messageId,{label:'복사 실패',title:detail||'클립보드에 복사하지 못했습니다.',pending:false},1800);
+    }
+    function completeNativeCopy(requestId, success, detail='') {
+      const request=state.clipboardRequests[requestId];if(!request)return;
+      delete state.clipboardRequests[requestId];clearTimeout(request.timer);
+      if(success){finishCopy(request.messageId,true);return;}
+      copyTextFallback(request.text).then(()=>finishCopy(request.messageId,true)).catch(error=>finishCopy(request.messageId,false,detail||error.message));
+    }
+    function copyMessageText(messageId, text) {
+      if(!text){finishCopy(messageId,false,'아직 복사할 원문이 없습니다.');return;}
+      setCopyFeedback(messageId,{label:'복사 중…',title:'원문을 클립보드에 복사하고 있습니다.',pending:true});
+      if(!hasNativeBridge()){
+        copyTextFallback(text).then(()=>finishCopy(messageId,true)).catch(error=>finishCopy(messageId,false,error.message));return;
+      }
+      const requestId=id();
+      const timer=setTimeout(()=>completeNativeCopy(requestId,false,'앱 클립보드 응답 시간이 초과되었습니다.'),2500);
+      state.clipboardRequests[requestId]={messageId,text,timer};
+      post({action:'copyText',requestId,text});
+    }
     function renderMessages() {
       const root=document.getElementById('messages');const followBottom=state.forceMessageBottom||messagesNearBottom(root);const previousScrollTop=root.scrollTop;root.innerHTML='';
       if (!state.messages.length) addWelcome();
@@ -960,6 +1011,11 @@
         const wrap = document.createElement('div'); wrap.className = 'bubble-wrap';
         const who = document.createElement('div'); who.className = 'who'; who.textContent = label;
         if (m.streaming) { const spin = document.createElement('span'); spin.className='spinner'; who.appendChild(spin); }
+        const copy=document.createElement('button');copy.type='button';copy.className='bubble-copy';copy.textContent='전체 복사';copy.title='마크다운과 줄바꿈을 포함한 원문 전체 복사';
+        applyCopyFeedback(copy,m.id,String(m.text||'').length>0);
+        copy.addEventListener('mousedown',event=>event.stopPropagation());
+        copy.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();copyMessageText(m.id,String(m.text||''));});
+        who.appendChild(copy);
         const bubble = document.createElement('div'); bubble.className='bubble'; renderMarkdownText(bubble,m.text || '생각 중…');
         wrap.append(who,bubble); el.appendChild(wrap); root.appendChild(el);
       }
@@ -1467,6 +1523,7 @@
         if(autocomplete.open&&autocomplete.type==='file')updateAutocomplete();
       }
       else if(event.type==='brokerEvent')handleBrokerEvent(event);
+      else if(event.type==='clipboardResult')completeNativeCopy(event.requestId,!!event.success,event.message||'');
       else if(event.type==='sharedDocuments')applySharedDocuments(event.documents);
       else if(event.type==='sharedDocumentsError'){addTrace('system','error','공유 문서 목록 오류',event.message||'공유 문서를 불러오지 못했습니다.');}
       else if(event.type==='brokerWarning'){addTrace(event.agent||'codex','error','AI 간 호출 도구 준비 실패',event.message||'');addMessage('system',`⚠️ ${event.message||'AI 간 호출 도구를 준비하지 못했습니다.'}`);}

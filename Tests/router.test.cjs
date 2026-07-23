@@ -62,7 +62,7 @@ test('기본 대상 고정의 렌더러 연결을 보장한다', () => {
   assert.match(renderer, /aria-pressed/);
   assert.match(renderer, /route\(original,\{defaultTarget:state\.defaultTarget\}\)/);
   assert.match(renderer, /startCollaboration\(routed\.prompt,runCollaboration\)/);
-  assert.match(renderer, /collaboration:activeCollaboration\(\)/);
+  assert.match(renderer, /const collaboration=clone\(options\.collaboration\|\|activeCollaboration\(\)\)/);
   assert.match(renderer, /\.compose-tools \{ display: flex; flex-wrap: wrap;/);
   assert.match(renderer, /@media \(max-width: 1180px\) \{ \.compose-tools > \.hint \{ display: none; \} \}/);
   assert.match(renderer, /function collaborationDefaultTargetHint\(\)/);

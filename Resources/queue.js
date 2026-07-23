@@ -19,7 +19,18 @@
     return !queue.some(item => item.messageId === removedItem.messageId);
   }
 
-  const api = { targetKey, positionFor, nextIndex, canRemoveMessage };
+  // Queue entries themselves are deliberately ephemeral.  A deferred user
+  // bubble therefore needs a small, explicit lifecycle so a persisted chat
+  // cannot leave an invisible message behind after the app is restarted.
+  function shouldRenderMessage(message) {
+    return !(message?.deferred && !message?.workStarted);
+  }
+
+  function removeDeferredOrphans(messages) {
+    return (Array.isArray(messages) ? messages : []).filter(shouldRenderMessage);
+  }
+
+  const api = { targetKey, positionFor, nextIndex, canRemoveMessage, shouldRenderMessage, removeDeferredOrphans };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.TriadQueue = api;
 })(typeof window !== 'undefined' ? window : globalThis);

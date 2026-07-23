@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const context = {};
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../Resources/queue.js'), 'utf8'), context);
-const { positionFor, nextIndex, canRemoveMessage } = context.TriadQueue;
+const { positionFor, nextIndex, canRemoveMessage, shouldRenderMessage, removeDeferredOrphans } = context.TriadQueue;
 
 const queue = [
   { id: 'c1', kind: 'agent', agent: 'codex' },
@@ -37,4 +37,19 @@ test('같은 메시지의 다른 대기 작업이나 시작된 작업이 있으�
   const removed = { id: 'q1', kind: 'agent', agent: 'codex', messageId: 'm1' };
   assert.equal(canRemoveMessage([{ id: 'q2', kind: 'agent', agent: 'claude', messageId: 'm1' }], removed, { id: 'm1' }), false);
   assert.equal(canRemoveMessage([], removed, { id: 'm1', workStarted: true }), false);
+});
+
+test('대기 메시지는 실제 작업 시작 전에는 채팅에서 숨기고 시작 시 표시한다', () => {
+  const message = { id: 'm1', deferred: true, workStarted: false };
+  assert.equal(shouldRenderMessage(message), false);
+  assert.equal(shouldRenderMessage({ ...message, deferred: false, workStarted: true }), true);
+});
+
+test('비영속 대기열로부터 복원된 미시작 메시지는 orphan으로 제거한다', () => {
+  const messages = [
+    { id: 'visible' },
+    { id: 'started', deferred: true, workStarted: true },
+    { id: 'orphan', deferred: true, workStarted: false }
+  ];
+  assert.deepEqual(JSON.parse(JSON.stringify(removeDeferredOrphans(messages).map(message => message.id))), ['visible', 'started']);
 });

@@ -1050,20 +1050,21 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     NSString *prompt = TriadStringOrNil(request[@"prompt"]);
     NSDictionary *config = TriadDictionaryOrNil(request[@"config"]);
     NSString *session = TriadStringOrNil(request[@"session"]);
+    NSString *runId = TriadStringOrNil(request[@"runId"]) ?: @"";
 
     if (![agent isKindOfClass:[NSString class]] ||
         ![prompt isKindOfClass:[NSString class]] ||
         ![config isKindOfClass:[NSDictionary class]]) return;
 
     if (self.tasks[agent] != nil) {
-        [self emit:@{@"type": @"error", @"agent": agent, @"message": @"이미 작업 중입니다."}];
+        [self emit:@{@"type": @"error", @"agent": agent, @"runId": runId, @"message": @"이미 작업 중입니다."}];
         return;
     }
 
     NSString *executable = TriadStringOrNil(config[@"executablePath"]);
     if (![[NSFileManager defaultManager] isExecutableFileAtPath:executable]) {
         [self emit:@{
-            @"type": @"error", @"agent": agent,
+            @"type": @"error", @"agent": agent, @"runId": runId,
             @"message": [NSString stringWithFormat:@"CLI 실행 파일을 찾을 수 없습니다: %@", executable ?: @""]
         }];
         return;
@@ -1189,7 +1190,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
         NSString *token = [self tokenForAgent:configuredAgent];
         if (token.length == 0 && [configuredAgent isEqualToString:agent]) {
             [self cleanupBrokerForAgent:agent];
-            [self emit:@{@"type": @"error", @"agent": agent, @"message": @"키체인에 저장된 API 키가 없습니다."}];
+            [self emit:@{@"type": @"error", @"agent": agent, @"runId": runId, @"message": @"키체인에 저장된 API 키가 없습니다."}];
             return;
         }
         if (token.length && [configuredAgent isEqualToString:@"codex"]) environment[@"CODEX_API_KEY"] = token;
@@ -1224,7 +1225,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
         dispatch_async(dispatch_get_main_queue(), ^{
             [weakSelf.tasks removeObjectForKey:agent];
             [weakSelf emit:@{
-                @"type": @"terminated", @"agent": agent,
+                @"type": @"terminated", @"agent": agent, @"runId": runId,
                 @"exitCode": @(finished.terminationStatus)
             }];
             [weakSelf notifyAgentCompletion:agent exitCode:finished.terminationStatus];
@@ -1235,7 +1236,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     NSError *error = nil;
     if (![task launchAndReturnError:&error]) {
         [self cleanupBrokerForAgent:agent];
-        [self emit:@{@"type": @"error", @"agent": agent, @"message": error.localizedDescription ?: @"실행 실패"}];
+        [self emit:@{@"type": @"error", @"agent": agent, @"runId": runId, @"message": error.localizedDescription ?: @"실행 실패"}];
         return;
     }
     self.tasks[agent] = task;

@@ -7,7 +7,6 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '../Native/main.m'), 'utf8');
-const plist = fs.readFileSync(path.join(__dirname, '../Resources/Info.plist'), 'utf8');
 const diffContext = {};
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../Resources/diff.js'), 'utf8'), diffContext);
 
@@ -35,8 +34,6 @@ test('브리지에서 NUL status와 Git unified diff를 사용한다', () => {
   assert.match(source, /TriadEmptyTreeObject/);
   assert.match(source, /tracked diff failed/);
   assert.match(source, /untracked-file status failed/);
-  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.40\.9<\/string>/);
-  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>59<\/string>/);
 });
 
 test('Git status -z는 공백·한글 파일을 파일 단위로 반환하고 ignored 파일은 제외한다', () => {

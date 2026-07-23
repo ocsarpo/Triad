@@ -56,7 +56,7 @@ test('렌더러의 실행과 재시도 요청은 명시적 MCP predicate와 공�
   assert.match(renderer, /runId: \$\{sharedContext\?\.runId/);
   assert.match(renderer, /enqueueIndependentBatch/);
   assert.match(renderer, /nativeSave:false/);
-  assert.match(renderer, /waitForIndependentContribution\(agent,pending,\(\)=>setTimeout\(drainQueues,0\)\)/);
+  assert.match(renderer, /waitForIndependentContribution\(agent,pending,scheduleQueueDrain\)/);
   assert.match(renderer, /sharedDocumentsLocked\(\)/);
   assert.doesNotMatch(renderer, /row\.disabled=documentLocked/);
   assert.doesNotMatch(renderer, /if\(!force&&sharedDocumentsLocked\(\)\)return/);

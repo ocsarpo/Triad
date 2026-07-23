@@ -36,3 +36,21 @@ test('스트리밍 재렌더 뒤에도 messageId 기반 복사 피드백을 이�
   assert.match(renderer, /const feedback=state\.copyFeedback\[messageId\]/);
   assert.match(renderer, /applyCopyFeedback\(copy,m\.id,String\(m\.text\|\|''\)\.length>0\)/);
 });
+
+test('AI 말풍선 하단에는 전체 복사와 답장 액션을 함께 표시한다', () => {
+  assert.match(renderer, /\.bubble-actions \{ display: flex; justify-content: flex-end; gap: 6px;/);
+  assert.doesNotMatch(renderer, /\.bubble-copy \{\s*margin-left: auto/);
+  assert.match(renderer, /const actions=document\.createElement\('div'\);actions\.className='bubble-actions'/);
+  assert.match(renderer, /actions\.appendChild\(copy\)/);
+  assert.match(renderer, /if\(agents\.includes\(m\.author\)\)\{const reply=/);
+  assert.match(renderer, /actions\.appendChild\(reply\)/);
+  assert.match(renderer, /wrap\.append\(who,bubble,actions\)/);
+});
+
+test('답장은 실행 기록이 있으면 참조를 붙이고 없어도 해당 AI를 호출한다', () => {
+  assert.match(renderer, /const agentTag=`#\$\{m\.replyAgent\|\|m\.author\}`/);
+  assert.match(renderer, /const reference=m\.recordId\?`@실행\[\$\{m\.recordId\}\]`:\'\'/);
+  assert.match(renderer, /const additions=\[\];[\s\S]*?additions\.push\(agentTag\)/);
+  assert.match(renderer, /if\(reference&&!text\.includes\(reference\)\)additions\.push\(reference\)/);
+  assert.match(renderer, /m\.recordId\?'이 AI에게 이 실행 기록을 참고해 답장합니다\.':'이 AI에게 답장합니다\.'/);
+});

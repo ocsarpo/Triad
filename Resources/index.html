@@ -166,12 +166,13 @@
     .message.user { justify-content: flex-end; }
     .bubble-wrap { max-width: min(82%, 760px); }
     .who { display: flex; align-items: center; gap: 7px; margin: 0 2px 5px; font-size: 11px; font-weight: 700; }
+    .bubble-actions { display: flex; justify-content: flex-end; gap: 6px; margin: 6px 2px 0; }
     .bubble-copy {
-      margin-left: auto; padding: 2px 6px; border: 1px solid color-mix(in srgb, currentColor, transparent 70%);
+      padding: 3px 7px; border: 1px solid color-mix(in srgb, currentColor, transparent 70%);
       border-radius: 6px; background: transparent; color: inherit; font: inherit; font-size: 9px; font-weight: 700;
-      opacity: .72;
+      opacity: 1;
     }
-    .bubble-copy:hover:not(:disabled), .bubble-copy:focus-visible { opacity: 1; background: color-mix(in srgb, currentColor, transparent 91%); }
+    .bubble-copy:hover:not(:disabled), .bubble-copy:focus-visible { background: color-mix(in srgb, currentColor, transparent 91%); }
     .bubble-copy:disabled { cursor: default; opacity: .5; }
     .user .who { justify-content: flex-end; color: var(--all); }
     .codex .who { color: var(--codex); }
@@ -1159,14 +1160,15 @@
         const wrap = document.createElement('div'); wrap.className = 'bubble-wrap';
         const who = document.createElement('div'); who.className = 'who'; who.textContent = label;
         if (m.streaming) { const spin = document.createElement('span'); spin.className='spinner'; who.appendChild(spin); }
+        const actions=document.createElement('div');actions.className='bubble-actions';
         const copy=document.createElement('button');copy.type='button';copy.className='bubble-copy';copy.textContent='전체 복사';copy.title='마크다운과 줄바꿈을 포함한 원문 전체 복사';
         applyCopyFeedback(copy,m.id,String(m.text||'').length>0);
         copy.addEventListener('mousedown',event=>event.stopPropagation());
         copy.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();copyMessageText(m.id,String(m.text||''));});
-        who.appendChild(copy);
-        if(m.author!=='user'&&m.author!=='system'&&m.recordId){const reply=document.createElement('button');reply.type='button';reply.className='bubble-copy';reply.textContent='답장';reply.title='이 AI에게 이 실행 기록을 참고해 답장합니다.';reply.onclick=event=>{event.preventDefault();event.stopPropagation();const draft=document.getElementById('draft');const agentTag=`#${m.replyAgent||m.author}`;const text=draft.value;const targetPrefix=/(?:^|\s)#(?:codex|claude)(?=\s|$)/.test(text)?'':`${agentTag} `;const reference=`@실행[${m.recordId}]`;draft.value=text.includes(reference)?`${text}${text.trim()?' ':''}${targetPrefix}`:`${text}${text.trim()?' ':''}${targetPrefix}${reference} `;draft.focus();updateRoutingPreview();};who.appendChild(reply);}
+        actions.appendChild(copy);
+        if(agents.includes(m.author)){const reply=document.createElement('button');reply.type='button';reply.className='bubble-copy';reply.textContent='답장';reply.title=m.recordId?'이 AI에게 이 실행 기록을 참고해 답장합니다.':'이 AI에게 답장합니다.';reply.onclick=event=>{event.preventDefault();event.stopPropagation();const draft=document.getElementById('draft');const agentTag=`#${m.replyAgent||m.author}`;const text=draft.value;const additions=[];if(!/(?:^|\s)#(?:codex|claude)(?=\s|$)/.test(text))additions.push(agentTag);const reference=m.recordId?`@실행[${m.recordId}]`:'';if(reference&&!text.includes(reference))additions.push(reference);if(additions.length)draft.value=`${text}${text.trim()?' ':''}${additions.join(' ')} `;draft.focus();updateRoutingPreview();};actions.appendChild(reply);}
         const bubble = document.createElement('div'); bubble.className='bubble'; renderMarkdownText(bubble,m.text || '생각 중…');
-        wrap.append(who,bubble); el.appendChild(wrap); root.appendChild(el);
+        wrap.append(who,bubble,actions); el.appendChild(wrap); root.appendChild(el);
       }
       requestAnimationFrame(()=>{root.scrollTop=followBottom?root.scrollHeight:previousScrollTop;updateScrollButton();});
     }

@@ -28,6 +28,62 @@
     return tasks;
   }
 
+  // The shared-board protocol deliberately has no provider preference.  The
+  // configured (or tagged) lead owns the proposal and final decision; the
+  // other provider is the reviewer.  A resolution turn is only needed after
+  // an actual disagreement, not as an expensive "I agree" confirmation.
+  function rolesFor(lead) {
+    const owner = lead === 'claude' ? 'claude' : 'codex';
+    return { owner, reviewer: owner === 'codex' ? 'claude' : 'codex' };
+  }
+
+  function harnessTasks(lead) {
+    const roles = rolesFor(lead);
+    return [
+      { agent: roles.owner, kind: 'proposal', phase: 'proposal' },
+      { agent: roles.reviewer, kind: 'verdict', phase: 'review' },
+      { agent: roles.owner, kind: 'resolve', phase: 'resolve', conditional: true },
+      { agent: roles.owner, kind: 'decision', phase: 'complete' }
+    ];
+  }
+
+  function shouldRunResolution(verdict) {
+    return verdict === 'disagree' || verdict === 'conditional';
+  }
+
+  function requiredBoardField(task) {
+    const kind = typeof task === 'string' ? task : task?.kind;
+    return ({ proposal: 'proposal', verdict: 'verdict', decision: 'decision' })[kind] || null;
+  }
+
+  function boardStageError(task, board) {
+    const field = requiredBoardField(task);
+    if (!field) return null;
+    const value = board?.[field];
+    if (field === 'verdict') return ['agree', 'disagree', 'conditional'].includes(value) ? null : '검토자는 shared board에 verdict를 기록해야 합니다.';
+    return typeof value === 'string' && value.trim() ? null : `shared board의 ${field} 기록이 필요합니다.`;
+  }
+
+  function promptEnvelope(input = {}) {
+    const roles = rolesFor(input.lead);
+    const task = input.task || {};
+    const board = input.board || {};
+    const sections = Array.isArray(input.sections) ? input.sections : [];
+    const manifest = board.manifest || board;
+    return {
+      objective: String(input.objective || ''),
+      role: task.agent === roles.reviewer ? 'reviewer' : 'owner',
+      phase: task.phase || task.kind || 'proposal',
+      owner: roles.owner,
+      reviewer: roles.reviewer,
+      manifest,
+      sections,
+      // This is intentionally a boolean rather than a transcript field.  It
+      // makes the no-transcript contract observable in unit tests.
+      includesTranscript: false
+    };
+  }
+
   function extractHandoff(text, from) {
     const source = String(text || '');
     const match = source.match(/\[\[TRIAD_HANDOFF\]\]\s*([\s\S]*?)\s*\[\[\/TRIAD_HANDOFF\]\]/u);
@@ -48,5 +104,5 @@
     }
   }
 
-  return { tasksFor, extractHandoff };
+  return { tasksFor, rolesFor, harnessTasks, shouldRunResolution, requiredBoardField, boardStageError, promptEnvelope, extractHandoff };
 });

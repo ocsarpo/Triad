@@ -607,12 +607,63 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
 }
 
 - (void)deleteConversation:(NSString *)identifier {
-    if (!self.database || ![identifier isKindOfClass:[NSString class]]) return;
+    if (![identifier isKindOfClass:[NSString class]]) return;
+    NSString *sharedContextPath = [self sharedContextPathForConversationId:identifier createDirectory:NO];
+    if (sharedContextPath.length) [NSFileManager.defaultManager removeItemAtPath:sharedContextPath error:nil];
+    if (!self.database) return;
     sqlite3_stmt *statement = NULL;
     if (sqlite3_prepare_v2(self.database, "DELETE FROM conversations WHERE id=?", -1, &statement, NULL) != SQLITE_OK) return;
     sqlite3_bind_text(statement, 1, identifier.UTF8String, -1, SQLITE_TRANSIENT);
     sqlite3_step(statement);
     sqlite3_finalize(statement);
+}
+
+- (NSString *)safeSharedContextIdentifier:(NSString *)identifier {
+    if (![identifier isKindOfClass:[NSString class]] || identifier.length == 0 || identifier.length > 128) return NSUUID.UUID.UUIDString.lowercaseString;
+    NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"];
+    if ([[identifier stringByTrimmingCharactersInSet:allowed] length] != 0) return NSUUID.UUID.UUIDString.lowercaseString;
+    return identifier;
+}
+
+- (NSString *)sharedContextPathForConversationId:(NSString *)conversationId createDirectory:(BOOL)createDirectory {
+    NSString *safeIdentifier = [self safeSharedContextIdentifier:conversationId];
+    if (!safeIdentifier.length) return nil;
+    NSURL *applicationSupport = [[NSFileManager defaultManager] URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;
+    if (!applicationSupport) return nil;
+    NSString *directory = [[[[applicationSupport path] stringByAppendingPathComponent:@"Triad"] stringByAppendingPathComponent:@"Shared Context"] copy];
+    NSFileManager *manager = NSFileManager.defaultManager;
+    BOOL isDirectory = NO;
+    if (![manager fileExistsAtPath:directory isDirectory:&isDirectory]) {
+        if (!createDirectory || ![manager createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:@{ NSFilePosixPermissions: @0700 } error:nil]) return nil;
+    }
+    if (!isDirectory && ![manager fileExistsAtPath:directory isDirectory:&isDirectory]) return nil;
+    if (!isDirectory) return nil;
+    [manager setAttributes:@{ NSFilePosixPermissions: @0700 } ofItemAtPath:directory error:nil];
+    return [directory stringByAppendingPathComponent:[safeIdentifier stringByAppendingString:@".json"]];
+}
+
+- (NSString *)prepareSharedContextForRequest:(NSDictionary *)request agent:(NSString *)agent {
+    NSDictionary *sharedContext = [request[@"sharedContext"] isKindOfClass:[NSDictionary class]] ? request[@"sharedContext"] : nil;
+    if (!sharedContext) return nil;
+    NSString *conversationId = sharedContext[@"conversationId"];
+    NSString *runId = sharedContext[@"runId"];
+    NSDictionary *board = [sharedContext[@"board"] isKindOfClass:[NSDictionary class]] ? sharedContext[@"board"] : nil;
+    if (![conversationId isKindOfClass:[NSString class]] || ![runId isKindOfClass:[NSString class]] || runId.length == 0 || !board) return nil;
+    NSString *path = [self sharedContextPathForConversationId:conversationId createDirectory:YES];
+    if (!path.length) return nil;
+
+    NSDictionary *existing = nil;
+    NSData *existingData = [NSData dataWithContentsOfFile:path options:0 error:nil];
+    if (existingData.length) {
+        id value = [NSJSONSerialization JSONObjectWithData:existingData options:0 error:nil];
+        if ([value isKindOfClass:[NSDictionary class]]) existing = value;
+    }
+    if ([existing[@"runId"] isEqualToString:runId]) return path;
+
+    NSData *data = [NSJSONSerialization dataWithJSONObject:board options:0 error:nil];
+    if (!data || ![data writeToFile:path options:NSDataWritingAtomic error:nil]) return nil;
+    [NSFileManager.defaultManager setAttributes:@{ NSFilePosixPermissions: @0600 } ofItemAtPath:path error:nil];
+    return path;
 }
 
 - (NSDictionary *)setupBrokerForAgent:(NSString *)agent request:(NSDictionary *)request {
@@ -637,10 +688,15 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     NSInteger callLimit = [request[@"collaboration"][@"rounds"] integerValue];
     if (callLimit < 1) callLimit = 6;
     if (callLimit > 10) callLimit = 10;
-    NSDictionary *payload = @{
+    NSString *sharedContextPath = [self prepareSharedContextForRequest:request agent:agent];
+    NSString *collaborationMode = [request[@"collaboration"][@"mode"] isKindOfClass:[NSString class]] ? request[@"collaboration"][@"mode"] : @"independent";
+    NSString *owner = [request[@"sharedContext"][@"owner"] isKindOfClass:[NSString class]] ? request[@"sharedContext"][@"owner"] : agent;
+    NSMutableDictionary *payload = [@{
         @"nodePath": nodePath, @"brokerPath": brokerPath, @"statePath": statePath, @"eventsPath": eventsPath,
-        @"callLimit": @(callLimit), @"maxDepth": @2, @"timeoutMs": @300000, @"agents": agentConfigs
-    };
+        @"callLimit": @(callLimit), @"maxDepth": @2, @"timeoutMs": @300000, @"agents": agentConfigs,
+        @"collaborationMode": collaborationMode, @"allowAskAgent": @([collaborationMode isEqualToString:@"agent"]), @"owner": owner
+    } mutableCopy];
+    if (sharedContextPath.length) payload[@"sharedContextPath"] = sharedContextPath;
     NSData *data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
     if (![data writeToFile:configPath options:NSDataWritingAtomic error:nil]) return nil;
     [@"" writeToFile:eventsPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
@@ -742,6 +798,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     task.executableURL = [NSURL fileURLWithPath:executable];
     NSString *workspace = config[@"workspacePath"] ?: NSHomeDirectory();
     task.currentDirectoryURL = [NSURL fileURLWithPath:workspace isDirectory:YES];
+    [self prepareSharedContextForRequest:request agent:agent];
     NSDictionary *broker = [self setupBrokerForAgent:agent request:request];
     NSArray *brokerArgs = broker ? @[broker[@"brokerPath"], @"--config", broker[@"configPath"], @"--caller", agent, @"--depth", @"0"] : nil;
 

@@ -13,7 +13,7 @@ test('ask_agent MCP가 상대 AI 답변을 반환하고 공유 호출 한도를 
   fs.chmodSync(fake,0o755);
   const statePath=path.join(directory,'state.json');const eventsPath=path.join(directory,'events.jsonl');const configPath=path.join(directory,'config.json');
   fs.writeFileSync(statePath,JSON.stringify({used:0,limit:1}));fs.writeFileSync(eventsPath,'');
-  fs.writeFileSync(configPath,JSON.stringify({nodePath:process.execPath,brokerPath:path.join(__dirname,'../Resources/triad-mcp-server.cjs'),statePath,eventsPath,callLimit:1,maxDepth:2,timeoutMs:3000,agents:{codex:{},claude:{executablePath:fake,workspacePath:directory,model:'test',effort:'low',permissionMode:'acceptEdits'}}}));
+  fs.writeFileSync(configPath,JSON.stringify({nodePath:process.execPath,brokerPath:path.join(__dirname,'../Resources/triad-mcp-server.cjs'),statePath,eventsPath,allowAskAgent:true,callLimit:1,maxDepth:2,timeoutMs:3000,agents:{codex:{},claude:{executablePath:fake,workspacePath:directory,model:'test',effort:'low',permissionMode:'acceptEdits'}}}));
   const child=spawn(process.execPath,[path.join(__dirname,'../Resources/triad-mcp-server.cjs'),'--config',configPath,'--caller','codex','--depth','0'],{stdio:['pipe','pipe','pipe']});
   t.after(()=>child.kill('SIGTERM'));
   let buffer='';const pending=new Map();
@@ -24,4 +24,70 @@ test('ask_agent MCP가 상대 AI 답변을 반환하고 공유 호출 한도를 
   const called=await request(3,'tools/call',{name:'ask_agent',arguments:{question:'확인해줘'}});assert.equal(called.result.isError,false);assert.match(called.result.content[0].text,/보조 답변 완료/);
   const limited=await request(4,'tools/call',{name:'ask_agent',arguments:{question:'한 번 더'}});assert.equal(limited.result.isError,true);assert.match(limited.result.content[0].text,/호출 한도/);
   const events=fs.readFileSync(eventsPath,'utf8').trim().split('\n').map(JSON.parse);assert.deepEqual(events.map(event=>event.eventType),['agent_call_started','agent_call_completed']);
+});
+
+test('공유 작업 보드는 제한된 MCP 도구와 revision 기반 협업 흐름을 강제한다', async t => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'triad-broker-shared-test-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const fake=path.join(directory,'fake-claude');
+  fs.writeFileSync(fake,'#!/bin/sh\ncat >/dev/null\nprintf \'%s\\n\' \'{"type":"result","result":"공유 보드 검토 완료"}\'\n');
+  fs.chmodSync(fake,0o755);
+  const statePath=path.join(directory,'state.json');const eventsPath=path.join(directory,'events.jsonl');const configPath=path.join(directory,'config.json');const sharedContextPath=path.join(directory,'shared-context.json');
+  fs.writeFileSync(statePath,JSON.stringify({used:0,limit:2}));fs.writeFileSync(eventsPath,'');
+  fs.writeFileSync(sharedContextPath,JSON.stringify({version:1,conversationId:'chat-1',runId:'run-1',objective:'토큰 절감',owner:'codex',reviewer:'claude',phase:'proposal',revision:0,constraints:[],proposal:'',evidence:[],verdict:null,disputes:[],decision:'',updatedAt:'2026-07-23T00:00:00.000Z'}));
+  fs.writeFileSync(configPath,JSON.stringify({nodePath:process.execPath,brokerPath:path.join(__dirname,'../Resources/triad-mcp-server.cjs'),statePath,eventsPath,sharedContextPath,allowAskAgent:true,callLimit:2,maxDepth:2,timeoutMs:3000,agents:{codex:{},claude:{executablePath:fake,workspacePath:directory,model:'test',effort:'low',permissionMode:'acceptEdits'}}}));
+  const child=spawn(process.execPath,[path.join(__dirname,'../Resources/triad-mcp-server.cjs'),'--config',configPath,'--caller','codex','--depth','0'],{stdio:['pipe','pipe','pipe']});
+  t.after(()=>child.kill('SIGTERM'));
+  let buffer='';const pending=new Map();
+  child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{buffer+=chunk;const lines=buffer.split(/\r?\n/u);buffer=lines.pop();for(const line of lines){if(!line.trim())continue;const value=JSON.parse(line);pending.get(value.id)?.(value);pending.delete(value.id);}});
+  const request=(id,method,params={})=>new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error(`MCP 응답 시간 초과: ${method}`)),4000);pending.set(id,value=>{clearTimeout(timer);resolve(value);});child.stdin.write(`${JSON.stringify({jsonrpc:'2.0',id,method,params})}\n`);});
+  const parsed=response=>JSON.parse(response.result.content[0].text);
+
+  const listed=await request(1,'tools/list');
+  assert.deepEqual(listed.result.tools.map(tool=>tool.name),['ask_agent','shared_context_manifest','shared_context_read','shared_context_update','submit_verdict']);
+  const manifest=parsed(await request(2,'tools/call',{name:'shared_context_manifest',arguments:{}}));
+  assert.equal(manifest.revision,0);
+  const read=parsed(await request(3,'tools/call',{name:'shared_context_read',arguments:{sections:['objective','proposal']}}));
+  assert.deepEqual(read,{objective:'토큰 절감',proposal:''});
+  const premature=await request(4,'tools/call',{name:'ask_agent',arguments:{question:'검토해줘'}});
+  assert.equal(premature.result.isError,true);assert.match(premature.result.content[0].text,/proposal/);
+  const updated=parsed(await request(5,'tools/call',{name:'shared_context_update',arguments:{section:'proposal',value:'공유 보드 초안',expectedRevision:0}}));
+  assert.equal(updated.revision,1);
+  const called=await request(6,'tools/call',{name:'ask_agent',arguments:{question:'검토해줘',sections:['proposal']}});
+  assert.equal(called.result.isError,false);assert.match(called.result.content[0].text,/공유 보드 검토 완료/);
+  const stale=await request(7,'tools/call',{name:'shared_context_update',arguments:{section:'proposal',value:'오래된 수정',expectedRevision:0}});
+  assert.equal(stale.result.isError,true);assert.match(stale.result.content[0].text,/revision/);
+  child.kill('SIGTERM');
+
+  const reviewer=spawn(process.execPath,[path.join(__dirname,'../Resources/triad-mcp-server.cjs'),'--config',configPath,'--caller','claude','--depth','0'],{stdio:['pipe','pipe','pipe']});
+  t.after(()=>reviewer.kill('SIGTERM'));
+  let reviewerBuffer='';const reviewerPending=new Map();
+  reviewer.stdout.setEncoding('utf8');reviewer.stdout.on('data',chunk=>{reviewerBuffer+=chunk;const lines=reviewerBuffer.split(/\r?\n/u);reviewerBuffer=lines.pop();for(const line of lines){if(!line.trim())continue;const value=JSON.parse(line);reviewerPending.get(value.id)?.(value);reviewerPending.delete(value.id);}});
+  const reviewerRequest=(id,method,params={})=>new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error(`MCP 응답 시간 초과: ${method}`)),4000);reviewerPending.set(id,value=>{clearTimeout(timer);resolve(value);});reviewer.stdin.write(`${JSON.stringify({jsonrpc:'2.0',id,method,params})}\n`);});
+  const verdict=parsed(await reviewerRequest(8,'tools/call',{name:'submit_verdict',arguments:{verdict:'conditional',findings:['반례 확인 필요'],expectedRevision:1}}));
+  assert.equal(verdict.revision,2);
+  const board=JSON.parse(fs.readFileSync(sharedContextPath,'utf8'));
+  assert.equal(board.verdict,'conditional');assert.deepEqual(board.disputes,['반례 확인 필요']);
+  const updateEvent=fs.readFileSync(eventsPath,'utf8').trim().split('\n').map(JSON.parse).find(event=>event.eventType==='shared_context_updated'&&event.actor==='claude');
+  assert.ok(updateEvent);assert.equal(updateEvent.eventType,'shared_context_updated');assert.equal(updateEvent.board.revision,2);assert.equal(updateEvent.actor,'claude');assert.deepEqual(updateEvent.section,['verdict','disputes']);
+});
+
+test('allowAskAgent가 false면 공유 보드는 유지하고 ask_agent만 숨긴다', async t => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'triad-broker-no-ask-test-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const statePath=path.join(directory,'state.json');const eventsPath=path.join(directory,'events.jsonl');const configPath=path.join(directory,'config.json');const sharedContextPath=path.join(directory,'shared-context.json');
+  fs.writeFileSync(statePath,JSON.stringify({used:0,limit:2}));fs.writeFileSync(eventsPath,'');
+  fs.writeFileSync(sharedContextPath,JSON.stringify({version:1,conversationId:'chat-1',runId:'run-1',objective:'토큰 절감',owner:'codex',reviewer:'claude',phase:'proposal',revision:0,constraints:[],proposal:'',evidence:[],verdict:null,disputes:[],decision:'',updatedAt:'2026-07-23T00:00:00.000Z'}));
+  fs.writeFileSync(configPath,JSON.stringify({nodePath:process.execPath,brokerPath:path.join(__dirname,'../Resources/triad-mcp-server.cjs'),statePath,eventsPath,sharedContextPath,allowAskAgent:false,callLimit:2,maxDepth:2,timeoutMs:3000,agents:{codex:{},claude:{}}}));
+  const child=spawn(process.execPath,[path.join(__dirname,'../Resources/triad-mcp-server.cjs'),'--config',configPath,'--caller','codex','--depth','0'],{stdio:['pipe','pipe','pipe']});
+  t.after(()=>child.kill('SIGTERM'));
+  let buffer='';const pending=new Map();
+  child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{buffer+=chunk;const lines=buffer.split(/\r?\n/u);buffer=lines.pop();for(const line of lines){if(!line.trim())continue;const value=JSON.parse(line);pending.get(value.id)?.(value);pending.delete(value.id);}});
+  const request=(id,method,params={})=>new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error(`MCP 응답 시간 초과: ${method}`)),4000);pending.set(id,value=>{clearTimeout(timer);resolve(value);});child.stdin.write(`${JSON.stringify({jsonrpc:'2.0',id,method,params})}\n`);});
+  const listed=await request(1,'tools/list');
+  assert.deepEqual(listed.result.tools.map(tool=>tool.name),['shared_context_manifest','shared_context_read','shared_context_update','submit_verdict']);
+  const manifest=await request(2,'tools/call',{name:'shared_context_manifest',arguments:{}});
+  assert.equal(manifest.result.isError,false);
+  const disabled=await request(3,'tools/call',{name:'ask_agent',arguments:{question:'검토해줘'}});
+  assert.ok(disabled.error);assert.match(disabled.error.message,/지원하지 않는 도구/);
 });

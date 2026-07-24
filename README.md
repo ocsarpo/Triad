@@ -73,6 +73,36 @@ AI 답변에 포함된 일반 `http`/`https` 주소와 마크다운 링크는 �
 
 대화 목록은 클릭·설정 저장 시각이 아니라 실제 사용자·AI 메시지 활동 시각 기준으로 최근순 정렬됩니다.
 
+## 개발 환경 준비
+
+`ocsarpo/Triad` 저장소를 클론하면 소스·빌드 스크립트·테스트가 모두 포함됩니다. 재생성되는 산출물(`.build/`·`.module-cache/`·`dist/`)만 제외되므로, 아래만 갖추면 이어서 빌드할 수 있습니다.
+
+**빌드 도구 (macOS)**
+- Xcode Command Line Tools — `clang`용. `xcode-select --install`
+- Python3 + Pillow — 아이콘 생성(`scripts/build-icns.py`)에 필요. `pip3 install Pillow` (없으면 빌드가 아이콘 단계에서 실패)
+- sqlite3·Cocoa·WebKit 등 프레임워크는 macOS 기본 제공
+
+**코드 서명 (선택, 권장)**
+- 재빌드·업데이트에도 macOS 폴더/“다른 앱 데이터” 접근 권한(TCC)이 초기화되지 않게 하려면 고정 서명 인증서를 한 번 만듭니다.
+
+  ```bash
+  zsh scripts/create-signing-cert.sh              # 로그인 키체인에 "Triad Self-Signed" 생성
+  export TRIAD_SIGN_IDENTITY="Triad Self-Signed"  # ~/.zshrc 에 넣어두면 매번 자동 적용
+  ```
+
+  지정하지 않으면 ad-hoc 서명으로 빌드되어 빌드마다 권한이 초기화됩니다. 인증서는 머신마다 키가 다르므로 권한 승인은 다른 머신으로 이전되지 않습니다.
+
+**실행 런타임 (빌드 외)**
+- Node.js — 에이전트 협업 MCP 브로커 실행용(Homebrew·Volta·로컬 경로 자동 탐색)
+- `codex` / `claude` CLI — 앱이 호출하는 에이전트. 설치 후 각 CLI 로그인 또는 API 키가 필요합니다.
+
+**빌드·테스트**
+
+```bash
+node --test Tests/*.test.cjs   # 단위·정적 테스트
+zsh scripts/package-app.sh     # dist/Triad.app 생성
+```
+
 ## 앱 패키징
 
 ```bash

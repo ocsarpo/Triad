@@ -295,3 +295,23 @@ test('contributions는 명시 선택한 패킷에서만 전달된다', () => {
   assert.equal(Object.hasOwn(withoutContributions.sections, 'contributions'), false);
   assert.deepEqual(withContributions.sections.contributions, { codex: [{ runId: '', summary: '결과', evidence: [], updatedAt: 'now' }], claude: [] });
 });
+
+test('배열 섹션은 JSON 문자열로 직렬화된 배열도 수용한다 (LLM 툴 인자 직렬화 관용)', () => {
+  const board = boardApi.createBoard({ owner: 'codex', objective: 'o' });
+  const c = boardApi.applyPatch(board, { expectedRevision: 0, actor: 'codex', changes: { constraints: JSON.stringify(['둘 이하', '락 금지']) } });
+  assert.deepEqual(plain(c.constraints), ['둘 이하', '락 금지']);
+  const e = boardApi.applyPatch(board, { expectedRevision: 0, actor: 'codex', changes: { evidence: JSON.stringify([{ path: 'a.js', line: 3 }]) } });
+  assert.deepEqual(plain(e.evidence), [{ path: 'a.js', line: 3 }]);
+  // 진짜 배열은 그대로 동작 (회귀 방지)
+  const real = boardApi.applyPatch(board, { expectedRevision: 0, actor: 'codex', changes: { constraints: ['그대로'] } });
+  assert.deepEqual(plain(real.constraints), ['그대로']);
+});
+
+test('문자열 섹션과 비-JSON 문자열은 coercion 대상이 아니다', () => {
+  const board = boardApi.createBoard({ owner: 'codex', objective: 'o' });
+  // proposal(문자열 섹션)은 '['로 시작해도 문자열 그대로 보존
+  const p = boardApi.applyPatch(board, { expectedRevision: 0, actor: 'codex', changes: { proposal: '[초안] 이것은 문자열' } });
+  assert.equal(p.proposal, '[초안] 이것은 문자열');
+  // 배열도 JSON도 아닌 문자열은 여전히 거부
+  assert.throws(() => boardApi.applyPatch(board, { expectedRevision: 0, actor: 'codex', changes: { constraints: '그냥 문자열' } }), /배열/);
+});

@@ -362,9 +362,21 @@
     return { expectedRevision: expectedRevisionOrPatch, actor, changes };
   }
 
+  // LLM tool calls sometimes serialize an array/object argument as a JSON
+  // string when the parameter schema is untyped (value: {}).  For the array
+  // sections, accept that stringified form so a well-formed update isn't
+  // rejected with "배열이어야 합니다".  String sections are never coerced, and a
+  // string that doesn't parse to a container is left as-is (still rejected).
+  function coerceJsonContainer(value) {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    if (trimmed[0] !== '[' && trimmed[0] !== '{') return value;
+    try { const parsed = JSON.parse(trimmed); return parsed && typeof parsed === 'object' ? parsed : value; } catch { return value; }
+  }
+
   function validateChange(name, value) {
-    if (name === 'constraints' || name === 'disputes') return requireList(value, name, LIST_LIMIT, ITEM_LIMIT);
-    if (name === 'evidence') return requireEvidence(value);
+    if (name === 'constraints' || name === 'disputes') return requireList(coerceJsonContainer(value), name, LIST_LIMIT, ITEM_LIMIT);
+    if (name === 'evidence') return requireEvidence(coerceJsonContainer(value));
     if (name === 'verdict') {
       if (!['agree', 'disagree', 'conditional'].includes(value)) throw new TypeError('verdict는 agree, disagree 또는 conditional이어야 합니다.');
       return value;

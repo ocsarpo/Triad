@@ -268,7 +268,7 @@ function sharedTools() {
     {
       name: 'shared_context_update',
       description: '현재 역할에 허용된 공유 작업 보드 섹션 하나를 revision 확인 후 갱신합니다.',
-      inputSchema: { type: 'object', properties: { section: { type: 'string', enum: ['constraints', 'proposal', 'evidence', 'verdict', 'disputes', 'decision'] }, value: {}, expectedRevision: { type: 'integer', minimum: 0 } }, required: ['section', 'value', 'expectedRevision'], additionalProperties: false }
+      inputSchema: { type: 'object', properties: { section: { type: 'string', enum: ['constraints', 'proposal', 'evidence', 'verdict', 'disputes', 'decision'] }, value: { description: 'constraints·disputes·evidence는 JSON 배열(문자열로 감싸지 말 것), proposal·decision은 문자열, verdict는 agree|disagree|conditional.' }, expectedRevision: { type: 'integer', minimum: 0 } }, required: ['section', 'value', 'expectedRevision'], additionalProperties: false }
     },
     {
       name: 'submit_verdict',

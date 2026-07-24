@@ -440,7 +440,7 @@
     </aside>
     <aside class="trace-panel">
       <div class="trace-header">
-        <div class="trace-title"><span class="trace-live"></span><h2>실행 과정</h2><span class="spacer"></span><button class="clear" id="clear-traces">비우기</button></div>
+        <div class="trace-title"><span class="trace-live"></span><h2>실행 과정</h2><span class="spacer"></span><button class="clear" id="copy-traces" title="현재 필터된 실행 과정을 토큰·캐시 요약과 함께 클립보드로 복사">복사</button><button class="clear" id="clear-traces">비우기</button></div>
         <p class="trace-note">내부 사고 원문이 아닌 실행 이벤트·도구·명령·오류를 실시간 표시합니다.</p>
       </div>
       <div class="trace-filters">
@@ -1203,6 +1203,7 @@
     function completeNativeCopy(requestId, success, detail='') {
       const request=state.clipboardRequests[requestId];if(!request)return;
       delete state.clipboardRequests[requestId];clearTimeout(request.timer);
+      if(request.onResult){ if(success){request.onResult(true);return;} copyTextFallback(request.text).then(()=>request.onResult(true)).catch(()=>request.onResult(false)); return; }
       if(success){finishCopy(request.messageId,true);return;}
       copyTextFallback(request.text).then(()=>finishCopy(request.messageId,true)).catch(error=>finishCopy(request.messageId,false,detail||error.message));
     }
@@ -1216,6 +1217,37 @@
       const timer=setTimeout(()=>completeNativeCopy(requestId,false,'앱 클립보드 응답 시간이 초과되었습니다.'),2500);
       state.clipboardRequests[requestId]={messageId,text,timer};
       post({action:'copyText',requestId,text});
+    }
+    function copyPlainText(text, button) {
+      const restore=button?button.textContent:'';
+      const done=ok=>{ if(!button)return; button.textContent=ok?'복사됨':'복사 실패'; button.disabled=true; setTimeout(()=>{button.textContent=restore;button.disabled=false;},1200); };
+      if(hasNativeBridge()){
+        const requestId=id();
+        const timer=setTimeout(()=>{ if(state.clipboardRequests[requestId]){delete state.clipboardRequests[requestId];copyTextFallback(text).then(()=>done(true)).catch(()=>done(false));} },2500);
+        state.clipboardRequests[requestId]={text,timer,onResult:done};
+        post({action:'copyText',requestId,text});
+        return;
+      }
+      copyTextFallback(text).then(()=>done(true)).catch(()=>done(false));
+    }
+    // Copy the currently-filtered trace list as text, prefixed with a token/
+    // cache summary so cache_hit_pct across turns is readable at a glance
+    // instead of copying each "이번 요청 토큰 사용량" entry by hand.
+    function traceExportText() {
+      const items=state.traces.filter(item=>state.traceFilter==='all'||item.agent===state.traceFilter);
+      const lines=[];
+      const usage=items.filter(i=>i.title==='이번 요청 토큰 사용량').map(i=>{try{return JSON.parse(i.detail);}catch{return null;}}).filter(Boolean);
+      if(usage.length){
+        const sum=k=>usage.reduce((a,u)=>a+(Number(u[k])||0),0);
+        const li=sum('logical_input_tokens'),cr=sum('cache_read_tokens'),out=sum('output_tokens');
+        lines.push(`# 토큰/캐시 요약: ${usage.length}턴 · 입력 ${li} (캐시읽기 ${cr}, ${li?Math.round(cr/li*100):0}%) · 출력 ${out}`,'');
+      }
+      for(const item of items){
+        const time=new Date(item.createdAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        lines.push(`[${time}] ${names[item.agent]||item.agent} · ${item.level} · ${item.title}`);
+        if(item.detail)lines.push(item.detail.split('\n').map(l=>'  '+l).join('\n'));
+      }
+      return lines.join('\n');
     }
     function renderMessages() {
       if(isBackgroundRuntime())return;
@@ -2314,6 +2346,7 @@
     document.getElementById('stop-claude').onclick=()=>stopAgent('claude');
     document.getElementById('clear').onclick=()=>{if(agents.some(a=>state.running[a])||state.queue.length)return;state.messages=[createWelcomeMessage()];save();renderMessages();};
     document.getElementById('clear-traces').onclick=()=>{state.traces=[];save();renderTraces();};
+    (()=>{const b=document.getElementById('copy-traces');if(b)b.onclick=()=>copyPlainText(traceExportText(),b);})();
     document.getElementById('trace-toggle').onclick=()=>{state.traceVisible=!state.traceVisible;localStorage.setItem('triad.traceVisible',String(state.traceVisible));renderTraceVisibility();};
     document.getElementById('diff-toggle').onclick=openDiff;
     document.getElementById('diff-close').onclick=closeDiff;

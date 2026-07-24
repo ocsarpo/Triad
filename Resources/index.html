@@ -458,6 +458,7 @@
   <script src="diff.js"></script>
   <script src="queue.js"></script>
   <script src="recent-context.js"></script>
+  <script src="message-intent.js"></script>
   <script src="run-reference.js"></script>
   <script src="conversation-order.js"></script>
   <script src="usage.js"></script>
@@ -1486,6 +1487,12 @@
       return `${context}당신이 이 작업의 시작 담당입니다. 직접 작업을 진행하고 사용자에게 줄 결과를 완성하세요.\n\n${agentHandoffProtocol(task.agent,task.noHandoff)}`;
     }
     function buildIndependentPrompt(agent, prompt, sharedContext, recentContext='', referencePacket=[]) {
+      // Short greetings/acks skip the full task-run scaffold (project & board
+      // reads, mandatory submit_contribution) so a "ㅎㅇ?" stays a "ㅎㅇ?".
+      if(!referencePacket.length&&window.TriadMessageIntent?.isConversational(prompt)){
+        const chat=recentContext?`\n\n직전 관련 맥락(대명사·수정 지시 연결용):\n${recentContext}`:'';
+        return `${prompt}${chat}\n\n이건 짧은 대화성 메시지입니다. 프로젝트 파일·git·공유 보드를 읽지 말고, submit_contribution도 하지 말고, 한두 문장으로 가볍게만 답하세요. 실제 작업 지시가 오면 그때 정식으로 진행하겠다고 안내해도 됩니다.`;
+      }
       const board=sharedContext?.board;let manifest=null;
       try { manifest=board?window.TriadSharedContext.manifest(board):null; } catch {}
       const related=recentContext?`\n\n직전 관련 맥락(대명사·수정 지시를 현재 요청과 연결할 때만 사용하고, 프로젝트의 현재 상태는 직접 확인하세요):\n${recentContext}`:'';const references=referencePacket.length?`\n\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(referencePacket)}`:'';
@@ -1557,7 +1564,13 @@
       const sameConversationContext=state.collaboration.mode==='independent'?independentContextForConversation(state.activeConversationId):null;
       // Capture before adding this user bubble: both immediate and queued work
       // get the same bounded, per-agent continuation packet from send time.
-      const recentContexts=Object.fromEntries(routed.targets.map(agent=>[agent,window.TriadRecentContext.packetFor(state.messages,agent)]));
+      const recentContexts=Object.fromEntries(routed.targets.map(agent=>{
+        // A resumed session already holds the previous turn; only inject the
+        // continuation packet when a fresh/rotated session would start blind.
+        const cfg=state.settings?.[agent]||{};const stats=state.sessionStats?.[agent]||{};
+        const willResume=state.sessions?.[agent]&&cfg.sessionPolicy!=='alwaysNew'&&!window.TriadSessionBudget.shouldRotate(cfg,stats,true);
+        return [agent,willResume?'':window.TriadRecentContext.packetFor(state.messages,agent)];
+      }));
       // Reusing a run is safe only for an immediately parallel, other-agent
       // request. A queued follow-up must become a new run after its predecessor
       // (and contribution grace period) finishes.

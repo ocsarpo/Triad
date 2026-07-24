@@ -1479,7 +1479,11 @@
     function buildCollaborationPrompt(task) {
       const flow=state.orchestration;const board=boardFor(flow);const packet=boardPacket(task,flow);
       const role=task.agent===board?.owner?'owner/proposer':'reviewer';
-      const references=flow.referencePacket?.length?`\n\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(flow.referencePacket)}`:'';const common=`사용자 의제:\n${flow.objective}${references}\n\n당신의 역할: ${role}\n공유 보드 단계: ${task.phase}\n공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(packet)}\n\n공유 보드는 프로젝트가 아니라 Triad가 관리합니다. 전체 채팅 기록이나 다른 AI의 원문 답변을 요청하거나 반복하지 마세요. 필요한 프로젝트 근거는 직접 필요한 파일·라인만 읽으세요.`;
+      const references=flow.referencePacket?.length?`\n\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(flow.referencePacket)}`:'';
+      // 안정 prefix(의제·참고·역할·정책은 한 실행 안에서 에이전트 턴마다 바뀌지 않음)를
+      // 먼저 두고, 매 턴 revision이 바뀌는 보드 단계·스냅샷은 맨 뒤로 — prompt prefix
+      // 캐시가 volatile 델타에 깨지지 않도록.
+      const common=`사용자 의제:\n${flow.objective}${references}\n\n당신의 역할: ${role}\n\n공유 보드는 프로젝트가 아니라 Triad가 관리합니다. 전체 채팅 기록이나 다른 AI의 원문 답변을 요청하거나 반복하지 마세요. 필요한 프로젝트 근거는 직접 필요한 파일·라인만 읽으세요.\n\n공유 보드 단계: ${task.phase}\n공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(packet)}`;
       if(task.kind==='proposal')return `${common}\n\ninline에는 제약만 있습니다. 필요한 경우 shared_context_read로 필요한 섹션만 읽으세요. 먼저 shared_context_update 도구로 proposal과 필요한 constraints/evidence를 작성하세요. 그 뒤 사용자에게는 실행 가능한 제안과 근거만 간결하게 설명하세요.`;
       if(task.kind==='verdict')return `${common}\n\nshared_context_read로 proposal과 evidence만 읽고 반례·누락만 검토하세요. submit_verdict 도구로 agree | disagree | conditional 중 하나와 최대 3개의 findings를 기록하세요. agree라면 새 동의 라운드를 시작하지 마세요.`;
       if(task.kind==='resolve')return `${common}\n\nshared_context_read로 verdict와 disputes만 읽고 해결하세요. 필요한 변경은 shared_context_update로 proposal/evidence에 반영하고, 해결 결과를 짧게 남기세요.`;
@@ -1493,7 +1497,9 @@
     function buildAgentPrompt(task) {
       const flow=state.orchestration;
       const packet=boardPacket(task,flow);const board=boardFor(flow);
-      const references=flow.referencePacket?.length?`\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(flow.referencePacket)}\n`:'';const context=`사용자의 원래 작업:\n${flow.objective}${references}\n당신의 역할: ${task.agent===board?.owner?'owner/proposer':'reviewer'}\n공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(packet)}\n\n전체 채팅 기록은 제공되지 않습니다. 필요한 프로젝트 파일만 직접 읽고, 확인한 근거는 공유 보드에 짧게 기록하세요.\n\n`;
+      const references=flow.referencePacket?.length?`\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(flow.referencePacket)}\n`:'';
+      // 안정 prefix(작업·참고·역할·정책) 먼저, volatile 보드 스냅샷은 뒤로.
+      const context=`사용자의 원래 작업:\n${flow.objective}${references}\n당신의 역할: ${task.agent===board?.owner?'owner/proposer':'reviewer'}\n\n전체 채팅 기록은 제공되지 않습니다. 필요한 프로젝트 파일만 직접 읽고, 확인한 근거는 공유 보드에 짧게 기록하세요.\n\n공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(packet)}\n\n`;
       if(task.kind==='agent_answer'){
         return `${context}${names[task.requester]}가 당신에게 다음 작업을 요청했습니다.\n질문: ${task.question}\n${task.reason?`요청 이유: ${task.reason}\n`:''}\n연결된 MCP나 작업 도구가 필요하면 실제로 사용해 확인하세요. 추측으로 조회 결과를 만들지 말고, 실패하면 실제 오류를 설명하세요. 질문에 답하면 앱이 그 답을 ${names[task.requester]}에게 자동으로 돌려줍니다.\n\n${agentHandoffProtocol(task.agent,task.noHandoff)}`;
       }

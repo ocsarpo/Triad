@@ -1,14 +1,61 @@
 {
   "name": "triad-electron",
-  "version": "0.1.0",
+  "version": "0.48.9",
   "private": true,
-  "description": "Electron shell prototype for Triad (macOS-first, Windows port later).",
+  "description": "Electron shell for Triad (macOS-first, Windows port later).",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "pack": "electron-packager . Triad --platform=darwin --arch=arm64 --out=dist --overwrite --extra-resource=../Resources --icon=../Resources/Triad.icns --app-bundle-id=kr.co.ocsarpo.triad-electron",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac"
+  },
+  "build": {
+    "appId": "kr.co.ocsarpo.triad-electron",
+    "productName": "Triad",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "platform.js",
+      "lib/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../Resources",
+        "to": "Resources"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "../Resources/Triad.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "identity": null,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "Triad ${version}"
+    }
   },
   "devDependencies": {
     "@electron/packager": "^20.0.4",
-    "electron": "^43.2.0"
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3"
   }
 }

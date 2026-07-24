@@ -499,8 +499,8 @@
       boardVisible:false
     };
     const defaults = home => ({
-      codex: { model:'gpt-5.6-sol', effort:'medium', speedMode:'standard', permissionMode:'workspace-write', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'codex', authMode:'existing', sessionPolicy:'auto', sessionTurnLimit:6, sessionTokenLimit:48000 },
-      claude: { model:'sonnet', effort:'medium', speedMode:'standard', permissionMode:'acceptEdits', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'claude', authMode:'existing', sessionPolicy:'auto', sessionTurnLimit:6, sessionTokenLimit:48000 }
+      codex: { model:'gpt-5.6-sol', effort:'medium', speedMode:'standard', permissionMode:'workspace-write', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'codex', authMode:'existing', sessionPolicy:'auto', sessionTurnLimit:50, sessionTokenLimit:170000 },
+      claude: { model:'sonnet', effort:'medium', speedMode:'standard', permissionMode:'acceptEdits', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'claude', authMode:'existing', sessionPolicy:'auto', sessionTurnLimit:50, sessionTokenLimit:170000 }
     });
     const freshBranchStatus=()=>({codex:{loading:false,kind:'unknown',label:'확인 전',workspace:''},claude:{loading:false,kind:'unknown',label:'확인 전',workspace:''}});
     const freshProjectFiles=()=>({codex:{workspace:'',files:[],loading:false,error:''},claude:{workspace:'',files:[],loading:false,error:''}});
@@ -563,6 +563,20 @@
     function normalizeSessionSettings(config) {
       return {...config,...window.TriadSessionBudget.normalizePolicy(config)};
     }
+    // One-time lift of stale session defaults.  Sessions created under the old
+    // 6-turn / 48k defaults rotated far too aggressively and discarded the CLI
+    // prompt cache each time.  Configs still sitting on the exact old defaults
+    // are pulled up to the current ones; any value the user deliberately
+    // changed is left untouched.
+    const LEGACY_SESSION_DEFAULTS={sessionTurnLimit:6,sessionTokenLimit:48000};
+    function liftLegacySessionDefaults(config){
+      if(!config||typeof config!=='object')return config;
+      if(config.sessionTurnLimit===LEGACY_SESSION_DEFAULTS.sessionTurnLimit&&config.sessionTokenLimit===LEGACY_SESSION_DEFAULTS.sessionTokenLimit){
+        const policy=window.TriadSessionBudget.DEFAULT_POLICY;
+        return {...config,sessionTurnLimit:policy.sessionTurnLimit,sessionTokenLimit:policy.sessionTokenLimit};
+      }
+      return config;
+    }
     function normalizeSessionStats(value=state.sessionStats) {
       state.sessionStats=window.TriadSessionBudget.normalizeStats(value,state.sessions);
       for(const agent of agents){if(state.sessions?.[agent]&&!state.sessionStats[agent].sessionId)state.sessionStats[agent].sessionId=state.sessions[agent];}
@@ -584,6 +598,8 @@
       state.activeConversationId=conversation.id;
       state.messages=clone(removeDeferredOrphans(conversation.messages||[]));state.unread=!!conversation.unread;state.workspace=normalizeWorkspace(conversation.workspace,conversation.settings||state.settings);
       state.settings=clone(conversation.settings||state.settings);
+      if(state.settings?.codex)state.settings.codex=liftLegacySessionDefaults(state.settings.codex);
+      if(state.settings?.claude)state.settings.claude=liftLegacySessionDefaults(state.settings.claude);
       state.collaboration=normalizeCollaboration(conversation.collaboration);
       state.defaultTarget=normalizeDefaultTarget(conversation.defaultTarget);
       state.sessions=clone(conversation.sessions||{codex:null,claude:null});
@@ -1848,7 +1864,7 @@
           state.conversations=[migrated];state.activeConversationId=migrated.id;
         }
         const base=defaults(event.home);
-        state.settings={codex:normalizeSessionSettings({...base.codex,...(state.settings?.codex||{})}),claude:normalizeSessionSettings({...base.claude,...(state.settings?.claude||{})})};
+        state.settings={codex:normalizeSessionSettings(liftLegacySessionDefaults({...base.codex,...(state.settings?.codex||{})})),claude:normalizeSessionSettings(liftLegacySessionDefaults({...base.claude,...(state.settings?.claude||{})}))};
         state.workspace=normalizeWorkspace(loaded.find(item=>item.id===state.activeConversationId)?.workspace,state.settings,event.home);
         normalizeSessionStats(state.sessionStats||{});
         state.settings.codex.executablePath ||= event.codexPath;
@@ -2101,7 +2117,7 @@
             <summary>세션 <span class="settings-group-summary">${sessionSummary(agent)}</span></summary>
             <div class="settings-group-body">
               <div class="field"><label>세션 정책</label><select data-key="sessionPolicy"><option value="auto" ${c.sessionPolicy==='auto'?'selected':''}>자동 회전 (권장)</option><option value="continue" ${c.sessionPolicy==='continue'?'selected':''}>계속 유지</option><option value="alwaysNew" ${c.sessionPolicy==='alwaysNew'?'selected':''}>항상 새 세션</option></select></div>
-              ${c.sessionPolicy==='auto'?`<div class="row"><div class="field"><label>턴 기준</label><input data-key="sessionTurnLimit" type="number" min="2" max="50" value="${c.sessionTurnLimit}"></div><div class="field"><label>현재 문맥 기준</label><input data-key="sessionTokenLimit" type="number" min="8000" max="500000" step="1000" value="${c.sessionTokenLimit}"></div></div><p class="fast-note">직전 요청의 실측 문맥이 기준(기본 48k)이거나 턴 기준(기본 6턴)에 도달한 다음 일반 작업부터 새 세션으로 시작합니다. 캐시 포함 논리 입력은 문맥 측정용이며 과금 추정이 아닙니다.</p>`:''}
+              ${c.sessionPolicy==='auto'?`<div class="row"><div class="field"><label>턴 기준</label><input data-key="sessionTurnLimit" type="number" min="2" max="50" value="${c.sessionTurnLimit}"></div><div class="field"><label>현재 문맥 기준</label><input data-key="sessionTokenLimit" type="number" min="8000" max="500000" step="1000" value="${c.sessionTokenLimit}"></div></div><p class="fast-note">직전 요청의 실측 문맥이 기준(기본 170k)이거나 턴 기준(기본 50턴)에 도달한 다음 일반 작업부터 새 세션으로 시작합니다. 기본값이 높아 일반 대화는 거의 회전하지 않고 세션·프롬프트 캐시를 유지하며, 회전은 문맥이 모델 윈도우에 근접할 때의 안전장치입니다. 캐시 포함 논리 입력은 문맥 측정용이며 과금 추정이 아닙니다.</p>`:''}
               <div class="session-row"><span>${sessionSummary(agent)}</span><button class="small-btn reset-session" ${state.running[agent]?'disabled':''}>다음 작업부터 새 세션</button></div>
             </div>
           </details>`;

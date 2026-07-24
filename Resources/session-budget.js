@@ -4,7 +4,12 @@
   else root.TriadSessionBudget = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   const AGENTS = ['codex', 'claude'];
-  const DEFAULT_POLICY = { sessionPolicy: 'auto', sessionTurnLimit: 6, sessionTokenLimit: 48000 };
+  // Rotation is a last-resort guard, not a routine event: a fresh session
+  // discards the CLI prompt cache, so rotating often makes conversational use
+  // *more* expensive.  These high defaults keep normal chats on one cached,
+  // natively-resumed session; rotation only fires as the logical context nears
+  // the model window.  The CLIs auto-compact before then anyway.
+  const DEFAULT_POLICY = { sessionPolicy: 'auto', sessionTurnLimit: 50, sessionTokenLimit: 170000 };
 
   function estimateTokens(value) {
     const text = String(value || '');

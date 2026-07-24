@@ -9,15 +9,41 @@ const context = sandbox.TriadRecentContext;
 const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html'), 'utf8');
 const packager = fs.readFileSync(path.join(__dirname, '../scripts/package-app.sh'), 'utf8');
 
-test('대상 AI의 최신 요청·응답 한 쌍만 선택한다', () => {
+test('대상 AI의 최근 여러 턴을 오래된 순으로 모으되 다른 AI 기록은 제외한다', () => {
   const packet = context.packetFor([
     { author:'user', text:'첫 요청' }, { author:'codex', text:'첫 Codex 답변' },
     { author:'user', text:'Claude에게만 물어봄' }, { author:'claude', text:'Claude 답변' },
     { author:'user', text:'Codex 후속 요청' }, { author:'codex', text:'최신 Codex 답변' }
   ], 'codex');
+  // Codex 자신의 턴은 모두 남는다(직전 1턴이 아니라 최근 N턴).
+  assert.match(packet, /첫 요청/);
+  assert.match(packet, /첫 Codex 답변/);
   assert.match(packet, /Codex 후속 요청/);
   assert.match(packet, /최신 Codex 답변/);
-  assert.doesNotMatch(packet, /Claude 답변|첫 Codex 답변/);
+  // 다른 AI의 답변과, 다른 AI에게만 향한 요청은 들어오지 않는다.
+  assert.doesNotMatch(packet, /Claude 답변/);
+  assert.doesNotMatch(packet, /Claude에게만 물어봄/);
+  // 오래된 순: 첫 턴이 최신 턴보다 앞에 온다.
+  assert.ok(packet.indexOf('첫 Codex 답변') < packet.indexOf('최신 Codex 답변'));
+});
+
+test('maxTurns로 최근 N턴만 남긴다', () => {
+  const messages = [];
+  for (let turn = 1; turn <= 5; turn++) {
+    messages.push({ author:'user', text:`요청${turn}` });
+    messages.push({ author:'codex', text:`답변${turn}` });
+  }
+  const packet = context.packetFor(messages, 'codex', { maxTurns: 2 });
+  assert.match(packet, /답변5/);
+  assert.match(packet, /답변4/);
+  assert.doesNotMatch(packet, /답변3/);
+});
+
+test('턴이 하나뿐이면 헤더 없이 단일 쌍만 낸다', () => {
+  const packet = context.packetFor([{author:'user',text:'요청'},{author:'codex',text:'답변'}], 'codex');
+  assert.doesNotMatch(packet, /최근 .*턴 대화/);
+  assert.match(packet, /요청/);
+  assert.match(packet, /답변/);
 });
 
 test('다른 AI만 응답했거나 첫 요청이면 패킷이 비어 있다', () => {

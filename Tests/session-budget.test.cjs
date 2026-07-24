@@ -24,7 +24,7 @@ test('Codex는 cache 토큰을 중복 합산하지 않고 Claude는 논리 입�
 });
 
 test('정규화와 기록은 유효 범위 및 같은 요청의 usage 보강을 보장한다', () => {
-  assert.deepEqual(plain(budget.normalizePolicy({ sessionTurnLimit: 1, sessionTokenLimit: 900000 })), { sessionPolicy: 'auto', sessionTurnLimit: 6, sessionTokenLimit: 48000 });
+  assert.deepEqual(plain(budget.normalizePolicy({ sessionTurnLimit: 1, sessionTokenLimit: 900000 })), { sessionPolicy: 'auto', sessionTurnLimit: 50, sessionTokenLimit: 170000 });
   let stats = budget.recordUsage({}, 'claude', { input_tokens: 10, cache_read_input_tokens: 20, output_tokens: 3 });
   assert.equal(stats.claude.turns, 1);
   assert.equal(stats.claude.sessionInputTokens, 30);

@@ -257,6 +257,15 @@ test('최대 크기 contribution도 history 항목 상한 안에서 보존한다
   assert.equal(JSON.stringify(continued.history[0]).length <= boardApi.HISTORY_ITEM_LIMIT, true);
 });
 
+test('독립 실행 board는 reviewer가 없다(null); 협업 board만 reviewer를 지정한다', () => {
+  const independent = boardApi.createBoard({ runId: 'run-i', phase: 'independent', owner: 'claude' });
+  assert.equal(independent.reviewer, null);
+  const proposal = boardApi.createBoard({ runId: 'run-p', owner: 'claude' });
+  assert.equal(proposal.reviewer, 'codex');
+  const continued = boardApi.continueIndependentBoard(independent, { runId: 'run-i2', owner: 'claude' });
+  assert.equal(continued.reviewer, null);
+});
+
 test('각 AI는 자기 contribution만 cap 내에서 추가하고 일반 patch로는 수정할 수 없다', () => {
   let board = boardApi.createBoard({ runId: 'run-1', phase: 'independent', owner: 'codex' });
   board = boardApi.appendContribution(board, 'codex', { summary: 'Codex 결과', evidence: [{ path: 'a.js' }], updatedAt: 'one' });

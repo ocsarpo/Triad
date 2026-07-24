@@ -194,8 +194,10 @@
     if (input.reviewer !== undefined && input.reviewer !== null && input.reviewer !== '') {
       throw new TypeError('reviewer는 owner로부터 자동 결정됩니다.');
     }
-    const reviewer = owner === 'codex' ? 'claude' : 'codex';
     const phase = input.phase || 'proposal';
+    // Independent runs have no reviewer role — the other agent never reviews,
+    // so recording it as "reviewer" is misleading.  Only debate/review assign one.
+    const reviewer = phase === 'independent' ? null : (owner === 'codex' ? 'claude' : 'codex');
     if (!['proposal', 'review', 'resolve', 'complete', 'independent'].includes(phase)) throw new TypeError('허용되지 않는 phase입니다.');
     const verdict = input.verdict === undefined ? null : input.verdict;
     if (verdict !== null && !['agree', 'disagree', 'conditional'].includes(verdict)) throw new TypeError('verdict는 agree, disagree, conditional 또는 null이어야 합니다.');

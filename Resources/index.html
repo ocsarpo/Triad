@@ -808,7 +808,12 @@
       if(!pending?.isolated)state.sessionStats=window.TriadSessionBudget.recordUsage(state.sessionStats,agent,usage,{replaceLast:!!pending?.usageRecorded,sessionId:state.sessions[agent]||pending?.sessionId||null});
       if(pending)pending.usageRecorded=true;
       if(!pending?.isolated){save();renderSettings();}
-      addTrace(agent,'info','이번 요청 토큰 사용량',{logical_input_tokens:input,output_tokens:output,total_tokens:input+output,cache_included:agent==='claude',isolated:!!pending?.isolated});
+      // Cache visibility: 재개 턴이면 입력 대부분이 cache_read여야 함.
+      // 2턴차 이후에도 cache_hit_pct가 ~0이면 prefix 캐시가 안 걸린 것(=이득 0).
+      const cacheRead=Number(usage.cache_read_input_tokens||usage.cacheReadInputTokens||usage.cached_input_tokens||0)||0;
+      const cacheWrite=Number(usage.cache_creation_input_tokens||usage.cacheCreationInputTokens||0)||0;
+      const freshInput=Math.max(0,input-cacheRead-cacheWrite);
+      addTrace(agent,'info','이번 요청 토큰 사용량',{logical_input_tokens:input,fresh_input_tokens:freshInput,cache_read_tokens:cacheRead,cache_write_tokens:cacheWrite,cache_hit_pct:input?Math.round(cacheRead/input*100):0,output_tokens:output,total_tokens:input+output,cache_included:agent==='claude',isolated:!!pending?.isolated});
     }
 
     function detailText(value) {
@@ -1280,6 +1285,11 @@
       if(state.running[agent])return false;
       state.running[agent]=true;state.stopRequested[agent]=false;state.retryOnTermination[agent]=false;state.stderr[agent]='';state.lineBuffers[agent]='';
       const isolated=options.isolated===true;
+      // Collaboration turns are isolated (they never touch the chat session
+      // state.sessions).  An optional sessionStore lets same-agent turns within
+      // one collaboration flow resume — cached prefix, cheaper repeat turns —
+      // while staying fully isolated from the chat session.
+      const sessionStore=options.sessionStore||null;
       const sharedContext=options.sharedContext||state.orchestration?.sharedContext||null;
       const conversationId=options.conversationId||state.activeConversationId;
       // A queued request retains the agent settings it was submitted with,
@@ -1287,7 +1297,7 @@
       const config=clone(options.config||effectiveAgentConfig(agent));
       const agentConfigs=clone(options.agentConfigs||effectiveAgentConfigs());
       const collaboration=clone(options.collaboration||activeCollaboration());
-      let session=isolated?null:state.sessions[agent];
+      let session=isolated?(sessionStore?sessionStore[agent]||null:null):state.sessions[agent];
       let rotationReason='';
       if(!isolated&&config.sessionPolicy==='alwaysNew'){
         if(session){state.sessions[agent]=null;state.sessionStats=window.TriadSessionBudget.resetAgent(state.sessionStats,agent);rotationReason='정책: 항상 새 세션';}
@@ -1299,7 +1309,7 @@
       }
       if(rotationReason){addTrace(agent,'info','다음 작업 새 세션',rotationReason);save();}
       const runId=id();
-      const responseRecordId=sharedContext?.runId?window.TriadRunReference.recordIdFor({runId:sharedContext.runId},contextDocumentId(sharedContext)):null;state.pending[agent]={prompt,retried:false,isolated,sharedContext,usageRecorded:false,sessionId:session,runId,conversationId,config,agentConfigs,collaboration};state.responseIds[agent]=addMessage(agent,'',true,{recordId:responseRecordId,runId:sharedContext?.runId||null,documentId:contextDocumentId(sharedContext),replyAgent:agent});renderStatus();
+      const responseRecordId=sharedContext?.runId?window.TriadRunReference.recordIdFor({runId:sharedContext.runId},contextDocumentId(sharedContext)):null;state.pending[agent]={prompt,retried:false,isolated,sessionStore,sharedContext,usageRecorded:false,sessionId:session,runId,conversationId,config,agentConfigs,collaboration};state.responseIds[agent]=addMessage(agent,'',true,{recordId:responseRecordId,runId:sharedContext?.runId||null,documentId:contextDocumentId(sharedContext),replyAgent:agent});renderStatus();
       addTrace(agent,'info','명령 전달',{model:config.model,effort:config.effort,speed:config.speedMode,workspace:config.workspacePath,writableRoots:config.writableRoots||'',networkAccess:!!config.networkAccess,allowLocalBinding:!!config.allowLocalBinding,session:session?'resume':'new',isolated,mode:state.orchestration?.mode||'independent'});
       post({action:'run',agent,conversationId,slotId:`${conversationId}:${agent}`,prompt,config,agentConfigs,collaboration,mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,sharedContext),sharedContext,session,runId});return true;
     }
@@ -1479,7 +1489,10 @@
     function buildCollaborationPrompt(task) {
       const flow=state.orchestration;const board=boardFor(flow);const packet=boardPacket(task,flow);
       const role=task.agent===board?.owner?'owner/proposer':'reviewer';
-      const references=flow.referencePacket?.length?`\n\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(flow.referencePacket)}`:'';
+      // opt2: 재개 세션이면 무거운 reference packet은 이미 첫 턴 히스토리에 있으므로
+      // 생략(의제는 항상 유지 — 재개가 서버측에서 조용히 실패해도 에이전트가 의제를 잃지 않음).
+      const resuming=!!flow.sessions?.[task.agent];
+      const references=(!resuming&&flow.referencePacket?.length)?`\n\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(flow.referencePacket)}`:'';
       // 안정 prefix(의제·참고·역할·정책은 한 실행 안에서 에이전트 턴마다 바뀌지 않음)를
       // 먼저 두고, 매 턴 revision이 바뀌는 보드 단계·스냅샷은 맨 뒤로 — prompt prefix
       // 캐시가 volatile 델타에 깨지지 않도록.
@@ -1497,7 +1510,9 @@
     function buildAgentPrompt(task) {
       const flow=state.orchestration;
       const packet=boardPacket(task,flow);const board=boardFor(flow);
-      const references=flow.referencePacket?.length?`\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(flow.referencePacket)}\n`:'';
+      // opt2: 재개 세션이면 reference packet 생략(의제·역할은 유지).
+      const resuming=!!flow.sessions?.[task.agent];
+      const references=(!resuming&&flow.referencePacket?.length)?`\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(flow.referencePacket)}\n`:'';
       // 안정 prefix(작업·참고·역할·정책) 먼저, volatile 보드 스냅샷은 뒤로.
       const context=`사용자의 원래 작업:\n${flow.objective}${references}\n당신의 역할: ${task.agent===board?.owner?'owner/proposer':'reviewer'}\n\n전체 채팅 기록은 제공되지 않습니다. 필요한 프로젝트 파일만 직접 읽고, 확인한 근거는 공유 보드에 짧게 기록하세요.\n\n공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(packet)}\n\n`;
       if(task.kind==='agent_answer'){
@@ -1520,12 +1535,25 @@
       const related=recentContext?`\n\n직전 관련 맥락(대명사·수정 지시를 현재 요청과 연결할 때만 사용하고, 프로젝트의 현재 상태는 직접 확인하세요):\n${recentContext}`:'';const references=referencePacket.length?`\n\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(referencePacket)}`:'';
       return `${prompt}${related}${references}\n\nTriad 독립 실행 공유 문서 manifest:\n${JSON.stringify(manifest)}\n\n위 제한된 직전 맥락 외 전체 transcript나 상대 AI의 원문 답변은 요청하거나 읽지 마세요. 과거 맥락이 꼭 필요할 때만 shared_context_read로 history 또는 contributions를 선택해 읽고, 그 외에는 필요한 공유 보드 섹션과 프로젝트 파일만 읽으세요. 작업을 마친 뒤 submit_contribution 도구로 runId: ${sharedContext?.runId||''}에 자신의 요약과 근거를 반드시 기록하세요. 이 실행에서는 상대 AI 호출을 하지 마세요.`;
     }
+    const COLLAB_SESSION_TURN_CAP=8;
+    function collabSessionStore(flow, agent) {
+      // Flow sessions live outside the chat session's rotation/budget guard, so
+      // cap resumes per agent within a flow.  Past the cap we drop the session
+      // (the next turn starts fresh and re-primes full context via resuming=false),
+      // bounding accumulation on long debates.  Returns flow.sessions so dispatch
+      // resumes from — and capture writes back to — the same isolated store.
+      if(!flow.sessions)flow.sessions={codex:null,claude:null};
+      if(!flow.sessionTurns)flow.sessionTurns={codex:0,claude:0};
+      if((flow.sessionTurns[agent]||0)>=COLLAB_SESSION_TURN_CAP){flow.sessions[agent]=null;flow.sessionTurns[agent]=0;}
+      flow.sessionTurns[agent]=(flow.sessionTurns[agent]||0)+1;
+      return flow.sessions;
+    }
     function runAgentTurn(task) {
       const flow=state.orchestration;if(!flow||flow.cancelled)return;
       if(flow.conversationId&&flow.conversationId!==state.activeConversationId)return withConversation(flow.conversationId,()=>runAgentTurn(task));
       flow.current=task;task.label=task.kind==='agent_answer'?`${names[task.requester]} 질문 응답`:task.received?'답변 반영 후 작업 재개':'작업 시작';
       addTrace(task.agent,'info',task.label,{handoffs:flow.handoffs,maxHandoffs:flow.maxHandoffs,from:task.from||task.requester||null});
-      dispatchAgent(task.agent,buildAgentPrompt(task),{isolated:true,conversationId:flow.conversationId,config:flow.settings?.[task.agent],agentConfigs:flow.settings,collaboration:flow.collaboration});renderCollaboration();
+      const store=collabSessionStore(flow,task.agent);dispatchAgent(task.agent,buildAgentPrompt(task),{isolated:true,sessionStore:store,conversationId:flow.conversationId,config:flow.settings?.[task.agent],agentConfigs:flow.settings,collaboration:flow.collaboration});renderCollaboration();
     }
     function finishAgentCollaboration(flow, agent, message='에이전트 협업이 완료되었습니다.') {
       if(flow?.conversationId&&flow.conversationId!==state.activeConversationId)return withConversation(flow.conversationId,()=>finishAgentCollaboration(flow,agent,message));
@@ -1545,18 +1573,18 @@
       flow.current=task;
       const labels={proposal:'제안 작성',verdict:'좁은 검토',resolve:'이견 해결',decision:'최종 결정'};
       task.label=labels[task.kind];addTrace(task.agent,'info',`${task.label} 시작`,{turn:flow.index,total:flow.tasks.length});
-      dispatchAgent(task.agent,buildCollaborationPrompt(task),{isolated:true,conversationId:flow.conversationId,config:flow.settings?.[task.agent],agentConfigs:flow.settings,collaboration:flow.collaboration});renderCollaboration();
+      const store=collabSessionStore(flow,task.agent);dispatchAgent(task.agent,buildCollaborationPrompt(task),{isolated:true,sessionStore:store,conversationId:flow.conversationId,config:flow.settings?.[task.agent],agentConfigs:flow.settings,collaboration:flow.collaboration});renderCollaboration();
     }
     function startCollaboration(objective, runCollaboration=state.collaboration, conversationId=state.activeConversationId, settings=effectiveAgentConfigs(), referencePacket=[]) {
       const collaboration=normalizeCollaboration(runCollaboration);
       const sharedContext=createSharedContext(objective,collaboration.lead);
       if(collaboration.mode==='agent'){
-        state.orchestration={mode:'agent',objective,tasks:[],index:0,current:null,cancelled:false,lastAgent:null,handoffs:0,mcpCalls:0,maxHandoffs:collaboration.rounds,sharedContext,collaboration,conversationId,settings:clone(settings),referencePacket:clone(referencePacket)};
+        state.orchestration={mode:'agent',objective,tasks:[],index:0,current:null,cancelled:false,lastAgent:null,handoffs:0,mcpCalls:0,maxHandoffs:collaboration.rounds,sessions:{codex:null,claude:null},sessionTurns:{codex:0,claude:0},sharedContext,collaboration,conversationId,settings:clone(settings),referencePacket:clone(referencePacket)};
         addTrace(collaboration.lead,'info','에이전트 협업 시작',{lead:names[collaboration.lead],maxHandoffs:collaboration.rounds});
         addMessage('system',`${names[collaboration.lead]}가 작업을 시작합니다. 필요한 경우 상대 AI에게 질문하고 답을 받아 계속 진행합니다.`);
         runAgentTurn({agent:collaboration.lead,kind:'agent_work'});return;
       }
-      const tasks=collaborationTasks(collaboration);state.orchestration={mode:collaboration.mode,objective,tasks,index:0,current:null,cancelled:false,lastAgent:null,sharedContext,collaboration,conversationId,settings:clone(settings),referencePacket:clone(referencePacket)};
+      const tasks=collaborationTasks(collaboration);state.orchestration={mode:collaboration.mode,objective,tasks,index:0,current:null,cancelled:false,lastAgent:null,sessions:{codex:null,claude:null},sessionTurns:{codex:0,claude:0},sharedContext,collaboration,conversationId,settings:clone(settings),referencePacket:clone(referencePacket)};
       addTrace(collaboration.lead,'info',collaboration.mode==='debate'?'상호 토론 시작':'교차 검토 시작',{rounds:collaboration.rounds,lead:names[collaboration.lead],finalizer:collaboration.finalizer});
       runNextCollaborationTurn();
     }
@@ -1639,7 +1667,7 @@
       try { data=JSON.parse(line); } catch { addTrace(agent,'info','비정형 출력',line); return; }
       traceProviderEvent(agent,data,line);
       if (agent==='codex') {
-        if (data.type==='thread.started' && data.thread_id && !state.pending.codex?.isolated) { state.sessions.codex=data.thread_id; const stats=ensureAgentSessionStats('codex');if(stats)stats.sessionId=data.thread_id; if(state.pending.codex)state.pending.codex.sessionId=data.thread_id; save(); renderSettings(); }
+        if (data.type==='thread.started' && data.thread_id) { const p=state.pending.codex; if(p?.isolated){ if(p.sessionStore)p.sessionStore.codex=data.thread_id; p.sessionId=data.thread_id; } else { state.sessions.codex=data.thread_id; const stats=ensureAgentSessionStats('codex');if(stats)stats.sessionId=data.thread_id; if(p)p.sessionId=data.thread_id; save(); renderSettings(); } }
         if (data.type==='item.completed' && data.item?.type==='agent_message' && data.item.text) appendAgentText(agent,data.item.text);
         if (data.type==='error') {
           // A stopped NSTask can emit its final provider error before the
@@ -1650,8 +1678,10 @@
         }
       } else {
         const delta=data.type==='stream_event' && data.event?.type==='content_block_delta' && data.event?.delta?.type==='text_delta' ? data.event.delta.text : null;
-        if (data.session_id && !state.pending.claude?.isolated && (delta || data.type==='assistant' || (data.type==='result'&&!data.is_error))) {
-          state.sessions.claude=data.session_id; const stats=ensureAgentSessionStats('claude');if(stats)stats.sessionId=data.session_id; if(state.pending.claude)state.pending.claude.sessionId=data.session_id; save(); renderSettings();
+        if (data.session_id && (delta || data.type==='assistant' || (data.type==='result'&&!data.is_error))) {
+          const p=state.pending.claude;
+          if(p?.isolated){ if(p.sessionStore)p.sessionStore.claude=data.session_id; p.sessionId=data.session_id; }
+          else { state.sessions.claude=data.session_id; const stats=ensureAgentSessionStats('claude');if(stats)stats.sessionId=data.session_id; if(p)p.sessionId=data.session_id; save(); renderSettings(); }
         }
         if (delta) appendAgentText(agent,delta);
         if (data.type==='result' && !currentText(agent) && data.result) appendAgentText(agent,data.result);
@@ -1899,7 +1929,7 @@
         else if(state.retryOnTermination[event.agent]) retryAgent(event.agent); else finishAgent(event.agent,event.exitCode);
       }
       else if (event.type==='error') {if(event.runId&&state.pending[event.agent]?.runId!==event.runId)return;failAgent(event.agent,event.message,{source:'native',terminal:true});}
-      else if (event.type==='session') { withPendingConversation(event.agent,()=>{if(!state.pending[event.agent]?.isolated&&agents.includes(event.agent)){state.sessions[event.agent]=event.session;const stats=ensureAgentSessionStats(event.agent);if(stats)stats.sessionId=event.session;if(state.pending[event.agent])state.pending[event.agent].sessionId=event.session; save(); renderSettings();}}); }
+      else if (event.type==='session') { withPendingConversation(event.agent,()=>{if(!agents.includes(event.agent))return;const p=state.pending[event.agent];if(p?.isolated){if(p.sessionStore)p.sessionStore[event.agent]=event.session;p.sessionId=event.session;}else if(!p?.isolated){state.sessions[event.agent]=event.session;const stats=ensureAgentSessionStats(event.agent);if(stats)stats.sessionId=event.session;if(p)p.sessionId=event.session; save(); renderSettings();}}); }
       else if (event.type==='directory') { if(event.agent==='common'){state.workspace.commonPath=event.path;}else if(state.settings[event.agent])state.settings[event.agent].workspacePath=event.path;save();renderSettings();renderStatus();refreshBranches();refreshProjectFiles(); }
       else if (event.type==='files') {
         const draft=document.getElementById('draft');

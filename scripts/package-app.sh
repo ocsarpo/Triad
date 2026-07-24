@@ -36,5 +36,23 @@ chmod +x "$app/Contents/MacOS/Triad"
 
 touch "$app"
 
-codesign --force --deep --sign - "$app"
+# A stable signing identity keeps macOS TCC grants (folder / "other app data"
+# access) attached across rebuilds and updates.  Ad-hoc signatures get a new
+# cdhash every build, so macOS treats each build as a new app and re-prompts.
+# Set TRIAD_SIGN_IDENTITY to a code-signing identity in your keychain
+# (see scripts/create-signing-cert.sh) to opt in; otherwise we fall back to
+# ad-hoc signing with a warning.
+identity="${TRIAD_SIGN_IDENTITY:-}"
+if [[ -n "$identity" ]] && security find-identity -p codesigning 2>/dev/null | grep -qF "$identity"; then
+  echo "codesign: stable identity '$identity'"
+  codesign --force --deep --sign "$identity" "$app"
+else
+  if [[ -n "$identity" ]]; then
+    echo "codesign: identity '$identity' not found in keychain — falling back to ad-hoc." >&2
+  else
+    echo "codesign: TRIAD_SIGN_IDENTITY unset — ad-hoc signing (TCC permissions reset each build)." >&2
+    echo "          Run scripts/create-signing-cert.sh once for a stable identity." >&2
+  fi
+  codesign --force --deep --sign - "$app"
+fi
 echo "$app"

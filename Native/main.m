@@ -5,8 +5,77 @@
 #import <CoreServices/CoreServices.h>
 #import <sqlite3.h>
 #import <math.h>
+#import <signal.h>
+#import <string.h>
+#import <unistd.h>
+#import <stdlib.h>
 
 static NSString *const kKeychainService = @"kr.co.ocsarpo.triadroom";
+
+// ----- Crash-safe child process reaping -------------------------------------
+// The agent CLIs, their stdio-connected MCP broker subprocesses, and the tail
+// followers are all NSTask children.  On a normal quit -applicationWillTerminate
+// stops them, but an uncaught exception or fatal signal skips that path and the
+// children are reparented to launchd — the leaked `tail -F` processes seen in
+// the wild.  We keep a plain C registry of their pids so an async-signal-safe
+// handler can kill them (and their process groups) before the app dies.
+#define kTriadMaxChildren 256
+static volatile pid_t gTriadChildPids[kTriadMaxChildren];
+static volatile sig_atomic_t gTriadHandlersInstalled = 0;
+
+static void TriadRegisterChildPid(pid_t pid) {
+    if (pid <= 1) return;
+    for (int i = 0; i < kTriadMaxChildren; i++) {
+        if (gTriadChildPids[i] == 0) { gTriadChildPids[i] = pid; return; }
+    }
+}
+
+static void TriadUnregisterChildPid(pid_t pid) {
+    if (pid <= 1) return;
+    for (int i = 0; i < kTriadMaxChildren; i++) {
+        if (gTriadChildPids[i] == pid) { gTriadChildPids[i] = 0; return; }
+    }
+}
+
+// Uses only kill()/killpg(), so it stays safe to call from a signal handler.
+// pid > 1 guards against kill(0, ...) accidentally signalling our own group.
+static void TriadKillAllChildren(int sig) {
+    for (int i = 0; i < kTriadMaxChildren; i++) {
+        pid_t pid = gTriadChildPids[i];
+        if (pid > 1) {
+            killpg(pid, sig);  // grandchildren, when the child leads its own group
+            kill(pid, sig);    // the direct child, regardless of group leadership
+        }
+    }
+}
+
+static void TriadAtExitReap(void) {
+    TriadKillAllChildren(SIGTERM);
+}
+
+static void TriadFatalSignalHandler(int sig) {
+    TriadKillAllChildren(SIGKILL);
+    signal(sig, SIG_DFL);
+    raise(sig);   // let the default handler run so crash reporting still fires
+}
+
+// Installed once at launch.  Only the fatal/crash signals that bypass
+// -applicationWillTerminate are hooked; normal Cmd-Q termination keeps its
+// existing AppKit path.
+static void TriadInstallChildReaper(void) {
+    if (gTriadHandlersInstalled) return;
+    gTriadHandlersInstalled = 1;
+    atexit(TriadAtExitReap);
+    int signals[] = { SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP };
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = TriadFatalSignalHandler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_RESETHAND;
+    for (unsigned i = 0; i < sizeof(signals) / sizeof(signals[0]); i++) {
+        sigaction(signals[i], &action, NULL);
+    }
+}
 
 // WKWebView maps JavaScript null to NSNull.  Never send keyed subscripts to
 // untrusted nested request values without narrowing them first.
@@ -95,6 +164,7 @@ static NSString *const TriadEmptyTreeObject = @"4b825dc642cb6eb9a060e54bf8d69288
 @implementation AppDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    TriadInstallChildReaper();
     self.tasks = [NSMutableDictionary dictionary];
     self.taskMetadata = [NSMutableDictionary dictionary];
     self.authTasks = [NSMutableDictionary dictionary];
@@ -216,6 +286,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
         if (task.isRunning) [task terminate];
     }
     if (self.usageTask.isRunning) [self.usageTask terminate];
+    TriadKillAllChildren(SIGTERM);   // sweep any process-group descendants (e.g. the CLI's MCP broker)
     if (self.database) sqlite3_close(self.database);
 }
 
@@ -1044,8 +1115,12 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
         }
     };
     NSError *error = nil;
-    if ([tail launchAndReturnError:&error]) self.brokerEventTasks[slotId] = tail;
-    else {
+    if ([tail launchAndReturnError:&error]) {
+        pid_t pid = tail.processIdentifier;
+        setpgid(pid, pid);   // best-effort: contain any descendants in the child's group
+        TriadRegisterChildPid(pid);
+        self.brokerEventTasks[slotId] = tail;
+    } else {
         NSMutableDictionary *warning = [metadata mutableCopy];warning[@"type"] = @"brokerWarning";warning[@"message"] = error.localizedDescription ?: @"AI 호출 이벤트 감시를 시작하지 못했습니다.";
         [self emit:warning];
     }
@@ -1054,7 +1129,12 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
 - (void)cleanupBrokerForSlotId:(NSString *)slotId expectedArtifacts:(NSDictionary *)expectedArtifacts {
     NSDictionary *artifacts = self.brokerArtifacts[slotId];
     if (!artifacts || (expectedArtifacts && artifacts != expectedArtifacts)) return;
-    NSTask *tail = self.brokerEventTasks[slotId];if (tail.isRunning) [tail terminate];
+    NSTask *tail = self.brokerEventTasks[slotId];
+    if (tail) {
+        pid_t pid = tail.processIdentifier;
+        if (tail.isRunning) [tail terminate];
+        TriadUnregisterChildPid(pid);
+    }
     [self.brokerEventTasks removeObjectForKey:slotId];
     [self.brokerArtifacts removeObjectForKey:slotId];
     for (NSString *key in @[@"configPath", @"statePath", @"eventsPath"]) {
@@ -1257,10 +1337,12 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
         if (chunk) { NSMutableDictionary *event = [metadata mutableCopy];event[@"type"] = @"stderr";event[@"chunk"] = chunk;[weakSelf emit:event]; }
     };
 
+    __block pid_t agentPid = 0;
     task.terminationHandler = ^(NSTask *finished) {
         stdoutPipe.fileHandleForReading.readabilityHandler = nil;
         stderrPipe.fileHandleForReading.readabilityHandler = nil;
         dispatch_async(dispatch_get_main_queue(), ^{
+            TriadUnregisterChildPid(agentPid);
             if (weakSelf.tasks[slotId] == finished) {
                 [weakSelf.tasks removeObjectForKey:slotId];
                 [weakSelf.taskMetadata removeObjectForKey:slotId];
@@ -1281,6 +1363,9 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     }
     self.tasks[slotId] = task;
     self.taskMetadata[slotId] = metadata;
+    agentPid = task.processIdentifier;
+    setpgid(agentPid, agentPid);   // best-effort: pull the CLI's MCP broker into its group
+    TriadRegisterChildPid(agentPid);
     NSData *promptData = [prompt dataUsingEncoding:NSUTF8StringEncoding];
     [stdinPipe.fileHandleForWriting writeData:promptData];
     [stdinPipe.fileHandleForWriting closeFile];

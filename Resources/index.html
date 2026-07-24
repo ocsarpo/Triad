@@ -800,7 +800,7 @@
     function startUsagePolling(){
       clearInterval(state.usageTimer);refreshUsage(true);state.usageTimer=setInterval(()=>refreshUsage(),5*60*1000);
     }
-    function recordTurnUsage(agent,usage){
+    function recordTurnUsage(agent,usage,options={}){
       if(!usage)return;
       const pending=state.pending[agent];
       const input=window.TriadSessionBudget.logicalInputTokens(agent,usage);const output=window.TriadSessionBudget.outputTokens(usage);
@@ -808,6 +808,12 @@
       if(!pending?.isolated)state.sessionStats=window.TriadSessionBudget.recordUsage(state.sessionStats,agent,usage,{replaceLast:!!pending?.usageRecorded,sessionId:state.sessions[agent]||pending?.sessionId||null});
       if(pending)pending.usageRecorded=true;
       if(!pending?.isolated){save();renderSettings();}
+      // Trace the usage once per CLI invocation, on the final result/turn event.
+      // claude emits an `assistant` event (each carrying the running usage) for
+      // every tool-call round, so tracing on those would log the same request
+      // 2-4x and inflate the copied token/cache summary.  options.trace is set
+      // only by the terminal result/turn.completed handlers.
+      if(!options.trace)return;
       // Cache visibility: 재개 턴이면 입력 대부분이 cache_read여야 함.
       // 2턴차 이후에도 cache_hit_pct가 ~0이면 prefix 캐시가 안 걸린 것(=이득 0).
       const cacheRead=Number(usage.cache_read_input_tokens||usage.cacheReadInputTokens||usage.cached_input_tokens||0)||0;
@@ -1085,7 +1091,7 @@
           else if(item.type==='command_execution') addTrace(agent,item.exit_code===0?'success':'error',`명령 종료${item.exit_code!=null?` · code ${item.exit_code}`:''}`,item);
           else if(item.type==='mcp_tool_call') addTrace(agent,item.status==='failed'?'error':'success',`도구 완료 · ${item.tool||item.name||''}`.trim(),item);
           else addTrace(agent,'success',`단계 완료 · ${item.type||'event'}`,item);
-        } else if(data.type==='turn.completed') {addTrace(agent,'success','작업 완료',data.usage||data);recordTurnUsage(agent,data.usage);}
+        } else if(data.type==='turn.completed') {addTrace(agent,'success','작업 완료',data.usage||data);recordTurnUsage(agent,data.usage,{trace:true});}
         else if(data.type==='error') addTrace(agent,'error','Codex 오류',data.error?.message||data.message||rawLine);
       } else {
         if(data.type==='system'&&data.subtype==='init') addTrace(agent,'info',`세션 시작 · ${data.model||'Claude'}`,{session_id:data.session_id,permissionMode:data.permissionMode,mcp_servers:data.mcp_servers});
@@ -1098,7 +1104,7 @@
           else if(event.type==='content_block_start'&&event.content_block?.type==='thinking') addTrace(agent,'info','추론 단계 시작 · 내용 비공개');
           else if(event.type==='message_stop') addTrace(agent,'success','응답 스트림 완료');
         } else if(data.type==='assistant') {addTrace(agent,'success','응답 메시지 완료',data.message?.usage||'');recordTurnUsage(agent,data.message?.usage);}
-        else if(data.type==='result') {recordTurnUsage(agent,data.usage);addTrace(agent,data.is_error?'error':'success',data.is_error?'Claude 실행 오류':'작업 완료',data.is_error?(data.errors||data):{duration_ms:data.duration_ms,usage:data.usage,modelUsage:data.modelUsage});}
+        else if(data.type==='result') {recordTurnUsage(agent,data.usage,{trace:!data.is_error});addTrace(agent,data.is_error?'error':'success',data.is_error?'Claude 실행 오류':'작업 완료',data.is_error?(data.errors||data):{duration_ms:data.duration_ms,usage:data.usage,modelUsage:data.modelUsage});}
       }
     }
 

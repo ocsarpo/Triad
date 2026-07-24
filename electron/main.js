@@ -25,6 +25,8 @@ const sharedDocs = require('./lib/shared-documents-store');
 const gitOps = require('./lib/git-ops');
 const auth = require('./lib/auth');
 const usage = require('./lib/usage');
+const broker = require('./lib/broker');
+const models = require('./lib/models');
 
 let win = null;
 const running = new Map(); // slotId -> child process
@@ -95,15 +97,17 @@ function setupMenu() {
 
 // Boot handshake consumed at index.html:1908 (event.type==='boot').
 function emitBoot() {
+  const codexPath = platform.resolveExecutable('codex');
+  const claudePath = platform.resolveExecutable('claude');
   emit({
     type: 'boot',
     appVersion: appInfo.readAppVersion(),
-    codexModels: [],
-    claudeModels: [],
+    codexModels: models.codexCatalog(),
+    claudeModels: models.claudeCatalog(claudePath),
     conversations: conversationStore.loadConversations(),
     home: os.homedir(),
-    codexPath: platform.resolveExecutable('codex'),
-    claudePath: platform.resolveExecutable('claude'),
+    codexPath,
+    claudePath,
     tokenStatus: tokenStore.status(),
   });
   console.log('[triad-electron] boot emitted');
@@ -177,6 +181,12 @@ function runAgent(request) {
   const writableRoots = writableRootsFromConfig(config);
   const writableRootsConfig = writableRootsCodexConfig(config);
 
+  // MCP broker: provides the shared-context / submit_contribution / ask_agent
+  // tools.  Set up only when the renderer requests it (mcpEnabled) — otherwise
+  // the prompt's tool instructions would reference tools that don't exist.
+  const brokerInfo = broker.setup(agent, slotId, metadata, request, emit);
+  const brokerArgs = brokerInfo ? broker.args(brokerInfo, agent) : null;
+
   const args = [];
   if (agent === 'codex') {
     args.push('exec');
@@ -198,7 +208,10 @@ function runAgent(request) {
     }
     if (speed === 'fast') args.push('--enable', 'fast_mode', '--config', 'service_tier="fast"');
     else args.push('--disable', 'fast_mode');
-    // TODO(phase2): MCP broker → --config mcp_servers.triad.command / mcp_servers.triad.args
+    if (brokerInfo) {
+      args.push('--config', 'mcp_servers.triad.command=' + JSON.stringify(brokerInfo.nodePath));
+      args.push('--config', 'mcp_servers.triad.args=' + JSON.stringify(brokerArgs));
+    }
     args.push('-');
   } else {
     const claudeSettings = { fastMode: speed === 'fast' };
@@ -214,7 +227,9 @@ function runAgent(request) {
       '--settings', JSON.stringify(claudeSettings));
     if (permission === 'bypassPermissions') args.push('--allow-dangerously-skip-permissions');
     if (writableRoots.length) { args.push('--add-dir'); args.push(...writableRoots); }
-    // TODO(phase2): MCP broker → --mcp-config
+    if (brokerInfo) {
+      args.push('--mcp-config', JSON.stringify({ mcpServers: { triad: { command: brokerInfo.nodePath, args: brokerArgs } } }));
+    }
     if (session && session.length) args.push('--resume', session);
     else args.push('--session-id', crypto.randomUUID().toLowerCase());
   }
@@ -231,6 +246,7 @@ function runAgent(request) {
     if (util.stringOrNil(agentConfig.authMode) !== 'apiKey') continue;
     const token = tokenStore.getToken(configuredAgent);
     if ((!token || !token.length) && configuredAgent === agent) {
+      broker.cleanup(slotId, brokerInfo);
       emit(meta({ type: 'error', message: '키체인에 저장된 API 키가 없습니다.' }));
       return;
     }
@@ -244,6 +260,7 @@ function runAgent(request) {
     // group we can signal as a unit — mirrors main.m:1367 setpgid intent.
     child = spawn(executable, args, { cwd: workspace, env, detached: true });
   } catch (error) {
+    broker.cleanup(slotId, brokerInfo);
     emit(meta({ type: 'error', message: (error && error.message) || '실행 실패' }));
     return;
   }
@@ -255,6 +272,7 @@ function runAgent(request) {
   child.on('close', (code) => {
     running.delete(slotId);
     emit(meta({ type: 'terminated', exitCode: code == null ? -1 : code }));
+    setTimeout(() => broker.cleanup(slotId, brokerInfo), 300);
   });
 
   try { child.stdin.write(prompt); child.stdin.end(); } catch { /* stdin may already be closed */ }
@@ -328,6 +346,24 @@ function deleteSharedDocumentAction(payload) {
   emit({ type: 'sharedDocuments', documents: sharedDocs.listDocuments() });
 }
 
+// Ports main.m:371-384 checkForUpdates — compare the latest GitHub release tag
+// against this build; the renderer shows a banner when it's newer.
+function checkUpdate() {
+  const current = appInfo.readAppVersion();
+  fetch('https://api.github.com/repos/ocsarpo/Triad/releases/latest', {
+    headers: { 'User-Agent': 'Triad-electron-update-check' },
+  })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((release) => {
+      if (!release) return;
+      const latest = typeof release.tag_name === 'string' ? release.tag_name : '';
+      const url = typeof release.html_url === 'string' ? release.html_url : '';
+      if (!latest || !url) return;
+      emit({ type: 'updateCheck', latest, current, url });
+    })
+    .catch(() => {});
+}
+
 function dispatch(payload) {
   if (!payload || typeof payload !== 'object') return;
   switch (payload.action) {
@@ -350,7 +386,7 @@ function dispatch(payload) {
     case 'projectDiff': return void gitOps.loadProjectDiff(payload.workspace, payload.agent, payload.conversationId, emit);
     case 'refreshUsage': return usage.refreshCodex(payload.config, emit);
     case 'authAccount': return auth.run(payload.operation, payload.agent, payload.config, emit);
-    case 'checkUpdate': return emit({ type: 'updateCheck', current: appInfo.readAppVersion(), latest: appInfo.readAppVersion(), url: '' });
+    case 'checkUpdate': return checkUpdate();
     default: return;
   }
 }

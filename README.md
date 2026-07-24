@@ -110,3 +110,30 @@ zsh scripts/package-app.sh
 ```
 
 앱 본체는 AppKit과 WebKit 시스템 프레임워크를 사용합니다. 에이전트 협업의 로컬 MCP 브로커는 Node.js를 사용하며, 앱이 일반적인 Homebrew·Volta·로컬 설치 경로에서 실행 파일을 자동 탐색합니다.
+
+## Electron 껍데기 (실험적 · 크로스플랫폼)
+
+`electron/`에는 같은 웹 UI(`Resources/`)를 **그대로 재사용**하는 Electron 껍데기가 있습니다. 네이티브 macOS 껍데기(`Native/main.m`)의 OS 통합 역할만 Node로 재구현해 **Windows에서도 구동**하는 것이 목표이며, 현재는 macOS 프로토타입 단계입니다. Windows 타깃은 이후 Windows 머신에서 빌드하며, OS 전용 로직은 전부 `electron/platform.js` 한 곳에 격리되어 있습니다(win32 브랜치는 TODO). 브리지 계약은 네이티브와 동일합니다 — UI는 `window.webkit.messageHandlers.triad.postMessage`로 보내고, 껍데기는 `window.nativeEvent(...)`로 되돌립니다.
+
+**개발 실행** (반드시 `electron/`에서 실행 — 저장소 루트엔 `package.json`이 없어 `npm`이 상위 폴더의 다른 프로젝트로 올라갑니다)
+
+```bash
+cd electron
+npm install        # electron 등 devDependencies 설치
+npm start          # 개발 모드로 앱 실행
+```
+
+**더블클릭 앱(.app) 패키징**
+
+```bash
+cd electron
+npm install --save-dev @electron/packager
+npx @electron/packager . Triad --platform=darwin --arch=arm64 \
+  --out=dist --overwrite --extra-resource=../Resources \
+  --icon=../Resources/Triad.icns
+# → electron/dist/Triad-darwin-arm64/Triad.app  (원하는 위치나 /Applications으로 복사해 사용)
+```
+
+`--extra-resource=../Resources`로 웹 UI를 번들에 포함하며, 실행 파일 탐색·PATH·git 경로 등 OS 의존 부분은 `platform.js`가 dev/패키지 양쪽에서 해결합니다.
+
+**현재 범위(프로토타입)**: 브리지·부팅·단독 단일 에이전트 실행·중지·클립보드·파일 다이얼로그·링크 열기·API 키 저장(`safeStorage`)·대화/공유문서 저장(`userData` JSON)·git 상태/diff가 동작합니다. **미구현(예정)**: 에이전트 협업의 MCP 브로커(→ 현재 교차검토·상호 토론은 아직 미동작), 사용량·CLI 계정 로그인·업데이트 확인은 형태만 맞춘 스텁, `electron-builder` 정식 패키징(`.dmg`·서명), Windows 타깃.

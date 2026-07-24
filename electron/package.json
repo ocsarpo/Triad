@@ -1,0 +1,14 @@
+{
+  "name": "triad-electron",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron shell prototype for Triad (macOS-first, Windows port later).",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.0.4",
+    "electron": "^43.2.0"
+  }
+}

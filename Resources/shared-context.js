@@ -8,6 +8,10 @@
   const OWNER_SECTIONS = new Set(['constraints', 'proposal', 'evidence', 'decision']);
   const REVIEWER_SECTIONS = new Set(['verdict', 'disputes']);
   const TEXT_LIMIT = 8000;
+  // The objective is the user's own task text (their message), so it gets a far
+  // larger ceiling than agent-written board sections — 8000 was rejecting long
+  // pasted tasks ("objective은(는) 8000자를 넘을 수 없습니다").
+  const OBJECTIVE_LIMIT = 100000;
   const LIST_LIMIT = 10;
   const ITEM_LIMIT = 1000;
   const EVIDENCE_LIMIT = 20;
@@ -66,8 +70,9 @@
     return typeof value === 'string' && value ? value : new Date().toISOString();
   }
 
+  // Only used for the objective, so it carries the larger OBJECTIVE_LIMIT.
   function initialText(value, name) {
-    return value === undefined || value === null ? '' : requireString(value, name, TEXT_LIMIT);
+    return value === undefined || value === null ? '' : requireString(value, name, OBJECTIVE_LIMIT);
   }
 
   function documentIdFor(board) {
@@ -468,6 +473,7 @@
     AGENTS: [...AGENTS],
     SECTIONS: [...SECTIONS],
     TEXT_LIMIT,
+    OBJECTIVE_LIMIT,
     LIST_LIMIT,
     ITEM_LIMIT,
     EVIDENCE_LIMIT,

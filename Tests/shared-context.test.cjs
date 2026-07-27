@@ -316,6 +316,14 @@ test('문자열 섹션과 비-JSON 문자열은 coercion 대상이 아니다', (
   assert.throws(() => boardApi.applyPatch(board, { expectedRevision: 0, actor: 'codex', changes: { constraints: '그냥 문자열' } }), /배열/);
 });
 
+test('objective(사용자 메시지)는 8000자를 넘어도 허용한다(OBJECTIVE_LIMIT)', () => {
+  const long = '가'.repeat(20000);
+  const board = boardApi.createBoard({ owner: 'codex', objective: long });
+  assert.equal(board.objective, long);
+  // 하지만 에이전트가 쓰는 proposal은 여전히 TEXT_LIMIT로 제한된다
+  assert.throws(() => boardApi.applyPatch(board, { expectedRevision: 0, actor: 'codex', changes: { proposal: 'x'.repeat(boardApi.TEXT_LIMIT + 1) } }), /8000/);
+});
+
 test('문자열 섹션(proposal)에 구조화된 객체가 오면 JSON 문자열로 수용한다', () => {
   const board = boardApi.createBoard({ owner: 'codex', objective: 'o' });
   const structured = { position: '이넘', rationale: ['enumeration 축약'] };

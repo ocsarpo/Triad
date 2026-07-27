@@ -1,6 +1,6 @@
 {
   "name": "triad-electron",
-  "version": "0.48.10",
+  "version": "0.48.11",
   "private": true,
   "description": "Electron shell for Triad (macOS-first, Windows port later).",
   "main": "main.js",

@@ -187,6 +187,11 @@ function runAgent(request) {
   const brokerInfo = broker.setup(agent, slotId, metadata, request, emit);
   const brokerArgs = brokerInfo ? broker.args(brokerInfo, agent) : null;
 
+  // Attached images: codex takes them with `-i <file>`; claude has no local-image
+  // flag, so we point --add-dir at each image's folder and tell it to Read them.
+  const images = Array.isArray(request.images) ? request.images.filter((p) => typeof p === 'string' && p) : [];
+  let promptToSend = prompt;
+
   const args = [];
   if (agent === 'codex') {
     // In non-interactive `exec`, codex gates every MCP tool call behind
@@ -224,6 +229,7 @@ function runAgent(request) {
       args.push('--config', 'mcp_servers.triad.command=' + JSON.stringify(brokerInfo.nodePath));
       args.push('--config', 'mcp_servers.triad.args=' + JSON.stringify(brokerArgs));
     }
+    for (const p of images) args.push('-i', p); // codex attaches images directly
     args.push('-');
   } else {
     const claudeSettings = { fastMode: speed === 'fast' };
@@ -239,6 +245,12 @@ function runAgent(request) {
       '--settings', JSON.stringify(claudeSettings));
     if (permission === 'bypassPermissions') args.push('--allow-dangerously-skip-permissions');
     if (writableRoots.length) { args.push('--add-dir'); args.push(...writableRoots); }
+    if (images.length) {
+      // claude has no image flag; grant read access to each image's folder and
+      // tell it to Read the files (its Read tool renders images to vision).
+      for (const dir of new Set(images.map((p) => path.dirname(p)))) args.push('--add-dir', dir);
+      promptToSend = prompt + '\n\n[첨부 이미지] 아래 이미지 파일을 Read 도구로 열어 내용을 확인한 뒤 답하세요:\n' + images.join('\n');
+    }
     if (brokerInfo) {
       args.push('--mcp-config', JSON.stringify({ mcpServers: { triad: { command: brokerInfo.nodePath, args: brokerArgs } } }));
       // The triad broker is the app's own trusted coordination channel, so its
@@ -300,7 +312,7 @@ function runAgent(request) {
     setTimeout(() => broker.cleanup(slotId, brokerInfo), 300);
   });
 
-  try { child.stdin.write(prompt); child.stdin.end(); } catch { /* stdin may already be closed */ }
+  try { child.stdin.write(promptToSend); child.stdin.end(); } catch { /* stdin may already be closed */ }
 }
 
 function stopAgent(request) {
@@ -328,6 +340,19 @@ async function chooseFiles(payload) {
   const result = await dialog.showOpenDialog(win, options);
   if (result.canceled) return;
   emit({ type: 'files', paths: result.filePaths });
+}
+
+async function chooseImages(payload) {
+  const workspace = util.stringOrNil(payload.workspace);
+  const options = {
+    properties: ['openFile', 'multiSelections'],
+    buttonLabel: '첨부',
+    filters: [{ name: '이미지', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic', 'heif'] }],
+  };
+  if (workspace) options.defaultPath = workspace;
+  const result = await dialog.showOpenDialog(win, options);
+  if (result.canceled) return;
+  emit({ type: 'images', paths: result.filePaths });
 }
 
 function copyText(payload) {
@@ -396,6 +421,7 @@ function dispatch(payload) {
     case 'stop': return stopAgent(payload);
     case 'chooseDirectory': return void chooseDirectory(payload);
     case 'chooseFiles': return void chooseFiles(payload);
+    case 'chooseImages': return void chooseImages(payload);
     case 'copyText': return copyText(payload);
     case 'openURL': return openURL(payload);
     case 'saveToken': return saveTokenAction(payload);

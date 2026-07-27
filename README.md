@@ -111,9 +111,11 @@ zsh scripts/package-app.sh
 
 앱 본체는 AppKit과 WebKit 시스템 프레임워크를 사용합니다. 에이전트 협업의 로컬 MCP 브로커는 Node.js를 사용하며, 앱이 일반적인 Homebrew·Volta·로컬 설치 경로에서 실행 파일을 자동 탐색합니다.
 
-## Electron 껍데기 (실험적 · 크로스플랫폼)
+## Electron 앱 (정식 배포 · 크로스플랫폼)
 
-`electron/`에는 같은 웹 UI(`Resources/`)를 **그대로 재사용**하는 Electron 껍데기가 있습니다. 네이티브 macOS 껍데기(`Native/main.m`)의 OS 통합 역할만 Node로 재구현해 **Windows에서도 구동**하는 것이 목표이며, 현재는 macOS 프로토타입 단계입니다. Windows 타깃은 이후 Windows 머신에서 빌드하며, OS 전용 로직은 전부 `electron/platform.js` 한 곳에 격리되어 있습니다(win32 브랜치는 TODO). 브리지 계약은 네이티브와 동일합니다 — UI는 `window.webkit.messageHandlers.triad.postMessage`로 보내고, 껍데기는 `window.nativeEvent(...)`로 되돌립니다.
+**0.48.10부터 Triad는 Electron 앱으로 배포됩니다.** GitHub 릴리스의 `.dmg`가 정식 산출물이며, 위의 네이티브(`Native/main.m` + `scripts/package-app.sh`) 경로는 레거시로 유지됩니다.
+
+`electron/`에는 같은 웹 UI(`Resources/`)를 **그대로 재사용**하는 Electron 껍데기가 있습니다. 네이티브 macOS 껍데기(`Native/main.m`)의 OS 통합 역할만 Node로 재구현해 **Windows에서도 구동**하는 것이 목표이며, 현재 macOS가 정식 지원됩니다. Windows 타깃은 이후 Windows 머신에서 빌드하며, OS 전용 로직은 전부 `electron/platform.js` 한 곳에 격리되어 있습니다(win32 브랜치는 TODO). 브리지 계약은 네이티브와 동일합니다 — UI는 `window.webkit.messageHandlers.triad.postMessage`로 보내고, 껍데기는 `window.nativeEvent(...)`로 되돌립니다.
 
 **개발 실행** (반드시 `electron/`에서 실행 — 저장소 루트엔 `package.json`이 없어 `npm`이 상위 폴더의 다른 프로젝트로 올라갑니다)
 

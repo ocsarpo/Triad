@@ -381,7 +381,10 @@
       if (!['agree', 'disagree', 'conditional'].includes(value)) throw new TypeError('verdict는 agree, disagree 또는 conditional이어야 합니다.');
       return value;
     }
-    return requireString(value, name, TEXT_LIMIT);
+    // proposal/decision are string sections, but agents often hand back a
+    // structured object (position/rationale/…).  Accept that by serializing it
+    // rather than rejecting the whole update; a real string passes untouched.
+    return requireString(value && typeof value === 'object' ? JSON.stringify(value) : value, name, TEXT_LIMIT);
   }
 
   function applyPatch(board, expectedRevisionOrPatch, actor, changes) {

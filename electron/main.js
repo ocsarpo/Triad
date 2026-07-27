@@ -211,6 +211,11 @@ function runAgent(request) {
     if (brokerInfo) {
       args.push('--config', 'mcp_servers.triad.command=' + JSON.stringify(brokerInfo.nodePath));
       args.push('--config', 'mcp_servers.triad.args=' + JSON.stringify(brokerArgs));
+      // Without this, codex treats the dynamically-added triad server as
+      // untrusted and gates every tool call behind approval — which, in the
+      // non-interactive `exec` run, auto-cancels ("user cancelled MCP tool
+      // call"). The broker is the app's own server, so mark it trusted.
+      args.push('--config', 'mcp_servers.triad.trust_level=' + JSON.stringify('trusted'));
     }
     args.push('-');
   } else {

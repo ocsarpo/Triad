@@ -315,3 +315,13 @@ test('문자열 섹션과 비-JSON 문자열은 coercion 대상이 아니다', (
   // 배열도 JSON도 아닌 문자열은 여전히 거부
   assert.throws(() => boardApi.applyPatch(board, { expectedRevision: 0, actor: 'codex', changes: { constraints: '그냥 문자열' } }), /배열/);
 });
+
+test('문자열 섹션(proposal)에 구조화된 객체가 오면 JSON 문자열로 수용한다', () => {
+  const board = boardApi.createBoard({ owner: 'codex', objective: 'o' });
+  const structured = { position: '이넘', rationale: ['enumeration 축약'] };
+  const next = boardApi.applyPatch(board, { expectedRevision: 0, actor: 'codex', changes: { proposal: structured } });
+  assert.equal(next.proposal, JSON.stringify(structured));
+  // 일반 문자열은 그대로 보존
+  const plainStr = boardApi.applyPatch(board, { expectedRevision: 0, actor: 'codex', changes: { proposal: '그냥 제안' } });
+  assert.equal(plainStr.proposal, '그냥 제안');
+});

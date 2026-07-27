@@ -44,7 +44,18 @@ test('AI 말풍선 하단에는 전체 복사와 답장 액션을 함께 표시�
   assert.match(renderer, /actions\.appendChild\(copy\)/);
   assert.match(renderer, /if\(agents\.includes\(m\.author\)\)\{const reply=/);
   assert.match(renderer, /actions\.appendChild\(reply\)/);
-  assert.match(renderer, /wrap\.append\(who,bubble,actions\)/);
+  assert.match(renderer, /wrap\.append\(who,bubble\)/);
+  assert.match(renderer, /wrap\.append\(actions\)/);
+});
+
+test('말풍선에 시각·날짜 스탬프를 표시한다 (답변 시작 / 작성 완료)', () => {
+  assert.match(renderer, /function stampFmt\(ts\)/);
+  assert.match(renderer, /className='bubble-time'/);
+  assert.match(renderer, /답변 시작 \$\{stampFmt\(m\.startedAt\)\}/);
+  assert.match(renderer, /작성 완료 \$\{stampFmt\(m\.completedAt\)\}/);
+  // 첫 토큰에 startedAt, 완료 지점에 completedAt 기록
+  assert.match(renderer, /if\(!m\.startedAt\)m\.startedAt=Date\.now\(\)/);
+  assert.match(renderer, /m\.completedAt=Date\.now\(\)/);
 });
 
 test('답장은 실행 기록이 있으면 참조를 붙이고 없어도 해당 AI를 호출한다', () => {

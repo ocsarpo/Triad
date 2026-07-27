@@ -67,10 +67,14 @@ function setup(agent, slotId, metadata, request, emit) {
 
   const nodePath = platform.resolveExecutable('node');
   const brokerPath = path.join(resources.dir(), 'triad-mcp-server.cjs');
-  if (!platform.isExecutable(nodePath) || !fs.existsSync(brokerPath)) {
+  const nodeOk = platform.isExecutable(nodePath);
+  const brokerOk = fs.existsSync(brokerPath);
+  if (!nodeOk || !brokerOk) {
+    // Diagnostic: a Finder-launched .app has a minimal PATH, so a node that
+    // lives outside the hard-coded candidate list (nvm/fnm/asdf) won't resolve.
     emit(Object.assign({}, metadata, {
       type: 'brokerWarning',
-      message: 'AI 간 호출 도구를 시작할 Node.js 또는 브로커 파일을 찾지 못했습니다. 기존 인계 방식으로 진행합니다.',
+      message: `AI 간 호출 도구(MCP 브로커) 준비 실패 — node: ${nodeOk ? nodePath : `찾지 못함(resolved="${nodePath}", PATH="${process.env.PATH || ''}")`}, broker: ${brokerOk ? '있음' : `없음(${brokerPath})`}. 공유 보드/협업이 비활성화됩니다.`,
     }));
     return null;
   }

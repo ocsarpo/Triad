@@ -189,33 +189,40 @@ function runAgent(request) {
 
   const args = [];
   if (agent === 'codex') {
+    // In non-interactive `exec`, codex gates every MCP tool call behind
+    // approval and auto-denies it ("user cancelled MCP tool call") — verified
+    // that trust_level, approval_policy=never, project trust, and --full-auto
+    // do NOT lift it; only --dangerously-bypass-approvals-and-sandbox does. So
+    // when the broker is wired (collaboration needs the shared-board tools) we
+    // run codex with that bypass and drop the (now-conflicting) sandbox flags.
+    // Independent runs keep the normal --sandbox — they never call MCP tools.
+    const bypass = !!brokerInfo;
     args.push('exec');
     if (session && session.length) {
-      args.push('resume', '--json', '--skip-git-repo-check', '--model', model,
-        '--config', `model_reasoning_effort="${effort}"`,
-        '--config', `sandbox_mode="${permission}"`, session);
+      args.push('resume', '--json', '--skip-git-repo-check', '--model', model, '--config', `model_reasoning_effort="${effort}"`);
+      if (bypass) args.push('--dangerously-bypass-approvals-and-sandbox');
+      else args.push('--config', `sandbox_mode="${permission}"`);
+      args.push(session);
     } else {
-      args.push('--json', '--color', 'never', '--skip-git-repo-check', '--cd', workspace,
-        '--model', model, '--config', `model_reasoning_effort="${effort}"`, '--sandbox', permission);
+      args.push('--json', '--color', 'never', '--skip-git-repo-check', '--cd', workspace, '--model', model, '--config', `model_reasoning_effort="${effort}"`);
+      if (bypass) args.push('--dangerously-bypass-approvals-and-sandbox');
+      else args.push('--sandbox', permission);
     }
-    if (permission === 'workspace-write' && writableRootsConfig) args.push('--config', writableRootsConfig);
-    if (permission === 'workspace-write' && (networkAccess || allowLocalBinding)) {
-      args.push('--config', 'sandbox_workspace_write.network_access=true');
-    }
-    if (permission === 'workspace-write' && allowLocalBinding) {
-      args.push('--config', 'features.network_proxy.enabled=true', '--config', 'features.network_proxy.allow_local_binding=true');
-      if (networkAccess) args.push('--config', 'features.network_proxy.domains={ "*" = "allow" }');
+    if (!bypass) {
+      if (permission === 'workspace-write' && writableRootsConfig) args.push('--config', writableRootsConfig);
+      if (permission === 'workspace-write' && (networkAccess || allowLocalBinding)) {
+        args.push('--config', 'sandbox_workspace_write.network_access=true');
+      }
+      if (permission === 'workspace-write' && allowLocalBinding) {
+        args.push('--config', 'features.network_proxy.enabled=true', '--config', 'features.network_proxy.allow_local_binding=true');
+        if (networkAccess) args.push('--config', 'features.network_proxy.domains={ "*" = "allow" }');
+      }
     }
     if (speed === 'fast') args.push('--enable', 'fast_mode', '--config', 'service_tier="fast"');
     else args.push('--disable', 'fast_mode');
     if (brokerInfo) {
       args.push('--config', 'mcp_servers.triad.command=' + JSON.stringify(brokerInfo.nodePath));
       args.push('--config', 'mcp_servers.triad.args=' + JSON.stringify(brokerArgs));
-      // Without this, codex treats the dynamically-added triad server as
-      // untrusted and gates every tool call behind approval — which, in the
-      // non-interactive `exec` run, auto-cancels ("user cancelled MCP tool
-      // call"). The broker is the app's own server, so mark it trusted.
-      args.push('--config', 'mcp_servers.triad.trust_level=' + JSON.stringify('trusted'));
     }
     args.push('-');
   } else {

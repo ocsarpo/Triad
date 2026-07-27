@@ -229,6 +229,19 @@ function runAgent(request) {
     if (writableRoots.length) { args.push('--add-dir'); args.push(...writableRoots); }
     if (brokerInfo) {
       args.push('--mcp-config', JSON.stringify({ mcpServers: { triad: { command: brokerInfo.nodePath, args: brokerArgs } } }));
+      // The triad broker is the app's own trusted coordination channel, so its
+      // tools must always be permitted — otherwise a conversation on the
+      // default permission mode (acceptEdits) has its shared_context_update /
+      // submit_contribution calls denied ("사용자가 취소"). Allowlisting them
+      // removes the need for bypassPermissions just to record on the board.
+      args.push('--allowedTools', [
+        'mcp__triad__shared_context_manifest',
+        'mcp__triad__shared_context_read',
+        'mcp__triad__shared_context_update',
+        'mcp__triad__submit_verdict',
+        'mcp__triad__submit_contribution',
+        'mcp__triad__ask_agent',
+      ].join(','));
     }
     if (session && session.length) args.push('--resume', session);
     else args.push('--session-id', crypto.randomUUID().toLowerCase());

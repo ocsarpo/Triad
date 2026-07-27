@@ -21,7 +21,7 @@ test('셸은 첨부 이미지를 codex는 -i, claude는 --add-dir+Read로 전달
 test('셸은 이미지 선택 다이얼로그(chooseImages) 액션을 노출한다', () => {
   assert.match(main, /case 'chooseImages': return void chooseImages\(payload\)/);
   assert.match(main, /async function chooseImages\(payload\)/);
-  assert.match(main, /filters: \[\{ name: '이미지', extensions: \[/);
+  assert.match(main, /filters: \[\{ name: M\('dlgImages'\), extensions: \[/);
   assert.match(main, /emit\(\{ type: 'images', paths: result\.filePaths \}\)/);
 });
 

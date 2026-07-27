@@ -300,6 +300,8 @@
     aside { min-height: 0; overflow-y: auto; border-left: 1px solid var(--line); background: var(--panel); padding: 18px; }
     .settings-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; }
     .settings-title h2 { margin: 0; font-size: 15px; }
+    .lang-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; font-size: 12px; color: var(--muted); }
+    .lang-row select { height: 28px; padding: 0 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); font-size: 11px; }
     .clear { border: 0; background: transparent; color: var(--muted); font-size: 11px; }
     .settings-card { padding: 14px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); box-shadow: var(--shadow); }
     .settings-head { display: flex; align-items: center; margin-bottom: 11px; }
@@ -449,6 +451,7 @@
     </section>
     <aside class="settings-panel">
       <div class="settings-title"><h2>에이전트 설정</h2><button class="clear" id="clear">대화 비우기</button></div>
+      <div class="lang-row"><label for="lang-select">언어</label><select id="lang-select"><option value="auto">자동 (OS)</option><option value="en">English</option><option value="ko">한국어</option></select></div>
       <div id="settings"></div>
     </aside>
     <aside class="trace-panel">
@@ -464,6 +467,7 @@
       <div class="trace-list" id="trace-list"></div>
     </aside>
   </div>
+  <script src="i18n.js"></script>
   <script src="router.js"></script>
   <script src="shared-context.js"></script>
   <script src="collaboration.js"></script>
@@ -502,6 +506,7 @@
       responseIds: {}, lineBuffers: { codex: '', claude: '' }, stderr: { codex: '', claude: '' },
       brokerMessages:{},
       clipboardRequests:{}, copyFeedback:{}, pendingImages:[],
+      localePref: localStorage.getItem('triad.locale')||'auto',
       pending: {}, retryOnTermination: { codex:false, claude:false }, stopRequested: { codex:false, claude:false },
       tokenStatus: { codex: false, claude: false },
       accountStatus: {codex:{checking:false,connected:false,message:''},claude:{checking:false,connected:false,message:''}}, codexModels: [], claudeModels: [],
@@ -511,6 +516,48 @@
       diff:{visible:false,agent:'codex',loading:false,text:'',error:'',workspace:'',truncated:false,selectedFileId:null},
       boardVisible:false
     };
+    // --- i18n: English by default, auto-switch to OS language (ko supported).
+    // Korean stays the source string; English is applied at runtime by a scoped
+    // DOM sweep (chrome) + L() (interpolated messages). See Resources/i18n.js.
+    function effectiveLocale(){ const p=state.localePref||'auto'; return p==='auto'?window.TriadI18n.detect(navigator.language):p; }
+    function L(key,params){ return window.TriadI18n.translate(effectiveLocale(),key,params); }
+    function tc(ko){ return window.TriadI18n.chrome(effectiveLocale(),ko); } // translate a chrome string on demand
+    const I18N_SKIP='.messages,.trace-list,.diff-content,.diff-file-list,.autocomplete,.markdown-table-wrap';
+    function applyI18n(root){
+      if(effectiveLocale()!=='en')return; // ko: source is already Korean
+      const tr=(s)=>window.TriadI18n.chrome('en',s);
+      const walk=(el)=>{
+        if(!el||el.nodeType!==1)return;
+        if(el.matches&&el.matches(I18N_SKIP))return; // never touch message/agent/diff content
+        for(const attr of ['placeholder','title','aria-label']){
+          const v=el.getAttribute&&el.getAttribute(attr);
+          if(v){const key=v.trim();const t=tr(key);if(t!==key)el.setAttribute(attr,v.replace(key,t));}
+        }
+        // Translate at the TEXT-NODE level so labels sitting next to child
+        // elements (e.g. `<summary>실행 환경 <span>…</span>`) are caught too.
+        for(const node of el.childNodes){
+          if(node.nodeType===3){const raw=node.nodeValue;const key=raw.trim();if(key){const t=tr(key);if(t!==key)node.nodeValue=raw.replace(key,t);}}
+          else if(node.nodeType===1)walk(node);
+        }
+      };
+      walk(root||document.body);
+    }
+    let i18nScheduled=false;
+    function scheduleI18n(){ if(i18nScheduled)return; i18nScheduled=true; requestAnimationFrame(()=>{i18nScheduled=false;applyI18n(document.body);}); }
+    function startI18n(){
+      const sel=document.getElementById('lang-select'); if(sel)sel.value=state.localePref||'auto';
+      post({action:'setLocale',locale:effectiveLocale(),pref:state.localePref}); // keep the app menu/dialogs in sync
+      applyI18n(document.body);
+      try{ new MutationObserver(()=>scheduleI18n()).observe(document.body,{childList:true,subtree:true}); }catch{}
+    }
+    function setLocalePref(pref){
+      const next=['auto','en','ko'].includes(pref)?pref:'auto';
+      if(next===state.localePref)return;
+      state.localePref=next; localStorage.setItem('triad.locale',next);
+      post({action:'setLocale',locale:effectiveLocale(),pref:state.localePref});
+      // Re-source every string from the (Korean) markup cleanly for the new locale.
+      location.reload();
+    }
     const defaults = home => ({
       codex: { model:'gpt-5.6-sol', effort:'medium', speedMode:'standard', permissionMode:'workspace-write', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'codex', authMode:'existing', sessionPolicy:'auto', sessionTurnLimit:50, sessionTokenLimit:170000 },
       claude: { model:'sonnet', effort:'medium', speedMode:'standard', permissionMode:'acceptEdits', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'claude', authMode:'existing', sessionPolicy:'auto', sessionTurnLimit:50, sessionTokenLimit:170000 }
@@ -1045,7 +1092,7 @@
     function renderHistoryEntry(item,index) {
       const entry=item&&typeof item==='object'?item:{};const details=document.createElement('details');details.className='board-history-entry';
       const summary=document.createElement('summary');const headline=document.createElement('span');headline.className='board-history-headline';headline.textContent=entry.objective||'이전 실행';const time=document.createElement('time');time.textContent=boardTimestamp(entry.updatedAt);summary.append(headline,time);details.appendChild(summary);
-      const meta=document.createElement('div');meta.className='board-history-meta';const people=[entry.owner&&`담당 ${names[entry.owner]||entry.owner}`,entry.reviewer&&`검토 ${names[entry.reviewer]||entry.reviewer}`].filter(Boolean);const recordId=window.TriadRunReference.recordIdFor(entry);meta.textContent=[`실행 ${index}`,recordId,entry.runId&&`run ${entry.runId}`,...people].filter(Boolean).join(' · ');const reference=document.createElement('button');reference.className='small-btn';reference.textContent='참고';reference.title='이 실행 기록을 다음 AI 요청에 참고합니다.';reference.onclick=event=>{event.preventDefault();event.stopPropagation();const draft=document.getElementById('draft');draft.value=`${draft.value}${draft.value.trim()?' ':''}@실행[${recordId}] `;draft.focus();updateRoutingPreview();};meta.appendChild(reference);details.appendChild(meta);
+      const meta=document.createElement('div');meta.className='board-history-meta';const people=[entry.owner&&L('ownerLabel',{name:names[entry.owner]||entry.owner}),entry.reviewer&&L('reviewerLabel',{name:names[entry.reviewer]||entry.reviewer})].filter(Boolean);const recordId=window.TriadRunReference.recordIdFor(entry);meta.textContent=[L('runN',{n:index}),recordId,entry.runId&&`run ${entry.runId}`,...people].filter(Boolean).join(' · ');const reference=document.createElement('button');reference.className='small-btn';reference.textContent='참고';reference.title='이 실행 기록을 다음 AI 요청에 참고합니다.';reference.onclick=event=>{event.preventDefault();event.stopPropagation();const draft=document.getElementById('draft');draft.value=`${draft.value}${draft.value.trim()?' ':''}@실행[${recordId}] `;draft.focus();updateRoutingPreview();};meta.appendChild(reference);details.appendChild(meta);
       const decisionTitle=document.createElement('h4');decisionTitle.textContent='결론';const decision=document.createElement('pre');decision.className='board-history-content';decision.textContent=entry.decision||'결론이 기록되지 않았습니다.';details.append(decisionTitle,decision);
       const contribution=historyContributionText(entry.contributions);
       if(contribution){const contributionTitle=document.createElement('h4');contributionTitle.textContent='AI 기여 요약';const contributionBody=document.createElement('pre');contributionBody.className='board-history-content';contributionBody.textContent=contribution;details.append(contributionTitle,contributionBody);}
@@ -1084,7 +1131,7 @@
         } else if(Array.isArray(board[key])){for(const item of board[key]||[]){const li=document.createElement('li');li.textContent=typeof item==='string'?item:JSON.stringify(item);content.appendChild(li);}if(!board[key]?.length){const li=document.createElement('li');li.textContent='아직 기록되지 않았습니다.';content.appendChild(li);}}
         else content.textContent=boardValue(board[key]);section.append(title,content);detail.appendChild(section);
       }
-      const history=Array.isArray(board.history)?board.history:[];const historySection=document.createElement('section');historySection.className='board-history';const historyTitle=document.createElement('h3');historyTitle.textContent=`실행 기록 (${history.length})`;historySection.appendChild(historyTitle);
+      const history=Array.isArray(board.history)?board.history:[];const historySection=document.createElement('section');historySection.className='board-history';const historyTitle=document.createElement('h3');historyTitle.textContent=L('runHistory',{n:history.length});historySection.appendChild(historyTitle);
       if(!history.length){const empty=document.createElement('p');empty.className='board-empty';empty.textContent='이 문서의 이전 실행 기록이 아직 없습니다.';historySection.appendChild(empty);}
       else history.slice().reverse().forEach((item,index)=>historySection.appendChild(renderHistoryEntry(item,history.length-index)));
       detail.appendChild(historySection);
@@ -1171,7 +1218,7 @@
       if(state.orchestration?.mode==='agent'&&event.used)state.orchestration.handoffs=Math.max(state.orchestration.handoffs||0,Number(event.used));
       if(event.eventType==='agent_call_started'){
         const reason=event.reason?`\n\n호출 이유: ${event.reason}`:'';
-        state.brokerMessages[event.id]=addMessage('system',`**${names[from]} → ${names[to]} · AI 호출 ${count}**\n\n질문 중…\n\n${event.question||''}${reason}`,true);
+        state.brokerMessages[event.id]=addMessage('system',L('handoffAsk',{from:names[from],to:names[to],count,question:event.question||'',reason}),true);
         addTrace(from,'info',`${names[to]} 보조 호출`,{question:event.question,reason:event.reason,count,depth:event.depth});
       }else if(event.eventType==='agent_call_completed'){
         const answer=String(event.answer||'').trim();const preview=answer.length>3000?`${answer.slice(0,3000)}\n\n… 답변이 길어 일부만 표시했습니다.`:answer;
@@ -1369,6 +1416,10 @@
 
     function dispatchAgent(agent,prompt,options={}) {
       if(state.running[agent])return false;
+      // Keep the AI's user-facing answer in the UI language without translating
+      // the (Korean) prompt scaffolding — a single trailing directive suffix
+      // that preserves the cacheable stable prefix.
+      prompt = prompt + '\n\n' + window.TriadI18n.aiDirective(effectiveLocale());
       state.running[agent]=true;state.stopRequested[agent]=false;state.retryOnTermination[agent]=false;state.stderr[agent]='';state.lineBuffers[agent]='';
       const isolated=options.isolated===true;
       // Collaboration turns are isolated (they never touch the chat session
@@ -1478,7 +1529,7 @@
       for(const item of state.queue){
         const row=document.createElement('div');row.className='queue-item';
         const target=document.createElement('span');const key=item.kind==='collaboration'||item.kind==='independentBatch'?'collaboration':item.agent;
-        target.className=`queue-target ${key}`;target.textContent=item.kind==='independentBatch'?`독립 실행 대기 ${state.queue.filter(candidate=>candidate.kind==='independentBatch'&&candidate.createdAt<=item.createdAt).length}번`:`${item.kind==='collaboration'?'협업':names[item.agent]} 대기 ${window.TriadQueue.positionFor(state.queue,item)}번`;
+        target.className=`queue-target ${key}`;target.textContent=item.kind==='independentBatch'?L('queueIndependent',{n:state.queue.filter(candidate=>candidate.kind==='independentBatch'&&candidate.createdAt<=item.createdAt).length}):L('queueWaiting',{who:item.kind==='collaboration'?tc('협업'):names[item.agent],pos:window.TriadQueue.positionFor(state.queue,item)});
         const preview=document.createElement('span');preview.className='queue-preview';preview.textContent=item.sourceText||item.prompt||item.objective||'';
         const cancel=document.createElement('button');cancel.className='queue-cancel';cancel.textContent='취소';cancel.title='실행 전 대기 항목 취소';cancel.onclick=()=>cancelQueued(item.id);
         row.append(target,preview,cancel);root.appendChild(row);
@@ -1644,7 +1695,7 @@
       addTrace(task.agent,'info',task.label,{handoffs:flow.handoffs,maxHandoffs:flow.maxHandoffs,from:task.from||task.requester||null});
       const store=collabSessionStore(flow,task.agent);dispatchAgent(task.agent,buildAgentPrompt(task),{isolated:true,sessionStore:store,conversationId:flow.conversationId,config:flow.settings?.[task.agent],agentConfigs:flow.settings,collaboration:flow.collaboration,images:flow.images||[]});renderCollaboration();
     }
-    function finishAgentCollaboration(flow, agent, message='에이전트 협업이 완료되었습니다.') {
+    function finishAgentCollaboration(flow, agent, message=L('agentCollabDone')) {
       if(flow?.conversationId&&flow.conversationId!==state.activeConversationId)return withConversation(flow.conversationId,()=>finishAgentCollaboration(flow,agent,message));
       addTrace(agent,'success','에이전트 협업 완료',{handoffs:flow.handoffs});
       state.orchestration=null;addMessage('system',message);renderCollaboration();scheduleQueueDrain();
@@ -1654,7 +1705,7 @@
       if(flow.conversationId&&flow.conversationId!==state.activeConversationId)return withConversation(flow.conversationId,()=>runNextCollaborationTurn());
       if(flow.index>=flow.tasks.length){
         addTrace(flow.lastAgent||flow.collaboration?.lead||state.collaboration.lead,'success',flow.mode==='debate'?'상호 토론 완료':'교차 검토 완료');
-        state.orchestration=null;addMessage('system',flow.mode==='debate'?'상호 토론이 완료되었습니다.':'교차 검토가 완료되었습니다.');renderCollaboration();scheduleQueueDrain();return;
+        state.orchestration=null;addMessage('system',flow.mode==='debate'?L('debateDone'):L('reviewDone'));renderCollaboration();scheduleQueueDrain();return;
       }
       let task=flow.tasks[flow.index++];
       if(task?.conditional&&boardFor(flow)?.verdict==='agree')task=flow.tasks[flow.index++];
@@ -1671,7 +1722,7 @@
       if(collaboration.mode==='agent'){
         state.orchestration={mode:'agent',objective,tasks:[],index:0,current:null,cancelled:false,lastAgent:null,handoffs:0,mcpCalls:0,maxHandoffs:collaboration.rounds,sessions:{codex:null,claude:null},sessionTurns:{codex:0,claude:0},sharedContext,collaboration,conversationId,settings:clone(settings),referencePacket:clone(referencePacket),images:flowImages};
         addTrace(collaboration.lead,'info','에이전트 협업 시작',{lead:names[collaboration.lead],maxHandoffs:collaboration.rounds});
-        addMessage('system',`${names[collaboration.lead]}가 작업을 시작합니다. 필요한 경우 상대 AI에게 질문하고 답을 받아 계속 진행합니다.`);
+        addMessage('system',L('agentStart',{lead:names[collaboration.lead]}));
         runAgentTurn({agent:collaboration.lead,kind:'agent_work'});return;
       }
       const tasks=collaborationTasks(collaboration);state.orchestration={mode:collaboration.mode,objective,tasks,index:0,current:null,cancelled:false,lastAgent:null,sessions:{codex:null,claude:null},sessionTurns:{codex:0,claude:0},sharedContext,collaboration,conversationId,settings:clone(settings),referencePacket:clone(referencePacket),images:flowImages};
@@ -1682,21 +1733,21 @@
       if(!state.orchestration)return;
       if(state.orchestration.conversationId&&state.orchestration.conversationId!==state.activeConversationId)return withConversation(state.orchestration.conversationId,()=>cancelCollaboration(reason));
       const agent=state.orchestration.current?.agent||state.orchestration.collaboration?.lead||state.collaboration.lead;state.orchestration.cancelled=true;state.orchestration=null;
-      addTrace(agent,'error','협업 흐름 중단',reason);addMessage('system',`협업 흐름을 중단했습니다. ${reason}`);renderCollaboration();scheduleQueueDrain();
+      addTrace(agent,'error','협업 흐름 중단',reason);addMessage('system',L('collabAborted',{reason}));renderCollaboration();scheduleQueueDrain();
     }
     function send() {
       const draft=document.getElementById('draft');const original=draft.value.trim();if(!original)return;
       const images=state.pendingImages.slice();
       const references=window.TriadRunReference.extract(original);
-      if(references.tooMany){document.getElementById('routing-error').textContent='실행 기록은 최대 3개까지 참고할 수 있습니다.';return;}
-      if(!references.clean){document.getElementById('routing-error').textContent='실행 기록 참조와 함께 작업 내용을 입력해주세요.';return;}
+      if(references.tooMany){document.getElementById('routing-error').textContent=L('refMax3');return;}
+      if(!references.clean){document.getElementById('routing-error').textContent=L('refNeedsText');return;}
       let referencePacket=[];try { referencePacket=window.TriadRunReference.packet(window.TriadRunReference.resolve(state.sharedDocuments,references.ids)); } catch(error) { document.getElementById('routing-error').textContent=error.message;return; }
-      const routed=route(references.clean,{defaultTarget:state.defaultTarget});if(!routed){document.getElementById('routing-error').textContent='작업 내용을 입력해주세요.';return;}
+      const routed=route(references.clean,{defaultTarget:state.defaultTarget});if(!routed){document.getElementById('routing-error').textContent=L('needTask');return;}
       if(routed.errors?.length){document.getElementById('routing-error').textContent=routed.errors[0];return;}
       let runCollaboration=null;
       if(state.collaboration.mode!=='independent'){
         const lead=collaborationLeadFor(routed,state.collaboration.lead,state.defaultTarget);
-        if(!lead){document.getElementById('routing-error').textContent='협업에서는 #codex 또는 #claude 중 하나만 시작 AI로 호출해주세요.';return;}
+        if(!lead){document.getElementById('routing-error').textContent=L('collabLeadOne');return;}
         // The pin applies only to this run; it never rewrites the conversation's
         // collaboration setting or changes a queued/running collaboration.
         runCollaboration={...state.collaboration,lead};
@@ -1746,7 +1797,7 @@
         markMessageWorkStarted(userMessageId);
         const detail=error instanceof Error&&error.message?error.message:String(error||'알 수 없는 오류');
         addTrace('system','error','전송 준비 실패',detail);
-        addMessage('system',`⚠️ 전송을 준비하지 못했습니다. ${detail}`);
+        addMessage('system',L('sendPrepFailed',{detail}));
         document.getElementById('routing-error').textContent=detail;
       } finally {
         setTimeout(()=>{state.forceMessageBottom=false;scheduleQueueDrain();},0);
@@ -1806,7 +1857,7 @@
             const recorded=entries.some(entry=>entry?.runId===context.runId);
             if(!recorded){
               addTrace(agent,'error','공유 문서 기여 미확인',{documentId:context.documentId||documentIdOf(board),runId:context.runId});
-              addMessage('system',`⚠️ ${names[agent]}의 공유 문서 기여가 이번 실행에 기록됐는지 확인하지 못했습니다. 답변은 유지되며 다음 작업은 계속 진행합니다.`);
+              addMessage('system',L('contribUnconfirmed',{agent:names[agent]}));
             }
           });
         } finally {
@@ -1841,7 +1892,7 @@
       addTrace(agent,'error','실행 실패',message);
       updateMessage(state.responseIds[agent], m => { m.text += (m.text?'\n\n':'') + '⚠️ ' + message; m.streaming=false; m.completedAt=Date.now(); });
       state.running[agent]=false; delete state.pending[agent];delete state.responseIds[agent];
-      if(state.orchestration){state.orchestration=null;addMessage('system','AI 실행 오류로 협업 흐름을 중단했습니다. 오른쪽 실행 과정에서 오류 원문을 확인할 수 있습니다.');renderCollaboration();}
+      if(state.orchestration){state.orchestration=null;addMessage('system',L('agentErrAbort'));renderCollaboration();}
       renderStatus(false);renderConversations();
       if(!state.orchestration)waitForIndependentContribution(agent,pending,scheduleQueueDrain);
     }
@@ -1911,12 +1962,12 @@
           }
           if(flow.handoffs>=flow.maxHandoffs){
             addTrace(agent,'error','최대 위임 횟수 도달',{maxHandoffs:flow.maxHandoffs,question:parsed.handoff.question});
-            addMessage('system',`최대 위임 ${flow.maxHandoffs}회에 도달해 ${names[agent]}가 현재 정보로 작업을 마무리합니다.`);
+            addMessage('system',L('maxHandoff',{n:flow.maxHandoffs,agent:names[agent]}));
             setTimeout(()=>runAgentTurn({agent,kind:'agent_work',received:'추가 위임 한도에 도달했습니다. 지금까지 확보한 정보로 최종 결과를 작성하세요.',from:parsed.handoff.to,noHandoff:true}),0);return;
           }
           flow.handoffs+=1;
           const reason=parsed.handoff.reason?`\n이유: ${parsed.handoff.reason}`:'';
-          addMessage('system',`${names[agent]} → ${names[parsed.handoff.to]} · 협업 요청 ${flow.handoffs}/${flow.maxHandoffs}\n${parsed.handoff.question}${reason}`);
+          addMessage('system',L('handoffReq',{from:names[agent],to:names[parsed.handoff.to],n:flow.handoffs,max:flow.maxHandoffs,question:parsed.handoff.question,reason}));
           addTrace(agent,'info',`${names[parsed.handoff.to]}에게 질문 전달`,parsed.handoff);
           setTimeout(()=>runAgentTurn({agent:parsed.handoff.to,kind:'agent_answer',requester:agent,question:parsed.handoff.question,reason:parsed.handoff.reason}),0);return;
         }
@@ -1940,7 +1991,7 @@
           const error=window.TriadCollaboration.boardStageError(task,boardFor(flow));
           if(error){
             addTrace(agent,'error','공유 보드 단계 미기록',{phase:task.phase,required:window.TriadCollaboration.requiredBoardField(task)});
-            addMessage('system',`⚠️ ${names[agent]||agent}가 이 단계(${task.phase})를 공유 보드에 기록하지 못했습니다. 기록 없이 계속 진행합니다.`);
+            addMessage('system',L('boardWriteFail',{agent:names[agent]||agent,phase:task.phase}));
           }
           runNextCollaborationTurn();
         });
@@ -2034,6 +2085,7 @@
         for(const p of (event.paths||[])) if(p&&!state.pendingImages.includes(p)) state.pendingImages.push(p);
         renderAttachStrip();
       }
+      else if (event.type==='setLocalePref') setLocalePref(event.pref); // language change from the app menu
       else if(event.type==='projectFiles') {
         state.projectFiles[event.agent]={workspace:event.workspace||effectiveWorkspacePath(event.agent)||'',files:event.files||[],loading:false,error:event.error||'',truncated:!!event.truncated};
         if(!isBackgroundRuntime()&&autocomplete.open&&autocomplete.type==='file')updateAutocomplete();
@@ -2080,10 +2132,10 @@
       if(state.boardVisible)renderSharedBoard();
     }
     function defaultTargetLabel(target=state.defaultTarget) {
-      return target==='codex'?'Codex':target==='claude'?'Claude':'둘 다';
+      return target==='codex'?'Codex':target==='claude'?'Claude':tc('둘 다');
     }
     function collaborationDefaultTargetHint() {
-      return state.defaultTarget==='all'?'첫 발언 설정 사용':`${defaultTargetLabel()} 고정 적용`;
+      return state.defaultTarget==='all'?tc('첫 발언 설정 사용'):L('pinApplied',{target:defaultTargetLabel()});
     }
     function renderDefaultTarget() {
       const target=normalizeDefaultTarget(state.defaultTarget);state.defaultTarget=target;
@@ -2113,16 +2165,16 @@
       document.getElementById('collab-rounds-label').textContent=agentMode?'AI 간 호출 한도':'라운드';
       const status=document.getElementById('collab-state');
       const activeFlow=state.orchestration?.conversationId===state.activeConversationId?state.orchestration:null;
-      if(activeFlow){const task=activeFlow.current;status.textContent=task?(activeFlow.mode==='agent'?`${names[task.agent]} · ${task.label} · AI 호출 ${activeFlow.handoffs}/${activeFlow.maxHandoffs}`:`${names[task.agent]} · ${task.label} (${activeFlow.index}/${activeFlow.tasks.length})`):'다음 작업 준비 중';status.classList.add('live');}
+      if(activeFlow){const task=activeFlow.current;status.textContent=task?(activeFlow.mode==='agent'?L('flowAgentState',{agent:names[task.agent],label:tc(task.label),n:activeFlow.handoffs,max:activeFlow.maxHandoffs}):L('flowState',{agent:names[task.agent],label:tc(task.label),index:activeFlow.index,total:activeFlow.tasks.length})):tc('다음 작업 준비 중');status.classList.add('live');}
       else {status.textContent=independent?'각 AI가 독립적으로 응답':agentMode?'필요할 때 서로 질문하고 답을 돌려받아 작업':review?'작성 → 검토 → 수정':'두 AI가 번갈아 토론';status.classList.remove('live');}
       document.querySelectorAll('[data-tag]').forEach(button=>button.disabled=!independent&&button.dataset.tag==='#all');
       const documentLabel=document.getElementById('collab-document');const workDocument=currentWorkSharedDocument();const selectedDocument=activeSharedDocument()||state.sharedContext?.board;
       const showingDifferentDocument=workDocument&&selectedDocument&&documentIdOf(workDocument)!==documentIdOf(selectedDocument);
       documentLabel.hidden=!workDocument&&!selectedDocument;
-      documentLabel.textContent=workDocument?`현재 실행: ${documentTitleOf(workDocument)}${showingDifferentDocument?` · 다음: ${documentTitleOf(selectedDocument)}`:''}`:selectedDocument?`선택 문서: ${documentTitleOf(selectedDocument)}`:'';
-      documentLabel.title=workDocument?`현재 AI 작업은 “${documentTitleOf(workDocument)}”에 기록됩니다.${showingDifferentDocument?` 선택한 “${documentTitleOf(selectedDocument)}”은 다음 실행에 사용됩니다.`:''}`:documentLabel.textContent;
+      documentLabel.textContent=workDocument?L('docCurrent',{title:documentTitleOf(workDocument)})+(showingDifferentDocument?L('docNext',{title:documentTitleOf(selectedDocument)}):''):selectedDocument?L('docSelected',{title:documentTitleOf(selectedDocument)}):'';
+      documentLabel.title=documentLabel.textContent;
       document.getElementById('block-template').disabled=!independent;
-      document.getElementById('compose-hint').textContent=independent?`Enter 전송 · 작업 중 추가 전송은 AI별 순차 대기 · 태그가 없으면 ${defaultTargetLabel()}`:agentMode?`#codex·#claude로 이번 작업의 시작 AI 지정 · 태그 없으면 ${collaborationDefaultTargetHint()}`:`Enter 전송 · 작업 중 추가 전송은 순차 대기 · 태그 없으면 ${collaborationDefaultTargetHint()}`;
+      document.getElementById('compose-hint').textContent=independent?L('hintIndependent',{target:defaultTargetLabel()}):agentMode?L('hintAgent',{hint:collaborationDefaultTargetHint()}):L('hintDebate',{hint:collaborationDefaultTargetHint()});
       const controlsLocked=!!activeFlow||agents.some(agent=>state.running[agent]&&state.pending[agent]?.conversationId===state.activeConversationId)||state.queue.some(item=>item.conversationId===state.activeConversationId);
       document.querySelectorAll('.collab-controls select, .collab-controls input, .collab-mode-btn').forEach(control=>control.disabled=controlsLocked);
       requestAnimationFrame(updateScrollButton);
@@ -2180,10 +2232,12 @@
     }
     function refreshProjectFiles(){agents.forEach(requestProjectFiles);}
     function sessionSummary(agent) {
-      const config=state.settings?.[agent]||{};const stats=state.sessionStats?.[agent]||{};
-      const policy={auto:'자동',continue:'계속',alwaysNew:'항상 새'}[config.sessionPolicy]||'자동';
+      const config=state.settings?.[agent]||{};const stats=state.sessionStats?.[agent]||{};const lang=effectiveLocale();
+      const policyMap={auto:{en:'Auto',ko:'자동'},continue:{en:'Continuing',ko:'계속'},alwaysNew:{en:'Always new',ko:'항상 새'}};
+      const policy=(policyMap[config.sessionPolicy]||policyMap.auto)[lang];
       const totalInput=Math.round((stats.sessionInputTokens||0)/1000);const contextInput=Math.round((stats.lastInputTokens||0)/1000);
-      return `${policy} · ${stats.turns||0}턴 · 누적 입력 ${totalInput}k · 현재 문맥 ${contextInput}k${state.sessions?.[agent]?'':' · 새 세션'}`;
+      const fresh=state.sessions?.[agent]?'':L('sessionFresh');
+      return L('sessionSummary',{policy,turns:stats.turns||0,total:totalInput,context:contextInput,fresh});
     }
     function renderSettings() {
       if(isBackgroundRuntime())return;
@@ -2273,7 +2327,7 @@
           post({action:'authAccount',operation:'connect',agent,config:c});
         });
         card.querySelector('.auth-logout')?.addEventListener('click',()=>{
-          if(!confirm(`${names[agent]} CLI 계정에서 로그아웃할까요?`))return;
+          if(!confirm(L('logoutConfirm',{agent:names[agent]})))return;
           state.accountStatus[agent]={...account,busy:true,operation:'logout'};renderSettings();
           post({action:'authAccount',operation:'logout',agent,config:c});
         });
@@ -2413,6 +2467,7 @@
     document.getElementById('stop-codex').onclick=()=>stopAgent('codex');
     document.getElementById('stop-claude').onclick=()=>stopAgent('claude');
     document.getElementById('clear').onclick=()=>{if(agents.some(a=>state.running[a])||state.queue.length)return;state.messages=[createWelcomeMessage()];save();renderMessages();};
+    (()=>{const sel=document.getElementById('lang-select');if(sel)sel.onchange=()=>setLocalePref(sel.value);})();
     document.getElementById('clear-traces').onclick=()=>{state.traces=[];save();renderTraces();};
     (()=>{const b=document.getElementById('copy-traces');if(b)b.onclick=()=>copyPlainText(traceExportText(),b);})();
     document.getElementById('trace-toggle').onclick=()=>{state.traceVisible=!state.traceVisible;localStorage.setItem('triad.traceVisible',String(state.traceVisible));renderTraceVisibility();};
@@ -2431,6 +2486,7 @@
       renderTraces();
     });
     renderMessages(); renderTraces(); renderTraceVisibility(); renderDiff(); renderSharedBoard(); post({action:'tokenStatus'});post({action:'checkUpdate'});setInterval(()=>post({action:'checkUpdate'}),24*60*60*1000);
+    startI18n();
   </script>
 </body>
 </html>

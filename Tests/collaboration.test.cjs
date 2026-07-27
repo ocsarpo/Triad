@@ -86,7 +86,7 @@ test('공유 보드 프롬프트는 manifest-first이며 독립 실행에 과거
 test('공유 문서 화면은 현재 작업과 접이식 실행 기록을 분리해 렌더한다', () => {
   const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html'), 'utf8');
   assert.match(renderer, /currentHeading\.textContent='현재 작업'/);
-  assert.match(renderer, /실행 기록 \(\$\{history\.length\}\)/);
+  assert.match(renderer, /L\('runHistory',\{n:history\.length\}\)/);
   assert.match(renderer, /document\.createElement\('details'\)/);
   assert.match(renderer, /history\.slice\(\)\.reverse\(\)/);
   assert.match(renderer, /historyContributionText\(entry\.contributions\)/);

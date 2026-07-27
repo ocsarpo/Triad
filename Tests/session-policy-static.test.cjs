@@ -13,8 +13,8 @@ test('렌더러는 세션 정책·자동 회전·대화별 stats migration을 �
   assert.match(renderer, /state\.settings\.codex=liftLegacySessionDefaults\(state\.settings\.codex\)/);
   assert.match(renderer, /collaboration: \{mode:'independent',lead:'codex',rounds:2/);
   assert.match(renderer, /window\.TriadSessionBudget\.shouldRotate\(config,state\.sessionStats\[agent\],!!session\)/);
-  assert.match(renderer, /현재 문맥 \$\{Math\.round\(stats\.lastInputTokens\/1000\)\}k/);
-  assert.match(renderer, /누적 입력 \$\{totalInput\}k · 현재 문맥 \$\{contextInput\}k/);
+  assert.match(renderer, /const contextInput=Math\.round\(\(stats\.lastInputTokens\|\|0\)\/1000\)/);
+  assert.match(renderer, /L\('sessionSummary',\{policy,turns:stats\.turns\|\|0,total:totalInput,context:contextInput,fresh\}\)/);
   assert.match(renderer, /<label>현재 문맥 기준<\/label><input data-key="sessionTokenLimit"/);
   assert.match(renderer, /function ensureAgentSessionStats\(agent\)/);
   assert.match(renderer, /const stats=ensureAgentSessionStats\('codex'\)/);

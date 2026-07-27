@@ -29,6 +29,34 @@ const broker = require('./lib/broker');
 const models = require('./lib/models');
 
 let win = null;
+// App language for the native menu + dialogs. OS-detected at ready; kept in
+// sync by the renderer's setLocale action (auto/manual toggle). The renderer's
+// strings live in Resources/i18n.js (a browser <script>); main keeps its own
+// tiny table since require() of that UMD module is unreliable under this Node.
+let appLang = 'en';
+// The renderer owns the language *preference* (auto/en/ko); main mirrors it so
+// the menu can show the right radio checkmark, and drives changes back to the
+// renderer (which persists + reloads).
+let appLocalePref = 'auto';
+const MAIN_MSG = {
+  menuView: { en: 'View', ko: '보기' },
+  menuTrace: { en: 'Show/Hide Run Log', ko: '실행 과정 표시/숨기기' },
+  menuLanguage: { en: 'Language', ko: '언어' },
+  langAuto: { en: 'Auto (OS)', ko: '자동 (OS)' },
+  dlgSelect: { en: 'Select', ko: '선택' },
+  dlgReference: { en: 'Reference', ko: '참조' },
+  dlgAttach: { en: 'Attach', ko: '첨부' },
+  dlgImages: { en: 'Images', ko: '이미지' },
+  busy: { en: 'Already working.', ko: '이미 작업 중입니다.' },
+  cliNotFound: { en: 'CLI executable not found: {path}', ko: 'CLI 실행 파일을 찾을 수 없습니다: {path}' },
+};
+function M(key, params) {
+  const entry = MAIN_MSG[key];
+  let s = entry ? (entry[appLang] || entry.en) : key;
+  if (params) s = s.replace(/\{(\w+)\}/g, (m, k) => (params[k] != null ? String(params[k]) : m));
+  return s;
+}
+function detectLang(locale) { return /^ko\b/i.test(String(locale || '')) ? 'ko' : 'en'; }
 const running = new Map(); // slotId -> child process
 
 // main→renderer: identical mechanism to native emit: (main.m:1549) —
@@ -75,9 +103,9 @@ function setupMenu() {
     ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
     { role: 'editMenu' },
     {
-      label: '보기',
+      label: M('menuView'),
       submenu: [
-        { label: '실행 과정 표시/숨기기', accelerator: 'CmdOrCtrl+Shift+E', click: toggleTrace },
+        { label: M('menuTrace'), accelerator: 'CmdOrCtrl+Shift+E', click: toggleTrace },
         { type: 'separator' },
         { role: 'reload' },
         { role: 'forceReload' },
@@ -90,9 +118,24 @@ function setupMenu() {
         { role: 'togglefullscreen' },
       ],
     },
+    {
+      label: M('menuLanguage'),
+      submenu: [
+        { label: M('langAuto'), type: 'radio', checked: appLocalePref === 'auto', click: () => setLocaleFromMenu('auto') },
+        { label: 'English', type: 'radio', checked: appLocalePref === 'en', click: () => setLocaleFromMenu('en') },
+        { label: '한국어', type: 'radio', checked: appLocalePref === 'ko', click: () => setLocaleFromMenu('ko') },
+      ],
+    },
     { role: 'windowMenu' },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+// Drive a language change from the menu: the renderer persists it and reloads,
+// then reports the new preference back via setLocale (which rebuilds the menu).
+function setLocaleFromMenu(pref) {
+  if (pref === appLocalePref) return;
+  emit({ type: 'setLocalePref', pref });
 }
 
 // Boot handshake consumed at index.html:1908 (event.type==='boot').
@@ -161,13 +204,13 @@ function runAgent(request) {
   const meta = (extra) => Object.assign({}, metadata, extra);
 
   if (running.has(slotId)) {
-    emit(meta({ type: 'error', message: '이미 작업 중입니다.' }));
+    emit(meta({ type: 'error', message: M('busy') }));
     return;
   }
 
   const executable = util.stringOrNil(config.executablePath);
   if (!executable || !platform.isExecutable(executable)) {
-    emit(meta({ type: 'error', message: `CLI 실행 파일을 찾을 수 없습니다: ${executable || ''}` }));
+    emit(meta({ type: 'error', message: M('cliNotFound', { path: executable || '' }) }));
     return;
   }
 
@@ -329,13 +372,13 @@ function stopAgent(request) {
 // ---- other actions ---------------------------------------------------------
 async function chooseDirectory(payload) {
   const agent = util.stringOrNil(payload.agent) || '';
-  const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'], buttonLabel: '선택' });
+  const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'], buttonLabel: M('dlgSelect') });
   if (!result.canceled && result.filePaths[0]) emit({ type: 'directory', agent, path: result.filePaths[0] });
 }
 
 async function chooseFiles(payload) {
   const workspace = util.stringOrNil(payload.workspace);
-  const options = { properties: ['openFile', 'multiSelections'], buttonLabel: '참조' };
+  const options = { properties: ['openFile', 'multiSelections'], buttonLabel: M('dlgReference') };
   if (workspace) options.defaultPath = workspace;
   const result = await dialog.showOpenDialog(win, options);
   if (result.canceled) return;
@@ -346,8 +389,8 @@ async function chooseImages(payload) {
   const workspace = util.stringOrNil(payload.workspace);
   const options = {
     properties: ['openFile', 'multiSelections'],
-    buttonLabel: '첨부',
-    filters: [{ name: '이미지', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic', 'heif'] }],
+    buttonLabel: M('dlgAttach'),
+    filters: [{ name: M('dlgImages'), extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic', 'heif'] }],
   };
   if (workspace) options.defaultPath = workspace;
   const result = await dialog.showOpenDialog(win, options);
@@ -438,6 +481,7 @@ function dispatch(payload) {
     case 'refreshUsage': return usage.refreshCodex(payload.config, emit);
     case 'authAccount': return auth.run(payload.operation, payload.agent, payload.config, emit);
     case 'checkUpdate': return checkUpdate();
+    case 'setLocale': appLang = payload.locale === 'ko' ? 'ko' : 'en'; if (typeof payload.pref === 'string') appLocalePref = payload.pref; setupMenu(); return;
     default: return;
   }
 }
@@ -447,6 +491,6 @@ ipcMain.on('triad:post', (event, payload) => {
   catch (error) { console.error('[triad-electron] dispatch error:', error); }
 });
 
-app.whenReady().then(() => { createWindow(); setupMenu(); });
+app.whenReady().then(() => { try { appLang = detectLang(app.getLocale()); } catch { /* keep en */ } createWindow(); setupMenu(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

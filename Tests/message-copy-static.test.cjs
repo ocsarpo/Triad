@@ -8,7 +8,8 @@ const native = fs.readFileSync(path.join(__dirname, '../Native/main.m'), 'utf8')
 
 test('각 말풍선은 렌더링 결과가 아닌 저장된 원문을 전체 복사한다', () => {
   assert.match(renderer, /copy.className='bubble-copy'/);
-  assert.match(renderer, /copyMessageText\(m\.id,String\(m\.text\|\|''\)\)/);
+  assert.match(renderer, /copyMessageText\(m\.id,fullBody\)/);
+  assert.match(renderer, /const fullBody=String\(m\.fullText\|\|m\.text\|\|''\)/);
   assert.match(renderer, /마크다운과 줄바꿈을 포함한 원문 전체 복사/);
   assert.match(renderer, /copy\.addEventListener\('click',event=>\{event\.preventDefault\(\);event\.stopPropagation\(\);/);
 });
@@ -34,7 +35,7 @@ test('스트리밍 재렌더 뒤에도 messageId 기반 복사 피드백을 이�
   assert.match(renderer, /state\.clipboardRequests\[requestId\]=\{messageId,text,timer\}/);
   assert.match(renderer, /function applyCopyFeedback\(button, messageId, hasText\)/);
   assert.match(renderer, /const feedback=state\.copyFeedback\[messageId\]/);
-  assert.match(renderer, /applyCopyFeedback\(copy,m\.id,String\(m\.text\|\|''\)\.length>0\)/);
+  assert.match(renderer, /applyCopyFeedback\(copy,m\.id,fullBody\.length>0\)/);
 });
 
 test('AI 말풍선 하단에는 전체 복사와 답장 액션을 함께 표시한다', () => {

@@ -1,12 +1,12 @@
 {
   "name": "triad-electron",
-  "version": "0.48.12",
+  "version": "0.48.13",
   "private": true,
   "description": "Electron shell for Triad (macOS-first, Windows port later).",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "pack": "electron-packager . Triad --platform=darwin --arch=arm64 --out=dist --overwrite --extra-resource=../Resources --icon=../Resources/Triad.icns --app-bundle-id=kr.co.ocsarpo.triad-electron",
+    "pack": "electron-packager . Triad --platform=darwin --arch=arm64 --out=dist --overwrite --extra-resource=../Resources --icon=../Resources/Triad.icns --app-bundle-id=kr.co.ocsarpo.triad-electron --asar.unpack=**/node-pty/**",
     "dist": "electron-builder",
     "dist:mac": "electron-builder --mac"
   },
@@ -16,6 +16,9 @@
     "directories": {
       "output": "dist"
     },
+    "asarUnpack": [
+      "**/node_modules/node-pty/**"
+    ],
     "files": [
       "main.js",
       "preload.js",
@@ -55,7 +58,12 @@
   },
   "devDependencies": {
     "@electron/packager": "^20.0.4",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0"
   }
 }

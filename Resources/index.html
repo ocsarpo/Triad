@@ -86,7 +86,13 @@
     .usage-refresh.loading { animation: spin .8s linear infinite; }
     .trace-toggle { height: 28px; flex: none; padding: 0 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--muted); white-space: nowrap; font-size: 10px; }
     .chat-workspace { min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0,1fr); overflow: hidden; }
-    .chat.diff-open .chat-workspace, .chat.board-open .chat-workspace { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+    .chat.diff-open .chat-workspace, .chat.board-open .chat-workspace, .chat.terminal-open .chat-workspace { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+    .terminal-pane { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0,1fr); overflow: hidden; border-left: 1px solid var(--line); background: #1a1b1e; }
+    .terminal-pane[hidden] { display: none; }
+    .terminal-head { display: flex; align-items: center; gap: 9px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    .terminal-head h2 { margin: 0 4px 0 0; font-size: 13px; }
+    .terminal-cwd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .terminal-body { min-width: 0; min-height: 0; overflow: hidden; padding: 4px 8px; }
     .message-pane { position: relative; min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(0,1fr); overflow: hidden; }
     .diff-pane { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0,1fr); overflow: hidden; border-left: 1px solid var(--line); background: var(--card); }
     .diff-pane[hidden] { display: none; }
@@ -392,6 +398,7 @@
           <button class="usage-refresh" id="refresh-usage" title="사용량 새로고침">↻</button>
           <button class="trace-toggle" id="diff-toggle">변경 사항</button>
           <button class="trace-toggle" id="board-toggle">공유 보드</button>
+          <button class="trace-toggle" id="terminal-toggle">터미널</button>
           <button class="trace-toggle" id="trace-toggle">실행 과정 숨기기</button>
         </div>
       </header>
@@ -404,6 +411,10 @@
         <section class="board-pane" id="board-pane" aria-label="에이전트 공유 문서" hidden>
           <div class="board-head"><h2>공유 문서</h2><span class="board-meta" id="board-meta"></span><button class="small-btn" id="board-new">＋ 새 문서</button><button class="small-btn" id="board-close">닫기</button></div>
           <div class="board-body" id="board-body"></div>
+        </section>
+        <section class="terminal-pane" id="terminal-pane" aria-label="터미널" hidden>
+          <div class="terminal-head"><h2>터미널</h2><span class="terminal-cwd" id="terminal-cwd"></span><span class="spacer"></span><button class="small-btn" id="terminal-restart" title="셸 다시 시작">↻</button><button class="small-btn" id="terminal-close">닫기</button></div>
+          <div class="terminal-body" id="terminal-body"></div>
         </section>
       </div>
       <footer class="composer">
@@ -482,6 +493,9 @@
   <script src="session-budget.js"></script>
   <script src="file-search.js"></script>
   <script src="version.js"></script>
+  <link rel="stylesheet" href="vendor/xterm.css">
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/addon-fit.js"></script>
   <script>
     const agents = ['codex', 'claude'];
     const names = { codex: 'Codex', claude: 'Claude' };
@@ -505,7 +519,7 @@
       running: { codex: false, claude: false },
       responseIds: {}, lineBuffers: { codex: '', claude: '' }, stderr: { codex: '', claude: '' },
       brokerMessages:{},
-      clipboardRequests:{}, copyFeedback:{}, pendingImages:[],
+      clipboardRequests:{}, copyFeedback:{}, pendingImages:[], expandedTexts:{},
       localePref: localStorage.getItem('triad.locale')||'auto',
       pending: {}, retryOnTermination: { codex:false, claude:false }, stopRequested: { codex:false, claude:false },
       tokenStatus: { codex: false, claude: false },
@@ -514,7 +528,7 @@
       projectFiles:{codex:{workspace:'',files:[],loading:false,error:''},claude:{workspace:'',files:[],loading:false,error:''}},
       settingsOpen:{codex:{model:true,environment:false,account:false,session:false},claude:{model:true,environment:false,account:false,session:false}},
       diff:{visible:false,agent:'codex',loading:false,text:'',error:'',workspace:'',truncated:false,selectedFileId:null},
-      boardVisible:false
+      boardVisible:false, terminalVisible:false
     };
     // --- i18n: English by default, auto-switch to OS language (ko supported).
     // Korean stays the source string; English is applied at runtime by a scoped
@@ -984,8 +998,53 @@
       const rootTop=content.getBoundingClientRect().top;const offsets=[...content.querySelectorAll('.diff-file-section')].map(section=>({id:section.dataset.diffFileId,top:section.getBoundingClientRect().top-rootTop+content.scrollTop-18}));
       setActiveDiffFile(window.TriadDiff.activeFileIdForOffsets(offsets,content.scrollTop));
     }
-    function openDiff(){if(state.diff.visible){closeDiff();return;}closeBoard();state.diff.visible=true;renderDiff();refreshProjectDiff(state.diff.agent);requestAnimationFrame(updateScrollButton);}
+    function openDiff(){if(state.diff.visible){closeDiff();return;}closeBoard();closeTerminal();state.diff.visible=true;renderDiff();refreshProjectDiff(state.diff.agent);requestAnimationFrame(updateScrollButton);}
     function closeDiff(){state.diff.visible=false;renderDiff();requestAnimationFrame(updateScrollButton);}
+    // ---- integrated terminal (xterm.js ↔ node-pty via the shell) ----------
+    let termSession=null;
+    function openTerminal(){
+      if(state.terminalVisible){closeTerminal();return;}
+      closeDiff();closeBoard();
+      state.terminalVisible=true;document.querySelector('.chat').classList.add('terminal-open');
+      document.getElementById('terminal-pane').hidden=false;
+      document.getElementById('terminal-toggle').textContent=tc('터미널 닫기');
+      startTerminalSession();requestAnimationFrame(updateScrollButton);
+    }
+    function closeTerminal(){
+      if(!state.terminalVisible)return;
+      state.terminalVisible=false;document.querySelector('.chat').classList.remove('terminal-open');
+      document.getElementById('terminal-pane').hidden=true;
+      document.getElementById('terminal-toggle').textContent=tc('터미널');
+      stopTerminalSession();requestAnimationFrame(updateScrollButton);
+    }
+    function startTerminalSession(){
+      if(termSession||typeof window.Terminal!=='function')return;
+      const host=document.getElementById('terminal-body');host.innerHTML='';
+      const dark=matchMedia('(prefers-color-scheme: dark)').matches;
+      const term=new window.Terminal({fontFamily:'ui-monospace, SFMono-Regular, Menlo, monospace',fontSize:12,cursorBlink:true,allowProposedApi:true,theme:{background:'#1a1b1e',foreground:dark?'#e6e6e6':'#f3f4f6',cursor:'#e6e6e6'}});
+      const fit=new window.FitAddon.FitAddon();term.loadAddon(fit);term.open(host);
+      const cwd=effectiveWorkspacePath('codex')||effectiveWorkspacePath('claude')||'';
+      document.getElementById('terminal-cwd').textContent=cwd;
+      const dataOff=window.triadPty.onData(d=>term.write(d));
+      const exitOff=window.triadPty.onExit(({exitCode})=>term.write(`\r\n\x1b[90m[${tc('셸 종료')} · exit ${exitCode}]\x1b[0m\r\n`));
+      term.onData(d=>post({action:'ptyInput',data:d}));
+      // fit(), then keep one row of slack: cell height is often fractional, so
+      // the last row can overflow by a few px and get clipped by overflow:hidden.
+      const doFit=()=>{try{fit.fit();if(term.rows>2)term.resize(term.cols,term.rows-1);}catch{}};
+      const ro=new ResizeObserver(()=>{if(!state.terminalVisible)return;doFit();post({action:'ptyResize',cols:term.cols,rows:term.rows});});ro.observe(host);
+      requestAnimationFrame(()=>{doFit();post({action:'ptyStart',cwd,cols:term.cols||80,rows:term.rows||24});term.focus();});
+      termSession={term,fit,dataOff,exitOff,ro};
+    }
+    function stopTerminalSession(){
+      if(!termSession)return;
+      post({action:'ptyStop'});
+      try{termSession.dataOff&&termSession.dataOff();}catch{}
+      try{termSession.exitOff&&termSession.exitOff();}catch{}
+      try{termSession.ro&&termSession.ro.disconnect();}catch{}
+      try{termSession.term.dispose();}catch{}
+      termSession=null;
+    }
+    function restartTerminalSession(){if(!state.terminalVisible)return;stopTerminalSession();startTerminalSession();}
     function openBoard(){
       if(state.boardVisible){closeBoard();return;}
       closeDiff();state.boardVisible=true;post({action:'listSharedDocuments'});renderSharedBoard();requestAnimationFrame(updateScrollButton);
@@ -1217,19 +1276,31 @@
       }
       if(state.orchestration?.mode==='agent'&&event.used)state.orchestration.handoffs=Math.max(state.orchestration.handoffs||0,Number(event.used));
       if(event.eventType==='agent_call_started'){
-        const reason=event.reason?`\n\n호출 이유: ${event.reason}`:'';
+        const reason=event.reason?L('callReason',{r:event.reason}):'';
+        // Seal the asking agent's current segment bubble so its post-answer
+        // continuation starts a NEW bubble BELOW the Q&A — otherwise one bubble
+        // keeps growing across every handoff and the reader must scroll up.
+        if(state.responseIds[from]){updateMessage(state.responseIds[from],m=>{m.streaming=false;if(!m.completedAt)m.completedAt=Date.now();});state.responseIds[from]=null;}
+        // The question is its own message and STAYS put (spinner = awaiting the
+        // answer); the answer arrives as a separate message so both remain
+        // visible in chronological order.
         state.brokerMessages[event.id]=addMessage('system',L('handoffAsk',{from:names[from],to:names[to],count,question:event.question||'',reason}),true);
         addTrace(from,'info',`${names[to]} 보조 호출`,{question:event.question,reason:event.reason,count,depth:event.depth});
       }else if(event.eventType==='agent_call_completed'){
-        const answer=String(event.answer||'').trim();const preview=answer.length>3000?`${answer.slice(0,3000)}\n\n… 답변이 길어 일부만 표시했습니다.`:answer;
-        const messageId=state.brokerMessages[event.id]||addMessage('system','',true);
-        updateMessage(messageId,message=>{message.text=`**${names[from]} ← ${names[to]} · 답변 도착 ✓ · ${count}**\n\n${preview}\n\n${names[from]}가 답변을 반영해 작업을 계속합니다.`;message.streaming=false;});
+        const answer=String(event.answer||'').trim();const truncated=answer.length>3000;
+        const preview=truncated?`${answer.slice(0,3000)}\n\n${L('answerTruncated')}`:answer;
+        const fields={from:names[from],to:names[to],count};
+        const qid=state.brokerMessages[event.id];if(qid)updateMessage(qid,m=>{m.streaming=false;}); // finalize the question (spinner off), keep its text
+        const answerId=addMessage('system',L('handoffAnswer',{...fields,body:preview}),false); // separate answer message
+        if(truncated)updateMessage(answerId,m=>{m.fullText=L('handoffAnswer',{...fields,body:answer});});
         if(state.orchestration?.mode==='agent')state.orchestration.mcpCalls=Math.max(state.orchestration.mcpCalls||0,Number(event.used)||1);
         delete state.brokerMessages[event.id];addTrace(to,'success',`${names[from]}에게 보조 답변 반환`,{count,duration_ms:event.durationMs,characters:answer.length});
+        drainPendingAgentFinish();
       }else if(event.eventType==='agent_call_failed'){
-        const messageId=state.brokerMessages[event.id]||addMessage('system','',true);
-        updateMessage(messageId,message=>{message.text=`**${names[from]} → ${names[to]} · AI 호출 실패 · ${count}**\n\n⚠️ ${event.error||'알 수 없는 오류'}\n\n${names[from]}가 현재 정보로 작업을 계속합니다.`;message.streaming=false;});
+        const qid=state.brokerMessages[event.id];if(qid)updateMessage(qid,m=>{m.streaming=false;});
+        addMessage('system',L('handoffFailed',{from:names[from],to:names[to],count,error:event.error||L('unknownError')}),false);
         delete state.brokerMessages[event.id];addTrace(to,'error','보조 AI 호출 실패',{count,error:event.error,duration_ms:event.durationMs});
+        drainPendingAgentFinish();
       }
       renderCollaboration();
     }
@@ -1342,11 +1413,13 @@
         const who = document.createElement('div'); who.className = 'who'; who.textContent = label;
         if (m.streaming) { const spin = document.createElement('span'); spin.className='spinner'; who.appendChild(spin); }
         const actions=document.createElement('div');actions.className='bubble-actions';
+        const fullBody=String(m.fullText||m.text||''); // truncated bubbles copy/expand the full answer
         const copy=document.createElement('button');copy.type='button';copy.className='bubble-copy';copy.textContent='전체 복사';copy.title='마크다운과 줄바꿈을 포함한 원문 전체 복사';
-        applyCopyFeedback(copy,m.id,String(m.text||'').length>0);
+        applyCopyFeedback(copy,m.id,fullBody.length>0);
         copy.addEventListener('mousedown',event=>event.stopPropagation());
-        copy.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();copyMessageText(m.id,String(m.text||''));});
+        copy.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();copyMessageText(m.id,fullBody);});
         actions.appendChild(copy);
+        if(m.fullText){const expandedNow=!!state.expandedTexts[m.id];const toggle=document.createElement('button');toggle.type='button';toggle.className='bubble-copy';toggle.textContent=expandedNow?L('collapseAnswer'):L('viewFullAnswer');toggle.addEventListener('mousedown',event=>event.stopPropagation());toggle.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(expandedNow)delete state.expandedTexts[m.id];else state.expandedTexts[m.id]=true;renderMessages();});actions.appendChild(toggle);}
         if(agents.includes(m.author)){const reply=document.createElement('button');reply.type='button';reply.className='bubble-copy';reply.textContent='답장';reply.title=m.recordId?'이 AI에게 이 실행 기록을 참고해 답장합니다.':'이 AI에게 답장합니다.';reply.onclick=event=>{event.preventDefault();event.stopPropagation();const draft=document.getElementById('draft');const agentTag=`#${m.replyAgent||m.author}`;const text=draft.value;const additions=[];if(!/(?:^|\s)#(?:codex|claude)(?=\s|$)/.test(text))additions.push(agentTag);const reference=m.recordId?`@실행[${m.recordId}]`:'';if(reference&&!text.includes(reference))additions.push(reference);if(additions.length)draft.value=`${text}${text.trim()?' ':''}${additions.join(' ')} `;draft.focus();updateRoutingPreview();};actions.appendChild(reply);}
         const bubble = document.createElement('div'); bubble.className='bubble';
         if(Array.isArray(m.attachments)&&m.attachments.length){
@@ -1354,7 +1427,7 @@
           for(const p of m.attachments){const im=document.createElement('img');im.src=imageFileURL(p);im.alt=(String(p).split('/').pop())||'이미지';im.title=p;imgs.appendChild(im);}
           bubble.appendChild(imgs);
         }
-        renderMarkdownText(bubble,m.text || '생각 중…');
+        renderMarkdownText(bubble,((m.fullText&&state.expandedTexts[m.id])?m.fullText:m.text) || '생각 중…');
         const stamp=document.createElement('div');stamp.className='bubble-time';
         if(agents.includes(m.author)){
           const t=[];
@@ -1449,7 +1522,14 @@
       }
       if(rotationReason){addTrace(agent,'info','다음 작업 새 세션',rotationReason);save();}
       const runId=id();
-      const responseRecordId=sharedContext?.runId?window.TriadRunReference.recordIdFor({runId:sharedContext.runId},contextDocumentId(sharedContext)):null;state.pending[agent]={prompt,retried:false,isolated,sessionStore,sharedContext,usageRecorded:false,sessionId:session,runId,conversationId,config,agentConfigs,collaboration,images};state.responseIds[agent]=addMessage(agent,'',true,{recordId:responseRecordId,runId:sharedContext?.runId||null,documentId:contextDocumentId(sharedContext),replyAgent:agent});renderStatus();
+      const responseRecordId=sharedContext?.runId?window.TriadRunReference.recordIdFor({runId:sharedContext.runId},contextDocumentId(sharedContext)):null;
+      const bubbleMeta={recordId:responseRecordId,runId:sharedContext?.runId||null,documentId:contextDocumentId(sharedContext),replyAgent:agent};
+      state.pending[agent]={prompt,retried:false,isolated,sessionStore,sharedContext,usageRecorded:false,sessionId:session,runId,conversationId,config,agentConfigs,collaboration,images,bubbleMeta};
+      // In agent collaboration a single run spans the 회의실 Q&A; defer this
+      // agent's answer bubble to its first token so it lands BELOW the Q&A in
+      // chronological order instead of a top bubble the user must scroll up to.
+      const lazyBubble=isolated&&state.orchestration?.mode==='agent';
+      state.responseIds[agent]=lazyBubble?null:addMessage(agent,'',true,bubbleMeta);renderStatus();
       addTrace(agent,'info','명령 전달',{model:config.model,effort:config.effort,speed:config.speedMode,workspace:config.workspacePath,writableRoots:config.writableRoots||'',networkAccess:!!config.networkAccess,allowLocalBinding:!!config.allowLocalBinding,session:session?'resume':'new',isolated,mode:state.orchestration?.mode||'independent'});
       post({action:'run',agent,conversationId,slotId:`${conversationId}:${agent}`,prompt,config,agentConfigs,collaboration,mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,sharedContext),sharedContext,session,runId,images});return true;
     }
@@ -1700,6 +1780,25 @@
       addTrace(agent,'success','에이전트 협업 완료',{handoffs:flow.handoffs});
       state.orchestration=null;addMessage('system',message);renderCollaboration();scheduleQueueDrain();
     }
+    // The 회의실 Q&A messages arrive over a 150ms file-watch tail, so the agent
+    // process can exit before the last answer is rendered — which would post
+    // "완료" ABOVE the answer. Hold completion until outstanding broker calls
+    // drain (and, for MCP flows, give the watch tail a moment to flush).
+    function finishAgentFlowWhenReady(flow, agent, message){
+      const go=()=>{
+        if(state.orchestration!==flow||flow.cancelled)return;
+        if(Object.keys(state.brokerMessages).length){flow.pendingFinish={agent,message};renderCollaboration();return;}
+        finishAgentCollaboration(flow,agent,message);
+      };
+      if(flow.mcpCalls>0)setTimeout(()=>{if(state.orchestration===flow)withConversation(flow.conversationId,go);},500);
+      else go();
+    }
+    function drainPendingAgentFinish(){
+      const flow=state.orchestration;
+      if(flow?.pendingFinish&&!Object.keys(state.brokerMessages).length){
+        const pf=flow.pendingFinish;flow.pendingFinish=null;finishAgentCollaboration(flow,pf.agent,pf.message);
+      }
+    }
     function runNextCollaborationTurn() {
       const flow=state.orchestration;if(!flow||flow.cancelled)return;
       if(flow.conversationId&&flow.conversationId!==state.activeConversationId)return withConversation(flow.conversationId,()=>runNextCollaborationTurn());
@@ -1837,7 +1936,8 @@
         }
       }
     }
-    function appendAgentText(agent, text) { updateMessage(state.responseIds[agent], m => { if(!m.startedAt)m.startedAt=Date.now(); m.text += text; }); }
+    function ensureResponseBubble(agent) { if(!state.responseIds[agent]){const p=state.pending[agent];state.responseIds[agent]=addMessage(agent,'',true,p?.bubbleMeta||{});} return state.responseIds[agent]; }
+    function appendAgentText(agent, text) { ensureResponseBubble(agent); updateMessage(state.responseIds[agent], m => { if(!m.startedAt)m.startedAt=Date.now(); m.text += text; }); }
     function currentText(agent) { return state.messages.find(m=>m.id===state.responseIds[agent])?.text || ''; }
     function waitForIndependentContribution(agent, pending, done) {
       const context=pending?.sharedContext;const board=context?.board;
@@ -1890,6 +1990,7 @@
       const pending=state.pending[agent];
       message=friendlyError(message);
       addTrace(agent,'error','실행 실패',message);
+      ensureResponseBubble(agent); // lazy agent-mode bubble may not exist yet
       updateMessage(state.responseIds[agent], m => { m.text += (m.text?'\n\n':'') + '⚠️ ' + message; m.streaming=false; m.completedAt=Date.now(); });
       state.running[agent]=false; delete state.pending[agent];delete state.responseIds[agent];
       if(state.orchestration){state.orchestration=null;addMessage('system',L('agentErrAbort'));renderCollaboration();}
@@ -1916,6 +2017,7 @@
       const err=friendlyError(state.stderr[agent].trim());
       const providerError=pending?.providerError||'';
       const failed=exitCode!==0||!!providerError;
+      if(failed)ensureResponseBubble(agent); // surface the error even if no token ever arrived (lazy agent-mode bubble)
       updateMessage(state.responseIds[agent], m => {
         if (failed) m.text += (m.text?'\n\n':'') + '⚠️ ' + (providerError || err || `프로세스 종료 코드 ${exitCode}`);
         if (!m.text) m.text='응답 없이 종료되었습니다.'; m.streaming=false; m.completedAt=Date.now();
@@ -1954,7 +2056,7 @@
         }
         if(parsed.handoff){
           if(flow.mcpCalls>0){
-            addTrace(agent,'info','MCP 협업 완료 후 중복 인계 마커 무시',parsed.handoff);finishAgentCollaboration(flow,agent);return;
+            addTrace(agent,'info','MCP 협업 완료 후 중복 인계 마커 무시',parsed.handoff);finishAgentFlowWhenReady(flow,agent);return;
           }
           if(task.noHandoff){
             addTrace(agent,'error','마무리 단계에서 추가 위임 요청',parsed.handoff);
@@ -1977,7 +2079,7 @@
           addTrace(agent,'success',`${names[task.requester]}에게 답변 반환`,{characters:answer.length});
           setTimeout(()=>runAgentTurn({agent:task.requester,kind:'agent_work',received:answer,from:agent}),0);return;
         }
-        finishAgentCollaboration(flow,agent);return;
+        finishAgentFlowWhenReady(flow,agent);return;
       }
       flow.lastAgent=agent;flow.current=null;
       // MCP broker events can arrive a fraction after the CLI termination
@@ -2086,6 +2188,7 @@
         renderAttachStrip();
       }
       else if (event.type==='setLocalePref') setLocalePref(event.pref); // language change from the app menu
+      else if (event.type==='ptyError') { if(termSession)termSession.term.write(`\r\n\x1b[31m[${event.message||'terminal error'}]\x1b[0m\r\n`); }
       else if(event.type==='projectFiles') {
         state.projectFiles[event.agent]={workspace:event.workspace||effectiveWorkspacePath(event.agent)||'',files:event.files||[],loading:false,error:event.error||'',truncated:!!event.truncated};
         if(!isBackgroundRuntime()&&autocomplete.open&&autocomplete.type==='file')updateAutocomplete();
@@ -2472,6 +2575,9 @@
     (()=>{const b=document.getElementById('copy-traces');if(b)b.onclick=()=>copyPlainText(traceExportText(),b);})();
     document.getElementById('trace-toggle').onclick=()=>{state.traceVisible=!state.traceVisible;localStorage.setItem('triad.traceVisible',String(state.traceVisible));renderTraceVisibility();};
     document.getElementById('diff-toggle').onclick=openDiff;
+    document.getElementById('terminal-toggle').onclick=openTerminal;
+    document.getElementById('terminal-close').onclick=closeTerminal;
+    document.getElementById('terminal-restart').onclick=restartTerminalSession;
     document.getElementById('diff-close').onclick=closeDiff;
     document.getElementById('diff-refresh').onclick=()=>refreshProjectDiff();
     document.getElementById('diff-agent').onchange=event=>refreshProjectDiff(event.target.value);

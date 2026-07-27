@@ -61,6 +61,16 @@ function gitBinDarwin() {
   return isExecutable('/usr/bin/git') ? '/usr/bin/git' : 'git';
 }
 
+// Interactive shell for the integrated terminal. `$SHELL` is the user's own
+// login shell (set by macOS); fall back to zsh (default since Catalina), then
+// bash. Args make it a login+interactive shell so the user's PATH/aliases load.
+function defaultShellDarwin() {
+  const shell = process.env.SHELL && isExecutable(process.env.SHELL)
+    ? process.env.SHELL
+    : (isExecutable('/bin/zsh') ? '/bin/zsh' : '/bin/bash');
+  return { file: shell, args: ['-l'] };
+}
+
 // ----- win32 (TODO: implement when building on a Windows machine) ----------
 // Windows has no Homebrew/`/usr/local` layout and CLIs installed via npm show
 // up as `.cmd` shims on PATH (or under %APPDATA%\npm), so this needs its own
@@ -88,6 +98,12 @@ function gitBinWin32() {
   return 'git';
 }
 
+function defaultShellWin32() {
+  // node-pty uses ConPTY on Windows 10+. PowerShell is the sensible default;
+  // COMSPEC (cmd.exe) is the universal fallback. No login-shell flag concept.
+  return { file: process.env.COMSPEC || 'powershell.exe', args: [] };
+}
+
 // ----- seam -------------------------------------------------------------------
 function resolveExecutable(name) {
   return process.platform === 'win32' ? resolveExecutableWin32(name) : resolveExecutableDarwin(name);
@@ -101,8 +117,12 @@ function gitBin() {
   return process.platform === 'win32' ? gitBinWin32() : gitBinDarwin();
 }
 
+function defaultShell() {
+  return process.platform === 'win32' ? defaultShellWin32() : defaultShellDarwin();
+}
+
 function appDataDir() {
   return app.getPath('userData');
 }
 
-module.exports = { resolveExecutable, agentPathEnv, gitBin, appDataDir, isExecutable };
+module.exports = { resolveExecutable, agentPathEnv, gitBin, appDataDir, isExecutable, defaultShell };

@@ -45,8 +45,8 @@ test('종료 이벤트는 실행 ID로 늦은 이벤트를 무시한다', () => 
 });
 
 test('대기열 생명주기 변경의 앱 버전은 이 테스트에서 검증한다', () => {
-  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.48\.12<\/string>/);
-  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>82<\/string>/);
+  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.48\.13<\/string>/);
+  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>83<\/string>/);
 });
 
 test('독립 실행은 대상 슬롯과 공유 문서 충돌을 분리해 판단한다', () => {

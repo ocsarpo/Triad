@@ -41,7 +41,7 @@ test('렌더러는 대기 이미지 상태와 첨부 UI를 갖는다', () => {
 test('이미지는 실행 페이로드로 흐르며 사용자 메시지 첨부로 저장된다', () => {
   // dispatchAgent 옵션 -> pending -> run 페이로드
   assert.match(renderer, /const images=Array\.isArray\(options\.images\)\?options\.images\.filter\(Boolean\):\[\]/);
-  assert.match(renderer, /collaboration,images\};/); // state.pending 항목
+  assert.match(renderer, /collaboration,images,bubbleMeta\};/); // state.pending 항목
   assert.match(renderer, /sharedContext,session,runId,images\}\)/); // run 페이로드
   // send()에서 대기 이미지를 캡처하고 전송 후 비운다.
   assert.match(renderer, /const images=state\.pendingImages\.slice\(\)/);

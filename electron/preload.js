@@ -16,3 +16,11 @@ contextBridge.exposeInMainWorld('webkit', {
     },
   },
 });
+
+// Dedicated high-throughput channel for the integrated terminal's output —
+// PTY data can be voluminous, so it bypasses the window.nativeEvent path
+// (executeJavaScript per chunk) in favour of a direct ipc stream.
+contextBridge.exposeInMainWorld('triadPty', {
+  onData: (cb) => { const l = (_e, d) => cb(d); ipcRenderer.on('triad:pty-data', l); return () => ipcRenderer.removeListener('triad:pty-data', l); },
+  onExit: (cb) => { const l = (_e, d) => cb(d); ipcRenderer.on('triad:pty-exit', l); return () => ipcRenderer.removeListener('triad:pty-exit', l); },
+});

@@ -457,6 +457,36 @@ function checkUpdate() {
     .catch(() => {});
 }
 
+// ---- integrated terminal (node-pty) ---------------------------------------
+// A single interactive PTY tied to the terminal panel. Input/resize/start/stop
+// arrive over the normal post() bridge; the high-volume output stream goes back
+// over a dedicated ipc channel (triad:pty-data) rather than executeJavaScript.
+let ptyProc = null;
+function ptyStart(payload) {
+  ptyStop();
+  let pty;
+  try { pty = require('node-pty'); }
+  catch (error) { emit({ type: 'ptyError', message: (error && error.message) || 'node-pty를 불러오지 못했습니다.' }); return; }
+  const home = os.homedir();
+  const { file, args } = platform.defaultShell();
+  let cwd = home;
+  try { if (payload.cwd && require('fs').statSync(payload.cwd).isDirectory()) cwd = payload.cwd; } catch { /* fall back to home */ }
+  const env = Object.assign({}, process.env, { TERM: 'xterm-256color', PATH: platform.agentPathEnv(home) });
+  try {
+    ptyProc = pty.spawn(file, args, {
+      name: 'xterm-256color',
+      cols: Number(payload.cols) || 80,
+      rows: Number(payload.rows) || 24,
+      cwd, env,
+    });
+  } catch (error) { emit({ type: 'ptyError', message: (error && error.message) || '셸을 시작하지 못했습니다.' }); ptyProc = null; return; }
+  ptyProc.onData((data) => { if (win && !win.isDestroyed()) win.webContents.send('triad:pty-data', data); });
+  ptyProc.onExit(({ exitCode }) => { if (win && !win.isDestroyed()) win.webContents.send('triad:pty-exit', { exitCode }); ptyProc = null; });
+}
+function ptyInput(payload) { if (ptyProc && typeof payload.data === 'string') { try { ptyProc.write(payload.data); } catch { /* pty may have exited */ } } }
+function ptyResize(payload) { if (ptyProc) { try { ptyProc.resize(Math.max(1, Number(payload.cols) || 80), Math.max(1, Number(payload.rows) || 24)); } catch { /* ignore */ } } }
+function ptyStop() { if (ptyProc) { try { ptyProc.kill(); } catch { /* ignore */ } ptyProc = null; } }
+
 function dispatch(payload) {
   if (!payload || typeof payload !== 'object') return;
   switch (payload.action) {
@@ -482,6 +512,10 @@ function dispatch(payload) {
     case 'authAccount': return auth.run(payload.operation, payload.agent, payload.config, emit);
     case 'checkUpdate': return checkUpdate();
     case 'setLocale': appLang = payload.locale === 'ko' ? 'ko' : 'en'; if (typeof payload.pref === 'string') appLocalePref = payload.pref; setupMenu(); return;
+    case 'ptyStart': return ptyStart(payload);
+    case 'ptyInput': return ptyInput(payload);
+    case 'ptyResize': return ptyResize(payload);
+    case 'ptyStop': return ptyStop();
     default: return;
   }
 }
@@ -491,6 +525,7 @@ ipcMain.on('triad:post', (event, payload) => {
   catch (error) { console.error('[triad-electron] dispatch error:', error); }
 });
 
+app.on('before-quit', () => { ptyStop(); });
 app.whenReady().then(() => { try { appLang = detectLang(app.getLocale()); } catch { /* keep en */ } createWindow(); setupMenu(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

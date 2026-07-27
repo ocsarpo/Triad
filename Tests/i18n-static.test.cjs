@@ -95,6 +95,22 @@ test('Phase 2: 렌더러가 보간 UI를 L()/tc()로 감싼다', () => {
   assert.match(renderer, /function tc\(ko\)\{ return window\.TriadI18n\.chrome\(effectiveLocale\(\),ko\); \}/);
 });
 
+test('긴 보조 답변은 전문을 message.fullText에 보관하고 전문 보기 토글을 붙인다', () => {
+  // 잘렸을 때만 full 본문 보관, 아니면 제거
+  assert.match(renderer, /const answer=String\(event\.answer\|\|''\)\.trim\(\);const truncated=answer\.length>3000/);
+  // 질문 메시지는 유지, 답변은 별도 메시지로 추가하고 긴 답변은 fullText 보관
+  assert.match(renderer, /const answerId=addMessage\('system',L\('handoffAnswer',\{\.\.\.fields,body:preview\}\),false\)/);
+  assert.match(renderer, /if\(truncated\)updateMessage\(answerId,m=>\{m\.fullText=L\('handoffAnswer',\{\.\.\.fields,body:answer\}\);\}\)/);
+  // fullText가 있으면 전문 보기/접기 토글, 복사는 전문을 대상으로
+  assert.match(renderer, /const fullBody=String\(m\.fullText\|\|m\.text\|\|''\)/);
+  assert.match(renderer, /if\(m\.fullText\)\{const expandedNow=!!state\.expandedTexts\[m\.id\]/);
+  assert.match(renderer, /toggle\.textContent=expandedNow\?L\('collapseAnswer'\):L\('viewFullAnswer'\)/);
+  assert.match(renderer, /\(\(m\.fullText&&state\.expandedTexts\[m\.id\]\)\?m\.fullText:m\.text\)/);
+  // i18n 키
+  assert.equal(i18n.translate('en', 'viewFullAnswer'), 'View full answer');
+  assert.match(i18n.translate('en', 'answerTruncated'), /only part is shown/);
+});
+
 test('셸(main)은 자체 메시지 테이블로 메뉴·다이얼로그·오류를 지역화한다', () => {
   assert.match(main, /const MAIN_MSG = \{/);
   assert.match(main, /function M\(key, params\)/);

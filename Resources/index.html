@@ -1876,15 +1876,17 @@
       }
       flow.lastAgent=agent;flow.current=null;
       // MCP broker events can arrive a fraction after the CLI termination
-      // event.  Wait briefly for that event, then enforce the board contract
-      // instead of falling back to a copied conversation transcript.
+      // event, so wait briefly for that event before checking the board.
       setTimeout(()=>{
         withConversation(flow.conversationId,()=>{
           if(state.orchestration!==flow||flow.cancelled)return;
+          // A missing board write is NOT fatal: record the miss, tell the user,
+          // and keep the collaboration going without that entry (the next turn
+          // just reads a board where this stage is empty).
           const error=window.TriadCollaboration.boardStageError(task,boardFor(flow));
           if(error){
             addTrace(agent,'error','공유 보드 단계 미기록',{phase:task.phase,required:window.TriadCollaboration.requiredBoardField(task)});
-            cancelCollaboration(`${error} 해당 AI가 공유 보드 도구를 사용한 뒤 다시 시도해주세요.`);return;
+            addMessage('system',`⚠️ ${names[agent]||agent}가 이 단계(${task.phase})를 공유 보드에 기록하지 못했습니다. 기록 없이 계속 진행합니다.`);
           }
           runNextCollaborationTurn();
         });

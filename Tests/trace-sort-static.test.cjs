@@ -16,3 +16,8 @@ test('실행 과정은 정렬 토글(최신순/시간순)을 가지며 기본은
   // 토글은 localStorage에 저장
   assert.match(renderer, /state\.traceSort=state\.traceSort==='oldest'\?'newest':'oldest';localStorage\.setItem\('triad\.traceSort',state\.traceSort\)/);
 });
+
+test('실행 과정 패널에 숨기기 버튼이 있고 보이기는 메뉴가 담당한다', () => {
+  assert.match(renderer, /id="hide-traces"/);
+  assert.match(renderer, /getElementById\('hide-traces'\);if\(b\)b\.onclick=\(\)=>\{state\.traceVisible=false;localStorage\.setItem\('triad\.traceVisible','false'\);renderTraceVisibility\(\);\}/);
+});

@@ -14,15 +14,16 @@ test('회의실 질답: 질문 메시지는 유지되고 답변은 별도 메시
   assert.match(renderer, /addMessage\('system',L\('handoffFailed',\{from:names\[from\],to:names\[to\],count,error:event\.error\|\|L\('unknownError'\)\}\),false\)/);
 });
 
-test('시간순 배치: 에이전트 협업 답변 말풍선은 첫 토큰에 지연 생성된다', () => {
-  assert.match(renderer, /const lazyBubble=isolated&&state\.orchestration\?\.mode==='agent'/);
-  assert.match(renderer, /state\.responseIds\[agent\]=lazyBubble\?null:addMessage\(agent,'',true,bubbleMeta\)/);
-  assert.match(renderer, /function ensureResponseBubble\(agent\)/);
+test('시간순 배치: 말풍선은 즉시 생성(작업 표시)하고 핸드오프마다 세그먼트를 봉인한다', () => {
+  // 즉시 생성 → "생각 중…" 스피너로 작업 중임을 항상 표시
+  assert.match(renderer, /state\.responseIds\[agent\]=addMessage\(agent,'',true,bubbleMeta\);renderStatus\(\)/);
+  assert.doesNotMatch(renderer, /const lazyBubble=/);
+  assert.match(renderer, /function ensureResponseBubble\(agent\)/); // 봉인 후 이어지는 세그먼트용
   assert.match(renderer, /function appendAgentText\(agent, text\) \{ ensureResponseBubble\(agent\)/);
-  // 실패/오류 시엔 토큰이 없어도 말풍선을 만들어 오류를 표시
   assert.match(renderer, /if\(failed\)ensureResponseBubble\(agent\)/);
-  // 핸드오프 시 현재 세그먼트를 봉인 → 다음 출력은 새 말풍선 (한 말풍선 누적 방지)
-  assert.match(renderer, /if\(state\.responseIds\[from\]\)\{updateMessage\(state\.responseIds\[from\],m=>\{m\.streaming=false;if\(!m\.completedAt\)m\.completedAt=Date\.now\(\);\}\);state\.responseIds\[from\]=null;\}/);
+  // 핸드오프 시 세그먼트 봉인 + 빈 세그먼트(스피너만)는 제거 → 새 말풍선은 Q&A 아래
+  assert.match(renderer, /if\(seg&&!String\(seg\.text\|\|''\)\.trim\(\)\)state\.messages=state\.messages\.filter\(m=>m\.id!==segId\)/);
+  assert.match(renderer, /else if\(seg\)updateMessage\(segId,m=>\{m\.streaming=false;if\(!m\.completedAt\)m\.completedAt=Date\.now\(\);\}\)/);
 });
 
 test('완료 조기표기 방지: 미해결 회의실 질답이 있으면 "완료"를 보류한다', () => {

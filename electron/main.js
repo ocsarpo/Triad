@@ -194,6 +194,9 @@ function runAgent(request) {
   const agent = util.stringOrNil(request.agent);
   const prompt = util.stringOrNil(request.prompt);
   const config = util.dictOrNil(request.config);
+  // A slot (agent id) may run a second Codex/Claude session, so the CLI to
+  // build args for comes from the slot's provider, not its id.
+  const provider = (config && util.stringOrNil(config.provider)) || agent;
   const session = util.stringOrNil(request.session);
   const runId = util.stringOrNil(request.runId) || '';
   const conversationId = util.stringOrNil(request.conversationId) || '';
@@ -236,7 +239,7 @@ function runAgent(request) {
   let promptToSend = prompt;
 
   const args = [];
-  if (agent === 'codex') {
+  if (provider === 'codex') {
     // In non-interactive `exec`, codex gates every MCP tool call behind
     // approval and auto-denies it ("user cancelled MCP tool call") — verified
     // that trust_level, approval_policy=never, project trust, and --full-auto

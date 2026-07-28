@@ -14,12 +14,12 @@ const util = require('./util');
 
 const running = new Set(); // agents with an in-flight auth task
 
-function argsFor(agent, operation) {
-  if (agent === 'codex') {
+function argsFor(provider, operation) {
+  if (provider === 'codex') {
     if (operation === 'status') return ['login', 'status'];
     if (operation === 'connect') return ['login'];
     if (operation === 'logout') return ['logout'];
-  } else if (agent === 'claude') {
+  } else if (provider === 'claude') {
     if (operation === 'status') return ['auth', 'status', '--json'];
     if (operation === 'connect') return ['auth', 'login', '--claudeai'];
     if (operation === 'logout') return ['auth', 'logout'];
@@ -39,7 +39,8 @@ function run(operation, agent, config, emit) {
     emit({ type: 'authStatus', agent, connected: false, message: `CLI 실행 파일을 찾을 수 없습니다: ${executable || ''}` });
     return;
   }
-  const args = argsFor(agent, operation);
+  const provider = util.stringOrNil(config.provider) || agent;
+  const args = argsFor(provider, operation);
   if (!args) return;
 
   const env = Object.assign({}, process.env);

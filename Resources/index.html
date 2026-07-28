@@ -84,7 +84,8 @@
     .agent-pill .usage-summary { margin-top: 1px; color: color-mix(in srgb, var(--text), var(--muted) 45%); font-size: 9px; }
     .usage-refresh { width: 28px; height: 28px; flex: none; padding: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--muted); }
     .usage-refresh.loading { animation: spin .8s linear infinite; }
-    .trace-toggle { height: 28px; flex: none; padding: 0 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--muted); white-space: nowrap; font-size: 10px; }
+    .trace-toggle { position: relative; height: 28px; flex: none; padding: 0 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--muted); white-space: nowrap; font-size: 10px; }
+    .trace-toggle.has-alert::after { content: ''; position: absolute; top: -3px; right: -3px; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 2px var(--panel); }
     .chat-workspace { min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0,1fr); overflow: hidden; }
     .chat.diff-open .chat-workspace, .chat.board-open .chat-workspace, .chat.terminal-open .chat-workspace { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
     .terminal-pane { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0,1fr); overflow: hidden; border-left: 1px solid var(--line); background: #1a1b1e; }
@@ -308,6 +309,8 @@
     .settings-title h2 { margin: 0; font-size: 15px; }
     .lang-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; font-size: 12px; color: var(--muted); }
     .lang-row select { height: 28px; padding: 0 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); font-size: 11px; }
+    .preset-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; font-size: 12px; color: var(--muted); }
+    .provider-select { height: 26px; padding: 0 6px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); font-size: 11px; }
     .clear { border: 0; background: transparent; color: var(--muted); font-size: 11px; }
     .settings-card { padding: 14px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); box-shadow: var(--shadow); }
     .settings-head { display: flex; align-items: center; margin-bottom: 11px; }
@@ -463,11 +466,12 @@
     <aside class="settings-panel">
       <div class="settings-title"><h2>에이전트 설정</h2><button class="clear" id="clear">대화 비우기</button></div>
       <div class="lang-row"><label for="lang-select">언어</label><select id="lang-select"><option value="auto">자동 (OS)</option><option value="en">English</option><option value="ko">한국어</option></select></div>
+      <div class="preset-row"><label>프리셋</label><button class="small-btn" data-preset="codex:claude">코덱스+클로드</button><button class="small-btn" data-preset="claude:claude">클로드×2</button><button class="small-btn" data-preset="codex:codex">코덱스×2</button></div>
       <div id="settings"></div>
     </aside>
     <aside class="trace-panel">
       <div class="trace-header">
-        <div class="trace-title"><span class="trace-live"></span><h2>실행 과정</h2><span class="spacer"></span><button class="clear" id="copy-traces" title="현재 필터된 실행 과정을 토큰·캐시 요약과 함께 클립보드로 복사">복사</button><button class="clear" id="clear-traces">비우기</button></div>
+        <div class="trace-title"><span class="trace-live"></span><h2>실행 과정</h2><span class="spacer"></span><button class="clear" id="copy-traces" title="현재 필터된 실행 과정을 토큰·캐시 요약과 함께 클립보드로 복사">복사</button><button class="clear" id="clear-traces">비우기</button><button class="clear" id="hide-traces" title="실행 과정 숨기기 (다시 보기: 메뉴 → 보기)">숨기기</button></div>
         <p class="trace-note">내부 사고 원문이 아닌 실행 이벤트·도구·명령·오류를 실시간 표시합니다.</p>
       </div>
       <div class="trace-filters">
@@ -574,10 +578,64 @@
       // Re-source every string from the (Korean) markup cleanly for the new locale.
       location.reload();
     }
-    const defaults = home => ({
-      codex: { model:'gpt-5.6-sol', effort:'medium', speedMode:'standard', permissionMode:'workspace-write', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'codex', authMode:'existing', sessionPolicy:'auto', sessionTurnLimit:50, sessionTokenLimit:170000 },
-      claude: { model:'sonnet', effort:'medium', speedMode:'standard', permissionMode:'acceptEdits', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, executablePath:'claude', authMode:'existing', sessionPolicy:'auto', sessionTurnLimit:50, sessionTokenLimit:170000 }
+    // Provider-specific defaults (which CLI + its model/permission/auth shape).
+    const providerDefaults = () => ({
+      codex: { provider:'codex', model:'gpt-5.6-sol', effort:'medium', permissionMode:'workspace-write', executablePath:'codex', authMode:'existing' },
+      claude: { provider:'claude', model:'sonnet', effort:'medium', permissionMode:'acceptEdits', executablePath:'claude', authMode:'existing' }
     });
+    // A slot's config = provider-specific fields + slot-level prefs (folder,
+    // network, session). The two slots default to provider codex / claude.
+    const slotPrefs = home => ({ speedMode:'standard', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, sessionPolicy:'auto', sessionTurnLimit:50, sessionTokenLimit:170000 });
+    const defaults = home => ({
+      codex: { ...providerDefaults().codex, ...slotPrefs(home) },
+      claude: { ...providerDefaults().claude, ...slotPrefs(home) }
+    });
+    // The provider a slot actually runs (decoupled from the slot id so a slot
+    // can be a second Codex or Claude session). Falls back to the slot id for
+    // pre-provider saved state (migration).
+    const providerOf = agent => (state.settings?.[agent]?.provider) || agent;
+    let providerPaths = { codex:'codex', claude:'claude' }; // resolved CLI paths, set on boot
+    // Switch a slot to a provider: reset provider-specific fields, keep the
+    // slot's folder/network/session prefs.
+    function applyProvider(agent, provider) {
+      if(provider!=='codex'&&provider!=='claude')return;
+      if(providerOf(agent)===provider)return; // no change
+      const pd=providerDefaults()[provider];
+      const cur=state.settings[agent]||{};
+      state.settings[agent]={...cur,...pd,executablePath:providerPaths[provider]||pd.executablePath};
+      // A CLI session belongs to its provider — a codex session id can't be
+      // resumed by claude and vice versa, so drop it (and its usage stats).
+      if(state.sessions)state.sessions[agent]=null;
+      if(window.TriadSessionBudget&&state.sessionStats)state.sessionStats=window.TriadSessionBudget.resetAgent(state.sessionStats,agent);
+      recomputeNames();
+    }
+    // Display: provider name, plus an A/B letter only when both slots share a
+    // provider (so codex+claude stays "Codex"/"Claude").
+    const providerName = p => p==='claude'?'Claude':'Codex';
+    const slotLetter = { codex:'A', claude:'B' };
+    function recomputeNames() {
+      const pc=providerOf('codex'), pp=providerOf('claude'), same=pc===pp;
+      names.codex = providerName(pc)+(same?` ${slotLetter.codex}`:'');
+      names.claude = providerName(pp)+(same?` ${slotLetter.claude}`:'');
+      syncSlotLabels();
+    }
+    // Reflect the slots' provider names (e.g. "Claude A"/"Claude B") in the
+    // static chrome: header pills, default-target pins, trace filters, diff
+    // folder picker. Settings-card titles already render from names[agent].
+    function syncSlotLabels() {
+      if(typeof document==='undefined')return;
+      const set=(sel,text)=>{const el=document.querySelector(sel);if(el)el.textContent=text;};
+      set('#pill-codex strong',names.codex); set('#pill-claude strong',names.claude);
+      document.querySelectorAll('[data-default-target]').forEach(b=>{
+        const t=b.dataset.defaultTarget;
+        if(t==='codex'){b.textContent=L('pinLabel',{name:names.codex});b.title=L('pinTitle',{name:names.codex});}
+        else if(t==='claude'){b.textContent=L('pinLabel',{name:names.claude});b.title=L('pinTitle',{name:names.claude});}
+        else b.title=L('pinAllTitle',{a:names.codex,b:names.claude});
+      });
+      set('[data-trace-filter="codex"]',names.codex); set('[data-trace-filter="claude"]',names.claude);
+      set('#diff-agent option[value="codex"]',L('folderLabel',{name:names.codex}));
+      set('#diff-agent option[value="claude"]',L('folderLabel',{name:names.claude}));
+    }
     const freshBranchStatus=()=>({codex:{loading:false,kind:'unknown',label:'확인 전',workspace:''},claude:{loading:false,kind:'unknown',label:'확인 전',workspace:''}});
     const freshProjectFiles=()=>({codex:{workspace:'',files:[],loading:false,error:''},claude:{workspace:'',files:[],loading:false,error:''}});
     const freshDiff=()=>({visible:false,agent:'codex',loading:false,text:'',error:'',workspace:'',truncated:false,selectedFileId:null});
@@ -676,6 +734,7 @@
       state.settings=clone(conversation.settings||state.settings);
       if(state.settings?.codex)state.settings.codex=liftLegacySessionDefaults(state.settings.codex);
       if(state.settings?.claude)state.settings.claude=liftLegacySessionDefaults(state.settings.claude);
+      recomputeNames(); // per-conversation providers → refresh A/B display names
       state.collaboration=normalizeCollaboration(conversation.collaboration);
       state.defaultTarget=normalizeDefaultTarget(conversation.defaultTarget);
       state.sessions=clone(conversation.sessions||{codex:null,claude:null});
@@ -860,9 +919,10 @@
     function renderUsage(){
       for(const agent of agents){
         const element=document.getElementById(`usage-${agent}`);if(!element)continue;const usage=state.usage[agent]||{};
-        if(agent==='codex'&&state.usageRefreshing)element.textContent='잔여량 조회 중…';
+        // Rate-limit/usage is a Codex-account feature; a Claude-provider slot has none.
+        if(providerOf(agent)!=='codex'){element.textContent='';element.title='';continue;}
+        if(state.usageRefreshing)element.textContent='잔여량 조회 중…';
         else if(usage.error&&!usage.windows?.length)element.textContent='조회 실패 · ↻ 재시도';
-        else if(agent==='claude'&&!usage.windows?.length)element.textContent='잔여량 정보 미제공';
         else element.textContent=window.TriadUsage.summary(usage);
         element.title=usageTooltip(agent);
       }
@@ -870,8 +930,10 @@
     }
     function refreshUsage(force=false){
       if(!state.settings||state.usageRefreshing)return;
+      const codexSlot=agents.find(a=>providerOf(a)==='codex');
+      if(!codexSlot){renderUsage();return;} // no Codex account in this preset → nothing to query
       const now=Date.now();if(!force&&now-state.lastUsageRefresh<60000)return;
-      state.lastUsageRefresh=now;state.usageRefreshing=true;renderUsage();post({action:'refreshUsage',config:state.settings.codex});
+      state.lastUsageRefresh=now;state.usageRefreshing=true;renderUsage();post({action:'refreshUsage',config:state.settings[codexSlot]});
     }
     function startUsagePolling(){
       clearInterval(state.usageTimer);refreshUsage(true);state.usageTimer=setInterval(()=>refreshUsage(),5*60*1000);
@@ -1050,9 +1112,13 @@
       termSession=null;
     }
     function restartTerminalSession(){if(!state.terminalVisible)return;stopTerminalSession();startTerminalSession();}
+    // Conversations whose latest independent run didn't record a contribution —
+    // a quiet red dot on the 공유 보드 button, cleared once the board is opened.
+    const boardAlertConvos = new Set();
+    function renderBoardAlert(){ const btn=document.getElementById('board-toggle'); if(btn)btn.classList.toggle('has-alert', boardAlertConvos.has(state.activeConversationId)); }
     function openBoard(){
       if(state.boardVisible){closeBoard();return;}
-      closeDiff();state.boardVisible=true;post({action:'listSharedDocuments'});renderSharedBoard();requestAnimationFrame(updateScrollButton);
+      closeDiff();closeTerminal();state.boardVisible=true;boardAlertConvos.delete(state.activeConversationId);renderBoardAlert();post({action:'listSharedDocuments'});renderSharedBoard();requestAnimationFrame(updateScrollButton);
     }
     function closeBoard(){state.boardVisible=false;renderSharedBoard();requestAnimationFrame(updateScrollButton);}
     function documentIdOf(board) { return window.TriadCollaboration.documentIdOf(board); }
@@ -1207,7 +1273,7 @@
         else if(data.type==='item.started') {
           const item=data.item||{};
           if(item.type==='command_execution') addTrace(agent,'info','명령 실행',item.command||item);
-          else if(item.type==='mcp_tool_call') addTrace(agent,'info',`도구 호출 · ${item.server||''} ${item.tool||item.name||''}`.trim(),item);
+          else if(item.type==='mcp_tool_call') { if(/submit_contribution/.test(item.tool||item.name||'')&&state.pending[agent])state.pending[agent].contributed=true; addTrace(agent,'info',`도구 호출 · ${item.server||''} ${item.tool||item.name||''}`.trim(),item); }
           else if(item.type!=='agent_message') addTrace(agent,'info',`단계 시작 · ${item.type||'event'}`,item);
         } else if(data.type==='item.completed') {
           const item=data.item||{};
@@ -1224,7 +1290,7 @@
         else if(data.type==='stream_event') {
           const event=data.event||{};
           if(event.type==='message_start') addTrace(agent,'info',`응답 생성 시작 · ${event.message?.model||'Claude'}`,event.message?.usage||'');
-          else if(event.type==='content_block_start'&&event.content_block?.type==='tool_use') addTrace(agent,'info',`도구 호출 · ${event.content_block.name||'tool'}`,event.content_block.input||event.content_block);
+          else if(event.type==='content_block_start'&&event.content_block?.type==='tool_use') { if(/submit_contribution/.test(event.content_block.name||'')&&state.pending[agent])state.pending[agent].contributed=true; addTrace(agent,'info',`도구 호출 · ${event.content_block.name||'tool'}`,event.content_block.input||event.content_block); }
           else if(event.type==='content_block_start'&&event.content_block?.type==='thinking') addTrace(agent,'info','추론 단계 시작 · 내용 비공개');
           else if(event.type==='message_stop') addTrace(agent,'success','응답 스트림 완료');
         } else if(data.type==='assistant') {addTrace(agent,'success','응답 메시지 완료',data.message?.usage||'');recordTurnUsage(agent,data.message?.usage);}
@@ -1282,10 +1348,15 @@
       if(state.orchestration?.mode==='agent'&&event.used)state.orchestration.handoffs=Math.max(state.orchestration.handoffs||0,Number(event.used));
       if(event.eventType==='agent_call_started'){
         const reason=event.reason?L('callReason',{r:event.reason}):'';
-        // Seal the asking agent's current segment bubble so its post-answer
-        // continuation starts a NEW bubble BELOW the Q&A — otherwise one bubble
-        // keeps growing across every handoff and the reader must scroll up.
-        if(state.responseIds[from]){updateMessage(state.responseIds[from],m=>{m.streaming=false;if(!m.completedAt)m.completedAt=Date.now();});state.responseIds[from]=null;}
+        // Seal the asking agent's current segment so its post-answer output
+        // starts a NEW bubble BELOW the Q&A. Drop the segment if it produced no
+        // user-facing text (it was only a "working" spinner during tool use).
+        if(state.responseIds[from]){
+          const segId=state.responseIds[from];const seg=state.messages.find(m=>m.id===segId);
+          if(seg&&!String(seg.text||'').trim())state.messages=state.messages.filter(m=>m.id!==segId);
+          else if(seg)updateMessage(segId,m=>{m.streaming=false;if(!m.completedAt)m.completedAt=Date.now();});
+          state.responseIds[from]=null;
+        }
         // The question is its own message and STAYS put (spinner = awaiting the
         // answer); the answer arrives as a separate message so both remain
         // visible in chronological order.
@@ -1530,11 +1601,11 @@
       const responseRecordId=sharedContext?.runId?window.TriadRunReference.recordIdFor({runId:sharedContext.runId},contextDocumentId(sharedContext)):null;
       const bubbleMeta={recordId:responseRecordId,runId:sharedContext?.runId||null,documentId:contextDocumentId(sharedContext),replyAgent:agent};
       state.pending[agent]={prompt,retried:false,isolated,sessionStore,sharedContext,usageRecorded:false,sessionId:session,runId,conversationId,config,agentConfigs,collaboration,images,bubbleMeta};
-      // In agent collaboration a single run spans the 회의실 Q&A; defer this
-      // agent's answer bubble to its first token so it lands BELOW the Q&A in
-      // chronological order instead of a top bubble the user must scroll up to.
-      const lazyBubble=isolated&&state.orchestration?.mode==='agent';
-      state.responseIds[agent]=lazyBubble?null:addMessage(agent,'',true,bubbleMeta);renderStatus();
+      // Create the answer bubble immediately (spinner) so the user always sees
+      // the agent is working — even while it's only using tools. On a handoff
+      // the segment is sealed (see the broker handler) so a single bubble never
+      // keeps growing across the 회의실 Q&A.
+      state.responseIds[agent]=addMessage(agent,'',true,bubbleMeta);renderStatus();
       addTrace(agent,'info','명령 전달',{model:config.model,effort:config.effort,speed:config.speedMode,workspace:config.workspacePath,writableRoots:config.writableRoots||'',networkAccess:!!config.networkAccess,allowLocalBinding:!!config.allowLocalBinding,session:session?'resume':'new',isolated,mode:state.orchestration?.mode||'independent'});
       post({action:'run',agent,conversationId,slotId:`${conversationId}:${agent}`,prompt,config,agentConfigs,collaboration,mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,sharedContext),sharedContext,session,runId,images});return true;
     }
@@ -1951,26 +2022,26 @@
       const documentId=contextDocumentId(context);
       if(conversationId)state.backgroundWaits.add(conversationId);
       if(documentId)state.backgroundDocumentIds.set(documentId,(state.backgroundDocumentIds.get(documentId)||0)+1);
-      // The broker writes atomically before it emits its watcher event.  Give
-      // that event a short window so the next queued run starts from the
-      // canonical contribution-bearing document rather than a stale snapshot.
+      // Decide deterministically — no timing race: conversational runs are told
+      // NOT to record (see buildIndependentPrompt), so nothing to verify; for a
+      // full run we KNOW whether the agent called submit_contribution from its
+      // own stream (pending.contributed). A genuine miss shows a quiet red dot on
+      // the 공유 보드 button, not a chat message. The short delay is only to let
+      // the board update propagate before the next queued run.
+      const contributionExpected=/submit_contribution 도구로 runId/.test(pending?.prompt||'');
+      const missed=contributionExpected&&!pending?.contributed;
       setTimeout(()=>{
         try {
-          withConversation(conversationId,()=>{
-            const canonical=window.TriadCollaboration.selectedDocument(state.sharedDocuments,context.documentId||documentIdOf(board));
-            const entries=canonical?.contributions?.[agent]||[];
-            const recorded=entries.some(entry=>entry?.runId===context.runId);
-            if(!recorded){
-              addTrace(agent,'error','공유 문서 기여 미확인',{documentId:context.documentId||documentIdOf(board),runId:context.runId});
-              addMessage('system',L('contribUnconfirmed',{agent:names[agent]}));
-            }
+          if(missed)withConversation(conversationId,()=>{
+            addTrace(agent,'error','공유 문서 기여 미확인',{documentId:context.documentId||documentIdOf(board),runId:context.runId});
+            if(conversationId){boardAlertConvos.add(conversationId);renderBoardAlert();}
           });
         } finally {
           if(conversationId)state.backgroundWaits.delete(conversationId);
           if(documentId){const remaining=(state.backgroundDocumentIds.get(documentId)||1)-1;if(remaining>0)state.backgroundDocumentIds.set(documentId,remaining);else state.backgroundDocumentIds.delete(documentId);}
           done();
         }
-      },260);
+      },250);
     }
     function friendlyError(message) {
       if (typeof message !== 'string') return '알 수 없는 실행 오류';
@@ -2036,7 +2107,7 @@
         state.sessionStats=window.TriadSessionBudget.recordCompletion(state.sessionStats,agent,{sessionId:state.sessions[agent]||pending?.sessionId||null});
         pending.usageRecorded=true;save();renderSettings();
       }
-      if(agent==='codex'&&!failed)refreshUsage(true);
+      if(providerOf(agent)==='codex'&&!failed)refreshUsage(true);
       if(!failed){requestBranch(agent);requestProjectFiles(agent);}
       if(!failed&&state.diff.visible&&state.diff.agent===agent)refreshProjectDiff(agent);
       if(state.orchestration){
@@ -2155,15 +2226,14 @@
         state.settings={codex:normalizeSessionSettings(liftLegacySessionDefaults({...base.codex,...(state.settings?.codex||{})})),claude:normalizeSessionSettings(liftLegacySessionDefaults({...base.claude,...(state.settings?.claude||{})}))};
         state.workspace=normalizeWorkspace(loaded.find(item=>item.id===state.activeConversationId)?.workspace,state.settings,event.home);
         normalizeSessionStats(state.sessionStats||{});
-        state.settings.codex.executablePath ||= event.codexPath;
-        state.settings.claude.executablePath ||= event.claudePath;
-        if (state.settings.codex.executablePath==='codex') state.settings.codex.executablePath=event.codexPath;
-        if (state.settings.claude.executablePath==='claude') state.settings.claude.executablePath=event.claudePath;
-        const available=state.codexModels.map(model=>model.slug);
-        if (state.settings.codex.authMode==='existing' && available.length && !available.includes(state.settings.codex.model)) {
-          state.settings.codex.model=available[0];
-          state.settings.codex.effort=state.codexModels[0].defaultEffort || 'medium';
+        providerPaths={codex:event.codexPath||'codex',claude:event.claudePath||'claude'};
+        for(const slot of agents){
+          const cfg=state.settings[slot];const p=providerOf(slot);
+          if(!cfg.executablePath||cfg.executablePath==='codex'||cfg.executablePath==='claude')cfg.executablePath=providerPaths[p];
+          const list=p==='codex'?state.codexModels:state.claudeModels;const catalog=list.map(model=>model.slug);
+          if(cfg.authMode==='existing'&&catalog.length&&!catalog.includes(cfg.model)){cfg.model=list[0].slug;cfg.effort=list[0].defaultEffort||'medium';}
         }
+        recomputeNames();
         activateRuntime(state.activeConversationId);state.tokenStatus=event.tokenStatus;state.storageReady=true;save();
         for(const conversation of loaded)if(recoveredConversationIds.has(conversation.id)||interruptedConversationIds.has(conversation.id)||viewedConversationIds.has(conversation.id)||migratedWorkspaceIds.has(conversation.id))post({action:'saveConversation',conversation});
         renderAll();post({action:'listSharedDocuments'});startUsagePolling();refreshAuthStatuses();refreshBranches();refreshProjectFiles();
@@ -2290,7 +2360,7 @@
     }
     function optionList(values, selected) { return values.map(v=>`<option value="${v}" ${v===selected?'selected':''}>${v}</option>`).join(''); }
     function modelOptionList(agent, selected) {
-      const discovered=agent==='codex'
+      const discovered=providerOf(agent)==='codex'
         ? (state.codexModels.length?state.codexModels:[
             {slug:'gpt-5.6-sol',name:'GPT-5.6 Sol'}, {slug:'gpt-5.6-terra',name:'GPT-5.6 Terra'},
             {slug:'gpt-5.6-luna',name:'GPT-5.6 Luna'}, {slug:'gpt-5.5',name:'GPT-5.5'}, {slug:'gpt-5.4',name:'GPT-5.4'}
@@ -2310,7 +2380,7 @@
       if(status.checking)return '연결 확인 중…';
       if(!status.connected)return '연결 필요';
       const raw=String(status.message||'');
-      if(agent==='codex')return /api key/i.test(raw)?'✓ API 계정 연결됨':/chatgpt/i.test(raw)?'✓ ChatGPT 연결됨':'✓ Codex 계정 연결됨';
+      if(providerOf(agent)==='codex')return /api key/i.test(raw)?'✓ API 계정 연결됨':/chatgpt/i.test(raw)?'✓ ChatGPT 연결됨':'✓ Codex 계정 연결됨';
       try {
         const value=JSON.parse(raw);const method=value.subscriptionType||value.subscription_type||value.authMethod||value.auth_method;
         if(method)return `✓ Claude ${String(method).replaceAll('_',' ')} 연결됨`;
@@ -2360,10 +2430,10 @@
       workspaceCard.querySelector('.common-choose').onclick=()=>post({action:'chooseDirectory',agent:'common'});
       root.appendChild(workspaceCard);
       for (const agent of agents) {
-        const c=state.settings[agent];const account=state.accountStatus[agent]||{}; const card=document.createElement('div'); card.className='settings-card';
-        const activeCodexModel=state.codexModels.find(model=>model.slug===c.model);
-        const efforts=agent==='codex'?(activeCodexModel?.efforts?.length?activeCodexModel.efforts:['low','medium','high','xhigh','max','ultra']):['low','medium','high','xhigh','max'];
-        const permissionOptions=agent==='codex'
+        const c=state.settings[agent];const provider=providerOf(agent);const account=state.accountStatus[agent]||{}; const card=document.createElement('div'); card.className='settings-card';
+        const activeCodexModel=provider==='codex'?state.codexModels.find(model=>model.slug===c.model):null;
+        const efforts=provider==='codex'?(activeCodexModel?.efforts?.length?activeCodexModel.efforts:['low','medium','high','xhigh','max','ultra']):['low','medium','high','xhigh','max'];
+        const permissionOptions=provider==='codex'
           ? [
               ['read-only','읽기 전용'],
               ['workspace-write','작업 폴더 쓰기 (권장)'],
@@ -2378,10 +2448,10 @@
               ['bypassPermissions','샌드박스 밖 실행 (Gradle·로컬 서버)']
             ];
         const permissionOptionList=permissionOptions.map(([value,label])=>`<option value="${value}" ${value===c.permissionMode?'selected':''}>${label}</option>`).join('');
-        const unrestricted=(agent==='codex'&&c.permissionMode==='danger-full-access')||(agent==='claude'&&c.permissionMode==='bypassPermissions');
+        const unrestricted=(provider==='codex'&&c.permissionMode==='danger-full-access')||(provider==='claude'&&c.permissionMode==='bypassPermissions');
         const open=state.settingsOpen[agent];const workspaceDisabled=separate?'':'disabled';const workspaceTitle=separate?'이 AI에만 적용되는 저장된 작업 폴더입니다.':'공통 작업 폴더를 사용 중입니다. 위 설정에서 변경하세요.';
         card.innerHTML=`
-          <div class="settings-head"><h3>${names[agent]}</h3><span class="health"></span></div>
+          <div class="settings-head"><h3>${names[agent]}</h3><span class="spacer"></span><select class="provider-select" data-provider-slot="${agent}" title="이 슬롯이 실행할 AI (멀티세션)"><option value="codex" ${provider==='codex'?'selected':''}>Codex</option><option value="claude" ${provider==='claude'?'selected':''}>Claude</option></select><span class="health"></span></div>
           <details class="settings-group" data-section="model" ${open.model?'open':''}>
             <summary>모델 · 응답 <span class="settings-group-summary">${escapeAttr(c.model)} · ${escapeAttr(c.effort)}</span></summary>
             <div class="settings-group-body">
@@ -2406,7 +2476,7 @@
               <div class="field"><label>CLI 실행 파일</label><input data-key="executablePath" value="${escapeAttr(c.executablePath)}"></div>
               <div class="field"><label>인증 연동</label><select data-key="authMode"><option value="existing" ${c.authMode==='existing'?'selected':''}>구독 계정 (CLI)</option><option value="apiKey" ${c.authMode==='apiKey'?'selected':''}>API 키</option></select></div>
               ${c.authMode==='existing'?`<div class="field"><label>${names[agent]} 계정</label><div class="token-row"><span class="token-status ${account.connected?'saved':''}">${accountLabel(agent,account)}</span><span class="spacer"></span>${account.connected?'<button class="small-btn auth-connect">다시 연결</button><button class="small-btn auth-logout">로그아웃</button>':'<button class="small-btn auth-refresh">↻</button><button class="small-btn auth-connect">계정 연결</button>'}</div></div>`:''}
-              ${c.authMode==='apiKey'?`<div class="field"><label>${agent==='codex'?'OpenAI':'Anthropic'} API 키 · macOS 키체인 저장</label><input class="token" type="password" autocomplete="off" placeholder="키 입력"><div class="token-row"><span class="token-status ${state.tokenStatus[agent]?'saved':''}">${state.tokenStatus[agent]?'✓ 키체인에 저장됨':'저장된 키 없음'}</span><span class="spacer"></span>${state.tokenStatus[agent]?'<button class="small-btn delete-token">삭제</button>':''}<button class="small-btn save-token">저장</button></div></div>`:''}
+              ${c.authMode==='apiKey'?`<div class="field"><label>${provider==='codex'?'OpenAI':'Anthropic'} API 키 · macOS 키체인 저장</label><input class="token" type="password" autocomplete="off" placeholder="키 입력"><div class="token-row"><span class="token-status ${state.tokenStatus[agent]?'saved':''}">${state.tokenStatus[agent]?'✓ 키체인에 저장됨':'저장된 키 없음'}</span><span class="spacer"></span>${state.tokenStatus[agent]?'<button class="small-btn delete-token">삭제</button>':''}<button class="small-btn save-token">저장</button></div></div>`:''}
             </div>
           </details>
           <details class="settings-group" data-section="session" ${open.session?'open':''}>
@@ -2424,6 +2494,7 @@
           if(agent==='codex'&&input.dataset.key==='model') { const selected=state.codexModels.find(model=>model.slug===c.model); if(selected&&!selected.efforts.includes(c.effort))c.effort=selected.defaultEffort||selected.efforts[0]; }
           save(); renderSettings(); renderStatus();if(input.dataset.key==='authMode'||input.dataset.key==='executablePath')requestAuthStatus(agent);if(input.dataset.key==='workspacePath'){requestBranch(agent);requestProjectFiles(agent);}
         }));
+        card.querySelector('.provider-select').onchange=event=>{if(state.running[agent])return;applyProvider(agent,event.target.value);save();renderSettings();renderStatus();requestAuthStatus(agent);requestBranch(agent);requestProjectFiles(agent);};
         card.querySelector('.choose').onclick=()=>post({action:'chooseDirectory',agent});
         card.querySelector('.branch-refresh').onclick=()=>requestBranch(agent);
         card.querySelector('.reset-session').onclick=()=>{if(state.running[agent])return;state.sessions[agent]=null;state.sessionStats=window.TriadSessionBudget.resetAgent(state.sessionStats,agent,{incrementRotation:true});addTrace(agent,'info','다음 작업 새 세션','사용자가 세션을 초기화했습니다.');save();renderSettings();};
@@ -2442,7 +2513,7 @@
         root.appendChild(card);
       }
     }
-    function renderAll(){renderConversations();renderMessages();renderSettings();renderStatus();renderTraces();renderQueue();renderDiff();renderSharedBoard();}
+    function renderAll(){renderConversations();renderMessages();renderSettings();renderStatus();renderTraces();renderQueue();renderDiff();renderSharedBoard();renderBoardAlert();}
 
     function updateRoutingPreview(){
       const draft=document.getElementById('draft');const root=document.getElementById('routing-preview');const toggle=document.getElementById('routing-preview-toggle');const details=document.getElementById('routing-preview-details');
@@ -2576,10 +2647,12 @@
     document.getElementById('stop-claude').onclick=()=>stopAgent('claude');
     document.getElementById('clear').onclick=()=>{if(agents.some(a=>state.running[a])||state.queue.length)return;state.messages=[createWelcomeMessage()];save();renderMessages();};
     (()=>{const sel=document.getElementById('lang-select');if(sel)sel.onchange=()=>setLocalePref(sel.value);})();
+    document.querySelectorAll('[data-preset]').forEach(b=>b.onclick=()=>{if(agents.some(a=>state.running[a]))return;const[p1,p2]=b.dataset.preset.split(':');applyProvider('codex',p1);applyProvider('claude',p2);save();renderSettings();renderStatus();refreshAuthStatuses();refreshBranches();refreshProjectFiles();});
     document.getElementById('clear-traces').onclick=()=>{state.traces=[];save();renderTraces();};
     (()=>{const b=document.getElementById('trace-sort');if(b)b.onclick=()=>{state.traceSort=state.traceSort==='oldest'?'newest':'oldest';localStorage.setItem('triad.traceSort',state.traceSort);renderTraces();};})();
     (()=>{const b=document.getElementById('copy-traces');if(b)b.onclick=()=>copyPlainText(traceExportText(),b);})();
     document.getElementById('trace-toggle').onclick=()=>{state.traceVisible=!state.traceVisible;localStorage.setItem('triad.traceVisible',String(state.traceVisible));renderTraceVisibility();};
+    (()=>{const b=document.getElementById('hide-traces');if(b)b.onclick=()=>{state.traceVisible=false;localStorage.setItem('triad.traceVisible','false');renderTraceVisibility();};})();
     document.getElementById('diff-toggle').onclick=openDiff;
     document.getElementById('terminal-toggle').onclick=openTerminal;
     document.getElementById('terminal-close').onclick=closeTerminal;

@@ -474,6 +474,8 @@
         <button class="trace-filter active" data-trace-filter="all">전체</button>
         <button class="trace-filter" data-trace-filter="codex">Codex</button>
         <button class="trace-filter" data-trace-filter="claude">Claude</button>
+        <span class="spacer"></span>
+        <button class="trace-filter" id="trace-sort" title="정렬 전환">최신순</button>
       </div>
       <div class="trace-list" id="trace-list"></div>
     </aside>
@@ -505,7 +507,7 @@
       settings: JSON.parse(localStorage.getItem('triad.settings') || 'null'),
       sessions: JSON.parse(localStorage.getItem('triad.sessions') || '{"codex":null,"claude":null}'),
       sessionStats: JSON.parse(localStorage.getItem('triad.sessionStats') || '{}'),
-      traces: JSON.parse(localStorage.getItem('triad.traces') || '[]'), traceFilter:'all',
+      traces: JSON.parse(localStorage.getItem('triad.traces') || '[]'), traceFilter:'all', traceSort: localStorage.getItem('triad.traceSort')||'newest',
       conversations: [], activeConversationId: localStorage.getItem('triad.activeConversationId'), unread:false, workspace:{separate:false,commonPath:''},
       storageReady: false, saveTimer: null, conversationSearch: '',
       collaboration: {mode:'independent',lead:'codex',rounds:2,finalizer:'claude',helperTimeoutMinutes:5}, defaultTarget:'all', orchestration:null, sharedContext:null,
@@ -908,7 +910,10 @@
     function renderTraces() {
       if(isBackgroundRuntime())return;
       const root=document.getElementById('trace-list'); if(!root)return;
-      const items=state.traces.filter(item=>state.traceFilter==='all'||item.agent===state.traceFilter);
+      const newest=state.traceSort!=='oldest'; // default: newest first
+      const sortBtn=document.getElementById('trace-sort');if(sortBtn)sortBtn.textContent=tc(newest?'최신순':'시간순');
+      const filtered=state.traces.filter(item=>state.traceFilter==='all'||item.agent===state.traceFilter);
+      const items=newest?filtered.slice().reverse():filtered; // storage stays chronological (copy/export unchanged)
       root.innerHTML='';
       if(!items.length){const empty=document.createElement('div');empty.className='trace-empty';empty.textContent='명령을 보내면 실행 과정과 오류가 여기에 표시됩니다.';root.appendChild(empty);return;}
       for(const item of items){
@@ -925,7 +930,7 @@
         }
         root.appendChild(entry);
       }
-      requestAnimationFrame(()=>root.scrollTop=root.scrollHeight);
+      requestAnimationFrame(()=>root.scrollTop=newest?0:root.scrollHeight); // keep the latest entry in view either way
     }
     function renderTraceVisibility(){
       const app=document.querySelector('.app');const button=document.getElementById('trace-toggle');if(!app||!button)return;
@@ -2572,6 +2577,7 @@
     document.getElementById('clear').onclick=()=>{if(agents.some(a=>state.running[a])||state.queue.length)return;state.messages=[createWelcomeMessage()];save();renderMessages();};
     (()=>{const sel=document.getElementById('lang-select');if(sel)sel.onchange=()=>setLocalePref(sel.value);})();
     document.getElementById('clear-traces').onclick=()=>{state.traces=[];save();renderTraces();};
+    (()=>{const b=document.getElementById('trace-sort');if(b)b.onclick=()=>{state.traceSort=state.traceSort==='oldest'?'newest':'oldest';localStorage.setItem('triad.traceSort',state.traceSort);renderTraces();};})();
     (()=>{const b=document.getElementById('copy-traces');if(b)b.onclick=()=>copyPlainText(traceExportText(),b);})();
     document.getElementById('trace-toggle').onclick=()=>{state.traceVisible=!state.traceVisible;localStorage.setItem('triad.traceVisible',String(state.traceVisible));renderTraceVisibility();};
     document.getElementById('diff-toggle').onclick=openDiff;

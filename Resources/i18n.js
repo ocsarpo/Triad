@@ -292,6 +292,8 @@
     answerTruncated: { en: '… The answer is long, so only part is shown.', ko: '… 답변이 길어 일부만 표시했습니다.' },
     viewFullAnswer: { en: 'View full answer', ko: '답변 전문 보기' },
     collapseAnswer: { en: 'Collapse', ko: '접기' },
+    viewProcess: { en: 'View process', ko: '과정 보기' },
+    collapseProcess: { en: 'Hide process', ko: '과정 접기' },
     unknownError: { en: 'Unknown error', ko: '알 수 없는 오류' },
     pinLabel: { en: '{name} only', ko: '{name} 고정' },
     pinTitle: { en: 'Send untagged messages to {name} only', ko: '태그 없는 메시지를 {name}에게만 전달' },

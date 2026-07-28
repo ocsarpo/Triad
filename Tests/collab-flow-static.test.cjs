@@ -26,6 +26,20 @@ test('시간순 배치: 말풍선은 즉시 생성(작업 표시)하고 핸드�
   assert.match(renderer, /else if\(seg\)updateMessage\(segId,m=>\{m\.streaming=false;if\(!m\.completedAt\)m\.completedAt=Date\.now\(\);\}\)/);
 });
 
+test('토론/교차검토 턴은 원문(대화)을 채팅에 띄우고 제안·검토·결정 정리는 과정 보기 토글로 둔다', () => {
+  // 결과 라벨 구성 — 표시만, 추가 토큰/호출 없음
+  assert.match(renderer, /const labels=\{proposal:'📝 제안',verdict:'🔍 검토',resolve:'🔧 이견 해결',decision:'✅ 결정'\}/);
+  // 검토 턴은 이견·근거까지 붙여서 실속을 보여준다
+  assert.match(renderer, /if\(task\.kind==='verdict'\)\{const d=flatten\(b\?\.disputes\)\.trim\(\);if\(d\)content\+=/);
+  // 원문이 있으면 그게 채팅(m.text) 유지, 결과는 m.boardResult 토글로. 원문 없으면 결과를 직접 표시
+  assert.match(renderer, /const hasNarration=orig&&orig!==labeled&&orig!==content&&!\/\^\(응답 없이 종료.*\)\/\.test\(orig\)/);
+  assert.match(renderer, /if\(hasNarration\)\{m\.boardResult=labeled;\}\s*\n\s*else\{m\.text=labeled;delete m\.boardResult;\}/);
+  // "과정 보기" 토글 + expandedTexts로 정리 과정 펼침
+  assert.match(renderer, /if\(m\.boardResult\)\{const expandedNow=!!state\.expandedTexts\[m\.id\]/);
+  assert.match(renderer, /toggle\.textContent=expandedNow\?L\('collapseProcess'\):L\('viewProcess'\)/);
+  assert.match(renderer, /if\(m\.boardResult&&state\.expandedTexts\[m\.id\]\)displayBody=/);
+});
+
 test('완료 조기표기 방지: 미해결 회의실 질답이 있으면 "완료"를 보류한다', () => {
   assert.match(renderer, /function finishAgentFlowWhenReady\(flow, agent, message\)/);
   assert.match(renderer, /if\(Object\.keys\(state\.brokerMessages\)\.length\)\{flow\.pendingFinish=\{agent,message\};/);

@@ -102,10 +102,10 @@ test('긴 보조 답변은 전문을 message.fullText에 보관하고 전문 보
   assert.match(renderer, /const answerId=addMessage\('system',L\('handoffAnswer',\{\.\.\.fields,body:preview\}\),false\)/);
   assert.match(renderer, /if\(truncated\)updateMessage\(answerId,m=>\{m\.fullText=L\('handoffAnswer',\{\.\.\.fields,body:answer\}\);\}\)/);
   // fullText가 있으면 전문 보기/접기 토글, 복사는 전문을 대상으로
-  assert.match(renderer, /const fullBody=String\(m\.fullText\|\|m\.text\|\|''\)/);
+  assert.match(renderer, /const fullBody=String\(m\.fullText\|\|\(m\.boardResult\?/);
   assert.match(renderer, /if\(m\.fullText\)\{const expandedNow=!!state\.expandedTexts\[m\.id\]/);
   assert.match(renderer, /toggle\.textContent=expandedNow\?L\('collapseAnswer'\):L\('viewFullAnswer'\)/);
-  assert.match(renderer, /\(\(m\.fullText&&state\.expandedTexts\[m\.id\]\)\?m\.fullText:m\.text\)/);
+  assert.match(renderer, /let displayBody=\(m\.fullText&&state\.expandedTexts\[m\.id\]\)\?m\.fullText:m\.text;/);
   // i18n 키
   assert.equal(i18n.translate('en', 'viewFullAnswer'), 'View full answer');
   assert.match(i18n.translate('en', 'answerTruncated'), /only part is shown/);

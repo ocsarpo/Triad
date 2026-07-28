@@ -1281,7 +1281,7 @@
       detail.appendChild(historySection);
     }
     function traceProviderEvent(agent, data, rawLine) {
-      if(agent==='codex'){
+      if(providerOf(agent)==='codex'){
         if(data.type==='thread.started') addTrace(agent,'info','세션 시작',data.thread_id);
         else if(data.type==='turn.started') addTrace(agent,'info','작업 처리 시작');
         else if(data.type==='item.started') {
@@ -1300,7 +1300,7 @@
       } else {
         if(data.type==='system'&&data.subtype==='init') addTrace(agent,'info',`세션 시작 · ${data.model||'Claude'}`,{session_id:data.session_id,permissionMode:data.permissionMode,mcp_servers:data.mcp_servers});
         else if(data.type==='system'&&data.subtype==='status') addTrace(agent,'info',`상태 · ${data.status||data.subtype}`,data);
-        else if(data.type==='rate_limit_event') {const normalized=window.TriadUsage.normalizeClaude(data.rate_limit_info||data);if(normalized.windows.length)setUsage('claude',normalized,data.rate_limit_info||data);addTrace(agent,data.rate_limit_info?.status==='allowed'?'info':'error','사용량 한도 상태',data.rate_limit_info);}
+        else if(data.type==='rate_limit_event') {const normalized=window.TriadUsage.normalizeClaude(data.rate_limit_info||data);if(normalized.windows.length)setUsage(agent,normalized,data.rate_limit_info||data);addTrace(agent,data.rate_limit_info?.status==='allowed'?'info':'error','사용량 한도 상태',data.rate_limit_info);}
         else if(data.type==='stream_event') {
           const event=data.event||{};
           if(event.type==='message_start') addTrace(agent,'info',`응답 생성 시작 · ${event.message?.model||'Claude'}`,event.message?.usage||'');
@@ -1496,13 +1496,14 @@
         const who = document.createElement('div'); who.className = 'who'; who.textContent = label;
         if (m.streaming) { const spin = document.createElement('span'); spin.className='spinner'; who.appendChild(spin); }
         const actions=document.createElement('div');actions.className='bubble-actions';
-        const fullBody=String(m.fullText||m.text||''); // truncated bubbles copy/expand the full answer
+        const fullBody=String(m.fullText||(m.boardResult?`${m.text}\n\n──────\n${m.boardResult}`:m.text)||''); // truncated bubbles copy/expand the full answer; collab turns also include the structured board result
         const copy=document.createElement('button');copy.type='button';copy.className='bubble-copy';copy.textContent='전체 복사';copy.title='마크다운과 줄바꿈을 포함한 원문 전체 복사';
         applyCopyFeedback(copy,m.id,fullBody.length>0);
         copy.addEventListener('mousedown',event=>event.stopPropagation());
         copy.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();copyMessageText(m.id,fullBody);});
         actions.appendChild(copy);
         if(m.fullText){const expandedNow=!!state.expandedTexts[m.id];const toggle=document.createElement('button');toggle.type='button';toggle.className='bubble-copy';toggle.textContent=expandedNow?L('collapseAnswer'):L('viewFullAnswer');toggle.addEventListener('mousedown',event=>event.stopPropagation());toggle.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(expandedNow)delete state.expandedTexts[m.id];else state.expandedTexts[m.id]=true;renderMessages();});actions.appendChild(toggle);}
+        if(m.boardResult){const expandedNow=!!state.expandedTexts[m.id];const toggle=document.createElement('button');toggle.type='button';toggle.className='bubble-copy';toggle.textContent=expandedNow?L('collapseProcess'):L('viewProcess');toggle.title='이 턴을 제안·검토·결정으로 정리한 진행 과정을 봅니다.';toggle.addEventListener('mousedown',event=>event.stopPropagation());toggle.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(expandedNow)delete state.expandedTexts[m.id];else state.expandedTexts[m.id]=true;renderMessages();});actions.appendChild(toggle);}
         if(agents.includes(m.author)){const reply=document.createElement('button');reply.type='button';reply.className='bubble-copy';reply.textContent='답장';reply.title=m.recordId?'이 AI에게 이 실행 기록을 참고해 답장합니다.':'이 AI에게 답장합니다.';reply.onclick=event=>{event.preventDefault();event.stopPropagation();const draft=document.getElementById('draft');const agentTag=`#${m.replyAgent||m.author}`;const text=draft.value;const additions=[];if(!/(?:^|\s)#(?:codex|claude)(?=\s|$)/.test(text))additions.push(agentTag);const reference=m.recordId?`@실행[${m.recordId}]`:'';if(reference&&!text.includes(reference))additions.push(reference);if(additions.length)draft.value=`${text}${text.trim()?' ':''}${additions.join(' ')} `;draft.focus();updateRoutingPreview();};actions.appendChild(reply);}
         const bubble = document.createElement('div'); bubble.className='bubble';
         if(Array.isArray(m.attachments)&&m.attachments.length){
@@ -1510,7 +1511,9 @@
           for(const p of m.attachments){const im=document.createElement('img');im.src=imageFileURL(p);im.alt=(String(p).split('/').pop())||'이미지';im.title=p;imgs.appendChild(im);}
           bubble.appendChild(imgs);
         }
-        renderMarkdownText(bubble,((m.fullText&&state.expandedTexts[m.id])?m.fullText:m.text) || '생각 중…');
+        let displayBody=(m.fullText&&state.expandedTexts[m.id])?m.fullText:m.text;
+        if(m.boardResult&&state.expandedTexts[m.id])displayBody=`${m.text}\n\n──────\n${m.boardResult}`;
+        renderMarkdownText(bubble,displayBody || '생각 중…');
         const stamp=document.createElement('div');stamp.className='bubble-time';
         if(agents.includes(m.author)){
           const t=[];
@@ -1996,8 +1999,12 @@
       if (!line.trim()) return; let data;
       try { data=JSON.parse(line); } catch { addTrace(agent,'info','비정형 출력',line); return; }
       traceProviderEvent(agent,data,line);
-      if (agent==='codex') {
-        if (data.type==='thread.started' && data.thread_id) { const p=state.pending.codex; if(p?.isolated){ if(p.sessionStore)p.sessionStore.codex=data.thread_id; p.sessionId=data.thread_id; } else { state.sessions.codex=data.thread_id; const stats=ensureAgentSessionStats('codex');if(stats)stats.sessionId=data.thread_id; if(p)p.sessionId=data.thread_id; save(); renderSettings(); } }
+      // Parse by the slot's PROVIDER (which CLI's stream format), not its id —
+      // else a Claude slot with id 'codex' would be parsed with the codex logic
+      // and never capture its assistant text (silent empty response). Session
+      // state is keyed by the slot (agent), not the provider.
+      if (providerOf(agent)==='codex') {
+        if (data.type==='thread.started' && data.thread_id) { const p=state.pending[agent]; if(p?.isolated){ if(p.sessionStore)p.sessionStore[agent]=data.thread_id; p.sessionId=data.thread_id; } else { state.sessions[agent]=data.thread_id; const stats=ensureAgentSessionStats(agent);if(stats)stats.sessionId=data.thread_id; if(p)p.sessionId=data.thread_id; save(); renderSettings(); } }
         if (data.type==='item.completed' && data.item?.type==='agent_message' && data.item.text) appendAgentText(agent,data.item.text);
         if (data.type==='error') {
           // A stopped NSTask can emit its final provider error before the
@@ -2009,9 +2016,9 @@
       } else {
         const delta=data.type==='stream_event' && data.event?.type==='content_block_delta' && data.event?.delta?.type==='text_delta' ? data.event.delta.text : null;
         if (data.session_id && (delta || data.type==='assistant' || (data.type==='result'&&!data.is_error))) {
-          const p=state.pending.claude;
-          if(p?.isolated){ if(p.sessionStore)p.sessionStore.claude=data.session_id; p.sessionId=data.session_id; }
-          else { state.sessions.claude=data.session_id; const stats=ensureAgentSessionStats('claude');if(stats)stats.sessionId=data.session_id; if(p)p.sessionId=data.session_id; save(); renderSettings(); }
+          const p=state.pending[agent];
+          if(p?.isolated){ if(p.sessionStore)p.sessionStore[agent]=data.session_id; p.sessionId=data.session_id; }
+          else { state.sessions[agent]=data.session_id; const stats=ensureAgentSessionStats(agent);if(stats)stats.sessionId=data.session_id; if(p)p.sessionId=data.session_id; save(); renderSettings(); }
         }
         if (delta) appendAgentText(agent,delta);
         if (data.type==='result' && !currentText(agent) && data.result) appendAgentText(agent,data.result);
@@ -2201,15 +2208,25 @@
       setTimeout(()=>{
         withConversation(flow.conversationId,()=>{
           if(state.orchestration!==flow||flow.cancelled)return;
-          // A collaboration turn (e.g. the reviewer's verdict) may record only on
-          // the board and produce no chat text — show that board section in its
-          // bubble instead of a bare "응답 없이 종료".
+          // Display-only (no tokens/API): show each turn's actual board
+          // contribution (proposal/verdict/decision) with a role label so the
+          // A↔B exchange is visible, instead of the agent's meta narration.
           if(turnBubbleId){
-            const bubble=state.messages.find(m=>m.id===turnBubbleId);const b=boardFor(flow);
-            const field=window.TriadCollaboration.requiredBoardField(task);
-            if(bubble&&/응답 없이 종료|출력 없이 정상 종료/.test(bubble.text||'')&&b&&field&&String(b[field]||'').trim()){
-              updateMessage(turnBubbleId,m=>{m.text=String(b[field]).trim();});
-            }
+            const b=boardFor(flow);const field=window.TriadCollaboration.requiredBoardField(task);
+            const flatten=v=>Array.isArray(v)?v.map(x=>typeof x==='string'?x:JSON.stringify(x)).join('\n'):String(v??'');
+            const labels={proposal:'📝 제안',verdict:'🔍 검토',resolve:'🔧 이견 해결',decision:'✅ 결정'};
+            let content=field?flatten(b?.[field]).trim():'';
+            if(task.kind==='verdict'){const d=flatten(b?.disputes).trim();if(d)content+=(content?'\n\n':'')+`이견·근거:\n${d}`;}
+            if(content)updateMessage(turnBubbleId,m=>{
+              const orig=String(m.text||'').trim();
+              const labeled=`${labels[task.kind]?labels[task.kind]+'\n\n':''}${content}`;
+              const hasNarration=orig&&orig!==labeled&&orig!==content&&!/^(응답 없이 종료|출력 없이 정상 종료|생각 중…)/.test(orig);
+              // The agent's streamed narration IS the conversation → keep it in the
+              // chat; move the structured board result (제안/검토/결정) to a toggle.
+              // A board-only turn (no narration) shows the board result directly.
+              if(hasNarration){m.boardResult=labeled;}
+              else{m.text=labeled;delete m.boardResult;}
+            });
           }
           // A missing board write is NOT fatal: record the miss, tell the user,
           // and keep the collaboration going without that entry (the next turn

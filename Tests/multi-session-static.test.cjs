@@ -64,6 +64,16 @@ test('provider 전환 시 그 슬롯의 세션을 리셋한다 (교차-provider 
   assert.match(renderer, /if\(providerOf\(agent\)===provider\)return;/);
 });
 
+test('스트림 파싱도 slot이 아니라 provider 기준 — Claude 슬롯의 claude 출력을 codex 파서로 흘리지 않는다', () => {
+  // parseLine + traceProviderEvent가 providerOf로 분기 (이게 Claude A 빈 응답의 진짜 원인이었음)
+  assert.match(renderer, /if \(providerOf\(agent\)==='codex'\) \{/);
+  assert.match(renderer, /function traceProviderEvent[\s\S]{0,40}if\(providerOf\(agent\)==='codex'\)\{/);
+  // 세션 상태는 슬롯(agent) 키 — 하드코딩된 .codex/.claude 없음
+  assert.match(renderer, /state\.sessions\[agent\]=data\.thread_id/);
+  assert.match(renderer, /state\.sessions\[agent\]=data\.session_id/);
+  assert.doesNotMatch(renderer, /state\.pending\.codex;|state\.sessions\.codex=data|p\.sessionStore\.claude=data/);
+});
+
 test('실행/인증은 slot이 아니라 provider 기준으로 CLI를 고른다', () => {
   assert.match(main, /const provider = \(config && util\.stringOrNil\(config\.provider\)\) \|\| agent/);
   assert.match(main, /if \(provider === 'codex'\) \{/);

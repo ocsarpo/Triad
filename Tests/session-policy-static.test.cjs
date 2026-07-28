@@ -17,7 +17,7 @@ test('렌더러는 세션 정책·자동 회전·대화별 stats migration을 �
   assert.match(renderer, /L\('sessionSummary',\{policy,turns:stats\.turns\|\|0,total:totalInput,context:contextInput,fresh\}\)/);
   assert.match(renderer, /<label>현재 문맥 기준<\/label><input data-key="sessionTokenLimit"/);
   assert.match(renderer, /function ensureAgentSessionStats\(agent\)/);
-  assert.match(renderer, /const stats=ensureAgentSessionStats\('codex'\)/);
+  assert.match(renderer, /const stats=ensureAgentSessionStats\(agent\)/); // 슬롯 키 (provider 분리)
   assert.match(renderer, /자동 회전 · 기존 세션 사용량 미측정/);
   assert.match(renderer, /sessionStats:clone\(state\.sessionStats\)/);
   assert.match(renderer, /normalizeSessionStats\(conversation\.sessionStats\|\|\{\}\)/);

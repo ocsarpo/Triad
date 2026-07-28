@@ -6,6 +6,7 @@ const path = require('node:path');
 const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html'), 'utf8');
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.js'), 'utf8');
 const auth = fs.readFileSync(path.join(__dirname, '../electron/lib/auth.js'), 'utf8');
+const mcp = fs.readFileSync(path.join(__dirname, '../Resources/triad-mcp-server.cjs'), 'utf8');
 
 test('슬롯은 provider로 어떤 CLI를 돌릴지 분리한다 (멀티세션)', () => {
   assert.match(renderer, /provider:'codex'/);
@@ -40,6 +41,13 @@ test('슬롯 라벨(핀·알약·필터·폴더)이 provider 이름을 따라간
   assert.match(renderer, /set\('#pill-codex strong',names\.codex\)/);
   assert.match(renderer, /if\(t==='codex'\)\{b\.textContent=L\('pinLabel',\{name:names\.codex\}\)/);
   assert.match(renderer, /set\('\[data-trace-filter="codex"\]',names\.codex\)/);
+  // 태그 버튼(라벨+#a/#b) · 중지 버튼 · 협업 시작/종합 셀렉터도 반영
+  assert.match(renderer, /const tagCodex=document\.querySelector\('\.tag\.codex'\);if\(tagCodex\)\{tagCodex\.textContent=names\.codex;tagCodex\.dataset\.tag='#a';\}/);
+  assert.match(renderer, /set\('#stop-codex',L\('stopLabel',\{name:names\.codex\}\)\)/);
+  assert.match(renderer, /set\('#collab-lead option\[value="codex"\]',names\.codex\)/);
+  // 에이전트 모드: 스스로 끝낼 수 있으면 보드 없이 바로 답, 최종 답변은 반드시 채팅에
+  assert.match(renderer, /이 작업을 스스로 끝낼 수 있으면 공유 보드 기록 없이 바로 사용자에게 줄 최종 답변을 이 응답 본문\(채팅\)에 작성하세요/);
+  assert.match(renderer, /최종 답변은 반드시 이 응답 본문\(채팅\)에 사용자에게 직접 작성하세요/);
   // recomputeNames가 라벨 동기화까지 호출
   assert.match(renderer, /names\.claude = providerName\(pp\)[\s\S]{0,80}syncSlotLabels\(\)/);
 });
@@ -61,4 +69,15 @@ test('실행/인증은 slot이 아니라 provider 기준으로 CLI를 고른다'
   assert.match(main, /if \(provider === 'codex'\) \{/);
   assert.match(auth, /const provider = util\.stringOrNil\(config\.provider\) \|\| agent/);
   assert.match(auth, /const args = argsFor\(provider, operation\)/);
+});
+
+test('Phase 2: MCP 브로커의 ask_agent 헬퍼도 provider 기준으로 스폰/파싱한다', () => {
+  assert.match(mcp, /const provider = agentConfig\.provider \|\| agent/);
+  assert.match(mcp, /const args = provider === 'codex' \? buildCodex\(agentConfig, nextDepth, agent\) : buildClaude\(agentConfig, nextDepth, agent\)/);
+  // 중첩 라우팅은 slot id로 유지
+  assert.match(mcp, /codexMcpArguments\(slot, nextDepth\)/);
+  assert.match(mcp, /claudeMcpJSON\(slot, nextDepth\)/);
+  // 출력 파싱도 provider 기준
+  assert.match(mcp, /if \(provider === 'codex' && value\.type === 'item\.completed'/);
+  assert.match(mcp, /if \(provider === 'claude' && value\.type === 'stream_event'/);
 });

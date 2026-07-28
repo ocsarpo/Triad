@@ -635,6 +635,14 @@
       set('[data-trace-filter="codex"]',names.codex); set('[data-trace-filter="claude"]',names.claude);
       set('#diff-agent option[value="codex"]',L('folderLabel',{name:names.codex}));
       set('#diff-agent option[value="claude"]',L('folderLabel',{name:names.claude}));
+      // collaboration lead (작업 시작) + finalizer pickers follow the providers too
+      set('#collab-lead option[value="codex"]',names.codex); set('#collab-lead option[value="claude"]',names.claude);
+      set('#collab-finalizer option[value="codex"]',names.codex); set('#collab-finalizer option[value="claude"]',names.claude);
+      // compose tag buttons: relabel to the slot name, route via #a/#b
+      const tagCodex=document.querySelector('.tag.codex');if(tagCodex){tagCodex.textContent=names.codex;tagCodex.dataset.tag='#a';}
+      const tagClaude=document.querySelector('.tag.claude');if(tagClaude){tagClaude.textContent=names.claude;tagClaude.dataset.tag='#b';}
+      // stop buttons
+      set('#stop-codex',L('stopLabel',{name:names.codex})); set('#stop-claude',L('stopLabel',{name:names.claude}));
     }
     const freshBranchStatus=()=>({codex:{loading:false,kind:'unknown',label:'확인 전',workspace:''},claude:{loading:false,kind:'unknown',label:'확인 전',workspace:''}});
     const freshProjectFiles=()=>({codex:{workspace:'',files:[],loading:false,error:''},claude:{workspace:'',files:[],loading:false,error:''}});
@@ -685,7 +693,13 @@
       const normalized=normalizeWorkspace(workspace,settings);return normalized.separate?settings?.[agent]?.workspacePath||normalized.commonPath:normalized.commonPath||settings?.[agent]?.workspacePath||'';
     }
     function effectiveAgentConfig(agent, settings=state.settings, workspace=state.workspace) {
-      return {...(settings?.[agent]||{}),workspacePath:effectiveWorkspacePath(agent,settings,workspace)};
+      const cfg={...(settings?.[agent]||{}),workspacePath:effectiveWorkspacePath(agent,settings,workspace)};
+      // Guarantee the CLI matches the slot's provider at dispatch time — stale
+      // saved state could still point a Claude slot at the codex binary (→ runs
+      // codex with claude args and dies silently).
+      const p=cfg.provider||agent;const wanted=providerPaths[p];const other=providerPaths[p==='codex'?'claude':'codex'];
+      if(wanted&&(!cfg.executablePath||cfg.executablePath==='codex'||cfg.executablePath==='claude'||cfg.executablePath===other))cfg.executablePath=wanted;
+      return cfg;
     }
     function effectiveAgentConfigs(settings=state.settings, workspace=state.workspace) {
       return Object.fromEntries(agents.map(agent=>[agent,effectiveAgentConfig(agent,settings,workspace)]));
@@ -1273,7 +1287,7 @@
         else if(data.type==='item.started') {
           const item=data.item||{};
           if(item.type==='command_execution') addTrace(agent,'info','명령 실행',item.command||item);
-          else if(item.type==='mcp_tool_call') { if(/submit_contribution/.test(item.tool||item.name||'')&&state.pending[agent])state.pending[agent].contributed=true; addTrace(agent,'info',`도구 호출 · ${item.server||''} ${item.tool||item.name||''}`.trim(),item); }
+          else if(item.type==='mcp_tool_call') { const tn=item.tool||item.name||''; if(/submit_contribution/.test(tn)&&state.pending[agent])state.pending[agent].contributed=true; if(/ask_agent/.test(tn))sealAgentSegment(agent); addTrace(agent,'info',`도구 호출 · ${item.server||''} ${tn}`.trim(),item); }
           else if(item.type!=='agent_message') addTrace(agent,'info',`단계 시작 · ${item.type||'event'}`,item);
         } else if(data.type==='item.completed') {
           const item=data.item||{};
@@ -1290,7 +1304,7 @@
         else if(data.type==='stream_event') {
           const event=data.event||{};
           if(event.type==='message_start') addTrace(agent,'info',`응답 생성 시작 · ${event.message?.model||'Claude'}`,event.message?.usage||'');
-          else if(event.type==='content_block_start'&&event.content_block?.type==='tool_use') { if(/submit_contribution/.test(event.content_block.name||'')&&state.pending[agent])state.pending[agent].contributed=true; addTrace(agent,'info',`도구 호출 · ${event.content_block.name||'tool'}`,event.content_block.input||event.content_block); }
+          else if(event.type==='content_block_start'&&event.content_block?.type==='tool_use') { const tn=event.content_block.name||''; if(/submit_contribution/.test(tn)&&state.pending[agent])state.pending[agent].contributed=true; if(/ask_agent/.test(tn))sealAgentSegment(agent); addTrace(agent,'info',`도구 호출 · ${tn||'tool'}`,event.content_block.input||event.content_block); }
           else if(event.type==='content_block_start'&&event.content_block?.type==='thinking') addTrace(agent,'info','추론 단계 시작 · 내용 비공개');
           else if(event.type==='message_stop') addTrace(agent,'success','응답 스트림 완료');
         } else if(data.type==='assistant') {addTrace(agent,'success','응답 메시지 완료',data.message?.usage||'');recordTurnUsage(agent,data.message?.usage);}
@@ -1348,15 +1362,8 @@
       if(state.orchestration?.mode==='agent'&&event.used)state.orchestration.handoffs=Math.max(state.orchestration.handoffs||0,Number(event.used));
       if(event.eventType==='agent_call_started'){
         const reason=event.reason?L('callReason',{r:event.reason}):'';
-        // Seal the asking agent's current segment so its post-answer output
-        // starts a NEW bubble BELOW the Q&A. Drop the segment if it produced no
-        // user-facing text (it was only a "working" spinner during tool use).
-        if(state.responseIds[from]){
-          const segId=state.responseIds[from];const seg=state.messages.find(m=>m.id===segId);
-          if(seg&&!String(seg.text||'').trim())state.messages=state.messages.filter(m=>m.id!==segId);
-          else if(seg)updateMessage(segId,m=>{m.streaming=false;if(!m.completedAt)m.completedAt=Date.now();});
-          state.responseIds[from]=null;
-        }
+        // (The asking agent's segment is sealed deterministically from its own
+        // ask_agent tool call — see sealAgentSegment — not from this lagged event.)
         // The question is its own message and STAYS put (spinner = awaiting the
         // answer); the answer arrives as a separate message so both remain
         // visible in chronological order.
@@ -1606,7 +1613,7 @@
       // the segment is sealed (see the broker handler) so a single bubble never
       // keeps growing across the 회의실 Q&A.
       state.responseIds[agent]=addMessage(agent,'',true,bubbleMeta);renderStatus();
-      addTrace(agent,'info','명령 전달',{model:config.model,effort:config.effort,speed:config.speedMode,workspace:config.workspacePath,writableRoots:config.writableRoots||'',networkAccess:!!config.networkAccess,allowLocalBinding:!!config.allowLocalBinding,session:session?'resume':'new',isolated,mode:state.orchestration?.mode||'independent'});
+      addTrace(agent,'info','명령 전달',{provider:config.provider||agent,executable:config.executablePath,model:config.model,effort:config.effort,speed:config.speedMode,workspace:config.workspacePath,writableRoots:config.writableRoots||'',networkAccess:!!config.networkAccess,allowLocalBinding:!!config.allowLocalBinding,session:session?'resume':'new',isolated,mode:state.orchestration?.mode||'independent'});
       post({action:'run',agent,conversationId,slotId:`${conversationId}:${agent}`,prompt,config,agentConfigs,collaboration,mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,sharedContext),sharedContext,session,runId,images});return true;
     }
     function markMessageWorkStarted(messageId) {
@@ -1792,16 +1799,21 @@
       // 안정 prefix(의제·참고·역할·정책은 한 실행 안에서 에이전트 턴마다 바뀌지 않음)를
       // 먼저 두고, 매 턴 revision이 바뀌는 보드 단계·스냅샷은 맨 뒤로 — prompt prefix
       // 캐시가 volatile 델타에 깨지지 않도록.
-      const common=`사용자 의제:\n${flow.objective}${references}\n\n당신의 역할: ${role}\n\n공유 보드는 프로젝트가 아니라 Triad가 관리합니다. 전체 채팅 기록이나 다른 AI의 원문 답변을 요청하거나 반복하지 마세요. 필요한 프로젝트 근거는 직접 필요한 파일·라인만 읽으세요.\n\n공유 보드 단계: ${task.phase}\n공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(packet)}`;
+      // Present agents by their display names (e.g. "Claude A"/"Claude B"), not
+      // the internal slot codes — otherwise a Claude×2 run says "Codex 검수".
+      const other=task.agent===board?.owner?board?.reviewer:board?.owner;
+      const otherName=other?(names[other]||other):'상대 AI';
+      const relabel=(p)=>(p&&typeof p==='object')?{...p,...(p.owner?{owner:names[p.owner]||p.owner}:{}),...(p.reviewer?{reviewer:names[p.reviewer]||p.reviewer}:{})}:p;
+      const common=`사용자 의제:\n${flow.objective}${references}\n\n당신=${names[task.agent]} (${role}), 상대=${otherName}. 상대나 검토자를 'Codex'/'Claude' 같은 슬롯 코드가 아니라 이 표시 이름으로 지칭하세요.\n\n공유 보드는 프로젝트가 아니라 Triad가 관리합니다. 전체 채팅 기록이나 다른 AI의 원문 답변을 요청하거나 반복하지 마세요. 필요한 프로젝트 근거는 직접 필요한 파일·라인만 읽으세요.\n\n공유 보드 단계: ${task.phase}\n공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(relabel(packet))}`;
       if(task.kind==='proposal')return `${common}\n\ninline에는 제약만 있습니다. 필요한 경우 shared_context_read로 필요한 섹션만 읽으세요. 먼저 shared_context_update 도구로 proposal과 필요한 constraints/evidence를 작성하세요. 그 뒤 사용자에게는 실행 가능한 제안과 근거만 간결하게 설명하세요.`;
-      if(task.kind==='verdict')return `${common}\n\nshared_context_read로 proposal과 evidence만 읽고 반례·누락만 검토하세요. submit_verdict 도구로 agree | disagree | conditional 중 하나와 최대 3개의 findings를 기록하세요. agree라면 새 동의 라운드를 시작하지 마세요.`;
+      if(task.kind==='verdict')return `${common}\n\nshared_context_read로 proposal과 evidence만 읽고 반례·누락만 검토하세요. submit_verdict 도구로 agree | disagree | conditional 중 하나와 최대 3개의 findings를 기록하세요. agree라면 새 동의 라운드를 시작하지 마세요. 사용자에게는 판정과 핵심 근거를 한두 문장으로 설명하세요('agree' 한 단어로 끝내지 마세요).`;
       if(task.kind==='resolve')return `${common}\n\nshared_context_read로 verdict와 disputes만 읽고 해결하세요. 필요한 변경은 shared_context_update로 proposal/evidence에 반영하고, 해결 결과를 짧게 남기세요.`;
-      return `${common}\n\nshared_context_read로 proposal, evidence, verdict, disputes만 읽어 현재 보드 근거로 최종 결론을 내리세요. shared_context_update로 decision을 기록해 보드를 완료하고, 사용자에게 바로 실행 가능한 결론을 제시하세요. 새 토론이나 상대 AI 호출은 시작하지 마세요.`;
+      return `${common}\n\nshared_context_read로 proposal, evidence, verdict, disputes만 읽어 현재 보드 근거로 최종 결론을 내리세요. shared_context_update로 decision을 기록해 보드를 완료하고, 사용자에게 바로 실행 가능한 결론을 제시하세요. **제안이 '누가 무엇을 한다'는 계획에 머물렀더라도, 결론에는 사용자가 실제로 요청한 산출물(코드·표·계산 결과 등)을 직접 만들어 포함하세요. 계획 재진술로 끝내지 마세요.** 새 토론이나 상대 AI 호출은 시작하지 마세요.`;
     }
     function agentHandoffProtocol(agent, disabled=false) {
-      if(disabled)return '위임 한도에 도달했습니다. 상대 AI에게 추가 질문을 요청하지 말고 현재 정보로 사용자에게 줄 최선의 결과를 완성하세요.';
+      if(disabled)return '위임 한도에 도달했습니다. 상대 AI에게 추가 질문을 요청하지 말고 현재 정보로 사용자에게 줄 최선의 결과를 이 응답 본문(채팅)에 직접 완성해 작성하세요.';
       const other=agent==='codex'?'claude':'codex';
-      return `에이전트 협업 모드입니다. 먼저 shared_context_update로 proposal과 필요한 evidence를 공유 보드에 기록한 뒤에만, ${names[other]}의 정보·검토·도구 사용이 필요한 단일 쟁점이 있을 때 ask_agent를 호출하세요. ask_agent에는 필요한 보드 section만 지정하세요. 도구 결과가 돌아오면 같은 작업을 계속하여 최종 답변을 완성하세요. ask_agent를 사용했다면 아래 인계 마커는 출력하지 마세요.\nask_agent 도구가 제공되지 않거나 호출할 수 없을 때만 답변 맨 끝에 아래 호환 형식으로 요청하세요. JSON 밖의 마커 문구를 바꾸지 마세요.\n[[TRIAD_HANDOFF]]\n{"to":"${other}","question":"상대가 수행할 구체적인 단일 질문","reason":"위임이 필요한 이유"}\n[[/TRIAD_HANDOFF]]`;
+      return `에이전트 협업 모드입니다. 이 작업을 스스로 끝낼 수 있으면 공유 보드 기록 없이 바로 사용자에게 줄 최종 답변을 이 응답 본문(채팅)에 작성하세요. ${names[other]}의 정보·검토·도구 사용이 꼭 필요한 단일 쟁점이 있을 때만, 그때 shared_context_update로 proposal과 필요한 evidence를 보드에 기록하고 ask_agent를 호출하세요(필요한 보드 section만 지정). 도구 결과가 돌아오면 같은 작업을 계속해 마무리하세요. ask_agent를 사용했다면 아래 인계 마커는 출력하지 마세요.\n**최종 답변은 반드시 이 응답 본문(채팅)에 사용자에게 직접 작성하세요. shared_context_update로 공유 보드에만 기록하고 끝내면 안 됩니다 — 보드 기록은 답변을 대신하지 않습니다.**\nask_agent 도구가 제공되지 않거나 호출할 수 없을 때만 답변 맨 끝에 아래 호환 형식으로 요청하세요. JSON 밖의 마커 문구를 바꾸지 마세요.\n[[TRIAD_HANDOFF]]\n{"to":"${other}","question":"상대가 수행할 구체적인 단일 질문","reason":"위임이 필요한 이유"}\n[[/TRIAD_HANDOFF]]`;
     }
     function buildAgentPrompt(task) {
       const flow=state.orchestration;
@@ -1950,7 +1962,7 @@
       state.forceMessageBottom=!queued;
       const active=state.conversations.find(item=>item.id===state.activeConversationId);
       if(active?.title==='새 대화'){
-        const title=original.replace(/(?:#|@)(?:codex|코덱스|claude|클로드|all|모두)(?=$|[\s,.:;!?])/giu,'').replace(/@"[^"]+"/g,'').replace(/\s+/g,' ').trim();
+        const title=original.replace(/(?:#|@)(?:codex|코덱스|claude|클로드|all|모두|a|b)(?=$|[\s,.:;!?])/giu,'').replace(/@"[^"]+"/g,'').replace(/\s+/g,' ').trim();
         if(title)active.title=title.slice(0,36)+(title.length>36?'…':'');
       }
       const userMessageId=addMessage('user',original,false,{deferred:queued,attachments:images});
@@ -2013,6 +2025,17 @@
       }
     }
     function ensureResponseBubble(agent) { if(!state.responseIds[agent]){const p=state.pending[agent];state.responseIds[agent]=addMessage(agent,'',true,p?.bubbleMeta||{});} return state.responseIds[agent]; }
+    // Seal the current segment when the agent calls ask_agent (detected live from
+    // its own stream, in sync — not from the lagged broker event). The post-answer
+    // continuation then starts a NEW bubble below the 회의실 Q&A; an empty segment
+    // (a pure handoff with no preamble) is dropped so no blank bubble lingers.
+    function sealAgentSegment(agent) {
+      const segId=state.responseIds[agent];if(!segId)return;
+      const seg=state.messages.find(m=>m.id===segId);
+      if(seg&&!String(seg.text||'').trim())state.messages=state.messages.filter(m=>m.id!==segId);
+      else if(seg)updateMessage(segId,m=>{m.streaming=false;if(!m.completedAt)m.completedAt=Date.now();});
+      state.responseIds[agent]=null;
+    }
     function appendAgentText(agent, text) { ensureResponseBubble(agent); updateMessage(state.responseIds[agent], m => { if(!m.startedAt)m.startedAt=Date.now(); m.text += text; }); }
     function currentText(agent) { return state.messages.find(m=>m.id===state.responseIds[agent])?.text || ''; }
     function waitForIndependentContribution(agent, pending, done) {
@@ -2094,10 +2117,14 @@
       const providerError=pending?.providerError||'';
       const failed=exitCode!==0||!!providerError;
       if(failed)ensureResponseBubble(agent); // surface the error even if no token ever arrived (lazy agent-mode bubble)
+      let wasEmpty=false;
       updateMessage(state.responseIds[agent], m => {
         if (failed) m.text += (m.text?'\n\n':'') + '⚠️ ' + (providerError || err || `프로세스 종료 코드 ${exitCode}`);
-        if (!m.text) m.text='응답 없이 종료되었습니다.'; m.streaming=false; m.completedAt=Date.now();
+        if (!String(m.text||'').trim()) { wasEmpty=true; m.text='응답 없이 종료되었습니다.'; } m.streaming=false; m.completedAt=Date.now();
       });
+      // A clean exit with no captured text is a mystery (agent produced nothing,
+      // or its output wasn't parsed) — log the raw tails so we can see why.
+      if(wasEmpty&&!failed)addTrace(agent,'error','빈 응답 진단',{exitCode,stderr:(state.stderr[agent]||'').slice(-2000),stdoutTail:(state.lineBuffers[agent]||'').slice(-2000)});
       state.running[agent]=false;
       addTrace(agent,failed?'error':'success',failed?`프로세스 종료 · code ${exitCode}`:'프로세스 정상 종료',failed?(providerError||err):'');
       // Some CLI result streams omit usage.  A successful normal request
@@ -2155,14 +2182,35 @@
           addTrace(agent,'success',`${names[task.requester]}에게 답변 반환`,{characters:answer.length});
           setTimeout(()=>runAgentTurn({agent:task.requester,kind:'agent_work',received:answer,from:agent}),0);return;
         }
+        // Safety net: if the lead recorded its result on the board but gave no
+        // chat answer, surface the board content so the user still sees it.
+        const leadBubbleId=state.responseIds[agent];const board=boardFor(flow);
+        if(leadBubbleId&&board){
+          const bubble=state.messages.find(m=>m.id===leadBubbleId);
+          if(bubble&&/응답 없이 종료/.test(bubble.text||'')){
+            const boardAnswer=String(board.decision||board.proposal||'').trim();
+            if(boardAnswer)updateMessage(leadBubbleId,m=>{m.text=`${boardAnswer}\n\n_(공유 보드 기록을 표시함 — 이 실행은 채팅 답변을 생성하지 않았습니다.)_`;});
+          }
+        }
         finishAgentFlowWhenReady(flow,agent);return;
       }
       flow.lastAgent=agent;flow.current=null;
+      const turnBubbleId=state.responseIds[agent]; // capture before finishAgent deletes it
       // MCP broker events can arrive a fraction after the CLI termination
       // event, so wait briefly for that event before checking the board.
       setTimeout(()=>{
         withConversation(flow.conversationId,()=>{
           if(state.orchestration!==flow||flow.cancelled)return;
+          // A collaboration turn (e.g. the reviewer's verdict) may record only on
+          // the board and produce no chat text — show that board section in its
+          // bubble instead of a bare "응답 없이 종료".
+          if(turnBubbleId){
+            const bubble=state.messages.find(m=>m.id===turnBubbleId);const b=boardFor(flow);
+            const field=window.TriadCollaboration.requiredBoardField(task);
+            if(bubble&&/응답 없이 종료|출력 없이 정상 종료/.test(bubble.text||'')&&b&&field&&String(b[field]||'').trim()){
+              updateMessage(turnBubbleId,m=>{m.text=String(b[field]).trim();});
+            }
+          }
           // A missing board write is NOT fatal: record the miss, tell the user,
           // and keep the collaboration going without that entry (the next turn
           // just reads a board where this stage is empty).
@@ -2228,8 +2276,11 @@
         normalizeSessionStats(state.sessionStats||{});
         providerPaths={codex:event.codexPath||'codex',claude:event.claudePath||'claude'};
         for(const slot of agents){
-          const cfg=state.settings[slot];const p=providerOf(slot);
-          if(!cfg.executablePath||cfg.executablePath==='codex'||cfg.executablePath==='claude')cfg.executablePath=providerPaths[p];
+          const cfg=state.settings[slot];const p=providerOf(slot);const otherPath=providerPaths[p==='codex'?'claude':'codex'];
+          // Reset to this provider's CLI when empty/bare OR still pointing at the
+          // OTHER provider's binary (stale after a provider switch) — otherwise
+          // e.g. a Claude slot would run the codex binary with claude args and die silently.
+          if(!cfg.executablePath||cfg.executablePath==='codex'||cfg.executablePath==='claude'||cfg.executablePath===otherPath)cfg.executablePath=providerPaths[p];
           const list=p==='codex'?state.codexModels:state.claudeModels;const catalog=list.map(model=>model.slug);
           if(cfg.authMode==='existing'&&catalog.length&&!catalog.includes(cfg.model)){cfg.model=list[0].slug;cfg.effort=list[0].defaultEffort||'medium';}
         }

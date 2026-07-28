@@ -4,9 +4,11 @@
   else root.TriadRouter = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   const agents = ['codex', 'claude'];
+  // #a / #b are slot aliases (A = codex slot, B = claude slot) so a Claude×2 or
+  // Codex×2 preset can still be addressed unambiguously; #codex / #claude stay.
   const aliases = [
-    ['codex', ['@codex', '@코덱스', '#codex', '#코덱스']],
-    ['claude', ['@claude', '@클로드', '#claude', '#클로드']],
+    ['codex', ['@codex', '@코덱스', '#codex', '#코덱스', '@a', '#a']],
+    ['claude', ['@claude', '@클로드', '#claude', '#클로드', '@b', '#b']],
     ['all', ['@all', '@모두', '#all', '#모두']]
   ];
 
@@ -18,20 +20,20 @@
       return prefix;
     });
     cleaned = cleaned.replace(/(^|\s)@([^\s@#]+)(?=$|\s)/gu, (full, prefix, path) => {
-      if (!['codex', '코덱스', 'claude', '클로드', 'all', '모두'].includes(path.toLowerCase())) {
+      if (!['codex', '코덱스', 'claude', '클로드', 'all', '모두', 'a', 'b'].includes(path.toLowerCase())) {
         files.push(path);
         return prefix;
       }
       return full;
     });
-    cleaned = cleaned.replace(/^\\(#(?:codex|코덱스|claude|클로드|all|모두):[ \t]*)$/gimu, '$1');
+    cleaned = cleaned.replace(/^\\(#(?:codex|코덱스|claude|클로드|all|모두|a|b):[ \t]*)$/gimu, '$1');
     cleaned = cleaned.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
     return { text: cleaned, files };
   }
 
   function blockTagMatches(input) {
-    const targetFor = { codex: 'codex', '코덱스': 'codex', claude: 'claude', '클로드': 'claude', all: 'all', '모두': 'all' };
-    const regex = /^#(codex|코덱스|claude|클로드|all|모두):[ \t]*$/gimu;
+    const targetFor = { codex: 'codex', '코덱스': 'codex', a: 'codex', claude: 'claude', '클로드': 'claude', b: 'claude', all: 'all', '모두': 'all' };
+    const regex = /^#(codex|코덱스|claude|클로드|all|모두|a|b):[ \t]*$/gimu;
     return [...input.matchAll(regex)].map(match => ({
       target: targetFor[match[1].toLowerCase()],
       boundary: match.index,

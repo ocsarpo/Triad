@@ -151,3 +151,14 @@ test('블록별 문서 참조는 해당 AI에게만 붙는다', () => {
   assert.match(result.prompts.claude,/\/tmp\/review\.md/);
   assert.doesNotMatch(result.prompts.claude,/code\.md/);
 });
+
+test('#a·#b 슬롯 별칭이 코덱스/클로드 슬롯으로 라우팅된다 (멀티세션)', () => {
+  assert.deepEqual(plain(route('#a 이것좀 봐줘').targets), ['codex']);
+  assert.deepEqual(plain(route('#b 이것좀 봐줘').targets), ['claude']);
+  assert.deepEqual(plain(route('#A 대문자도').targets), ['codex']);
+  // 기존 #codex/#claude 별칭 유지
+  assert.deepEqual(plain(route('#codex 여전히').targets), ['codex']);
+  // @a 는 파일 참조가 아니라 태그로 처리
+  const both = route('#a 코덱스일 #b 클로드일');
+  assert.deepEqual(plain(both.targets).sort(), ['claude', 'codex']);
+});

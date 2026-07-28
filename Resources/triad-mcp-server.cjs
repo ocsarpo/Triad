@@ -116,7 +116,7 @@ function claudeMcpJSON(nextCaller, nextDepth) {
   return JSON.stringify({ mcpServers: { triad: { command: config.nodePath, args: [config.brokerPath, '--config', configPath, '--caller', nextCaller, '--depth', String(nextDepth)] } } });
 }
 
-function buildCodex(targetConfig, nextDepth) {
+function buildCodex(targetConfig, nextDepth, slot) {
   const permission = targetConfig.permissionMode || 'workspace-write';
   const args = ['exec', '--json', '--color', 'never', '--skip-git-repo-check', '--cd', targetConfig.workspacePath, '--model', targetConfig.model, '--config', `model_reasoning_effort=${JSON.stringify(targetConfig.effort || 'medium')}`, '--sandbox', permission];
   for (const root of writableRoots(targetConfig)) args.push('--add-dir', root);
@@ -124,12 +124,12 @@ function buildCodex(targetConfig, nextDepth) {
   if (permission === 'workspace-write' && targetConfig.allowLocalBinding) args.push('--config', 'features.network_proxy.enabled=true', '--config', 'features.network_proxy.allow_local_binding=true');
   if (targetConfig.speedMode === 'fast') args.push('--enable', 'fast_mode', '--config', 'service_tier="fast"');
   else args.push('--disable', 'fast_mode');
-  if (nextDepth < Number(config.maxDepth || 2)) args.push(...codexMcpArguments('codex', nextDepth));
+  if (nextDepth < Number(config.maxDepth || 2)) args.push(...codexMcpArguments(slot, nextDepth));
   args.push('-');
   return args;
 }
 
-function buildClaude(targetConfig, nextDepth) {
+function buildClaude(targetConfig, nextDepth, slot) {
   const roots = writableRoots(targetConfig);
   const sandbox = {};
   if (roots.length) sandbox.filesystem = { allowWrite: roots };
@@ -142,12 +142,12 @@ function buildClaude(targetConfig, nextDepth) {
   const args = ['--print', '--output-format', 'stream-json', '--verbose', '--model', targetConfig.model, '--effort', targetConfig.effort || 'medium', '--permission-mode', targetConfig.permissionMode || 'acceptEdits', '--settings', JSON.stringify(settings)];
   if (targetConfig.permissionMode === 'bypassPermissions') args.push('--allow-dangerously-skip-permissions');
   if (roots.length) args.push('--add-dir', ...roots);
-  if (nextDepth < Number(config.maxDepth || 2)) args.push('--mcp-config', claudeMcpJSON('claude', nextDepth));
+  if (nextDepth < Number(config.maxDepth || 2)) args.push('--mcp-config', claudeMcpJSON(slot, nextDepth));
   return args;
 }
 
 function supportingPrompt(question, reason, context, packet, nextDepth) {
-  return `당신은 Triad에서 ${caller === 'codex' ? 'Codex' : 'Claude'}가 작업 중 호출한 보조 AI입니다.\n` +
+  return `당신은 Triad에서 ${(config.agents[caller]?.provider || caller) === 'codex' ? 'Codex' : 'Claude'}가 작업 중 호출한 보조 AI입니다.\n` +
     `요청한 AI에게 돌려줄 정확하고 실행 가능한 답만 작성하세요. 필요한 도구와 MCP를 실제로 사용하고, 확인하지 못한 내용은 추측하지 마세요.\n` +
     `${nextDepth < Number(config.maxDepth || 2) ? '정보가 정말 부족한 경우에만 Triad ask_agent 도구로 상대 AI에게 한 번 더 확인할 수 있습니다.\n' : '중첩 호출 한도에 도달했으므로 상대 AI를 다시 호출하지 마세요.\n'}` +
     `\n질문:\n${question}\n` +
@@ -159,7 +159,10 @@ function supportingPrompt(question, reason, context, packet, nextDepth) {
 function runHelper(agent, prompt, nextDepth) {
   const agentConfig = config.agents[agent];
   if (!agentConfig || !agentConfig.executablePath) return Promise.reject(new Error(`${agent} 실행 설정이 없습니다.`));
-  const args = agent === 'codex' ? buildCodex(agentConfig, nextDepth) : buildClaude(agentConfig, nextDepth);
+  // A slot may run a second Codex/Claude session, so build args + parse output
+  // by the slot's provider, not its id. `agent` (slot id) still routes nesting.
+  const provider = agentConfig.provider || agent;
+  const args = provider === 'codex' ? buildCodex(agentConfig, nextDepth, agent) : buildClaude(agentConfig, nextDepth, agent);
   return new Promise((resolve, reject) => {
     let child;
     try { child = spawn(agentConfig.executablePath, args, { cwd: agentConfig.workspacePath, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] }); }
@@ -202,9 +205,9 @@ function runHelper(agent, prompt, nextDepth) {
         if (!line.trim()) continue;
         try {
           const value = JSON.parse(line);
-          if (agent === 'codex' && value.type === 'item.completed' && value.item?.type === 'agent_message' && value.item.text) answer = value.item.text;
-          if (agent === 'claude' && value.type === 'stream_event' && value.event?.type === 'content_block_delta' && value.event?.delta?.type === 'text_delta') answer += value.event.delta.text || '';
-          if (agent === 'claude' && !answer && value.type === 'result' && value.result) answer = value.result;
+          if (provider === 'codex' && value.type === 'item.completed' && value.item?.type === 'agent_message' && value.item.text) answer = value.item.text;
+          if (provider === 'claude' && value.type === 'stream_event' && value.event?.type === 'content_block_delta' && value.event?.delta?.type === 'text_delta') answer += value.event.delta.text || '';
+          if (provider === 'claude' && !answer && value.type === 'result' && value.result) answer = value.result;
         } catch {}
       }
       answer = answer.trim();

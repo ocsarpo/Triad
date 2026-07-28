@@ -45,8 +45,8 @@ test('종료 이벤트는 실행 ID로 늦은 이벤트를 무시한다', () => 
 });
 
 test('대기열 생명주기 변경의 앱 버전은 이 테스트에서 검증한다', () => {
-  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.48\.14<\/string>/);
-  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>84<\/string>/);
+  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.48\.15<\/string>/);
+  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>85<\/string>/);
 });
 
 test('독립 실행은 대상 슬롯과 공유 문서 충돌을 분리해 판단한다', () => {
@@ -87,8 +87,8 @@ test('백그라운드 실행은 시작 대화에 설정과 스트림을 고정�
   assert.match(renderer, /const contributionExpected=\/submit_contribution 도구로 runId\/\.test\(pending\?\.prompt\|\|''\)/);
   assert.match(renderer, /const missed=contributionExpected&&!pending\?\.contributed/);
   assert.match(renderer, /if\(conversationId\)\{boardAlertConvos\.add\(conversationId\);renderBoardAlert\(\);\}/);
-  // submit_contribution tool call is latched deterministically from the stream
-  assert.match(renderer, /\/submit_contribution\/\.test\(item\.tool\|\|item\.name\|\|''\)&&state\.pending\[agent\]\)state\.pending\[agent\]\.contributed=true/);
+  // submit_contribution / ask_agent tool calls are latched deterministically from the stream
+  assert.match(renderer, /if\(\/submit_contribution\/\.test\(tn\)&&state\.pending\[agent\]\)state\.pending\[agent\]\.contributed=true; if\(\/ask_agent\/\.test\(tn\)\)sealAgentSegment\(agent\)/);
   assert.match(renderer, /state\.backgroundWaits\.delete\(conversationId\);[\s\S]*?state\.backgroundDocumentIds\.delete\(documentId\);[\s\S]*?done\(\);/);
   assert.match(renderer, /setTimeout\(\(\)=>\{\s*withConversation\(flow\.conversationId,\(\)=>\{/);
   assert.match(renderer, /const runtime=runtimeFor\(conversationId\);if\(Object\.keys\(runtime\.pending\)\.length\|\|state\.backgroundWaits\.has\(conversationId\)\|\|runtime\.queue\.length\|\|runtime\.orchestration\)return/);

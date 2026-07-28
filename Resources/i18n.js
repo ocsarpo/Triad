@@ -297,6 +297,7 @@
     pinTitle: { en: 'Send untagged messages to {name} only', ko: '태그 없는 메시지를 {name}에게만 전달' },
     pinAllTitle: { en: 'Send untagged messages to both {a} and {b}', ko: '태그 없는 메시지를 {a}와 {b} 모두에게 전달' },
     folderLabel: { en: '{name} folder', ko: '{name} 폴더' },
+    stopLabel: { en: '■ Stop {name}', ko: '■ {name} 중지' },
     runHistory: { en: 'Run history ({n})', ko: '실행 기록 ({n})' },
     runN: { en: 'Run {n}', ko: '실행 {n}' },
     ownerLabel: { en: 'owner {name}', ko: '담당 {name}' },

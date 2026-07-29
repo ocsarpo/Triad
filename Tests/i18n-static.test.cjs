@@ -111,6 +111,45 @@ test('긴 보조 답변은 전문을 message.fullText에 보관하고 전문 보
   assert.match(i18n.translate('en', 'answerTruncated'), /only part is shown/);
 });
 
+test('메시지 영역 chrome·타임스탬프·계정 상태·시스템 메시지도 영문으로 지역화된다', () => {
+  // 말풍선 chrome (옵저버가 .messages를 skip하므로 렌더 시점 tc/L 필수)
+  assert.equal(i18n.chrome('en', '나'), 'Me');
+  assert.equal(i18n.chrome('en', '회의실'), 'Room');
+  assert.equal(i18n.chrome('en', '복사 실패'), 'Copy failed');
+  assert.equal(i18n.chrome('en', '복사 중…'), 'Copying…');
+  // 타임스탬프 (보간)
+  assert.equal(i18n.translate('en', 'msgStarted', { time: '14:03' }), 'Started 14:03');
+  assert.equal(i18n.translate('en', 'msgCompleted', { time: '14:05' }), 'Completed 14:05');
+  assert.equal(i18n.translate('en', 'msgWriting'), 'Writing…');
+  assert.equal(i18n.translate('en', 'msgThinking'), 'Thinking…');
+  // 설정: 이름과 합성된 계정 라벨·상태 (옵저버가 통문자열을 못 잡음)
+  assert.equal(i18n.translate('en', 'accountOf', { name: 'Claude A' }), 'Claude A account');
+  assert.equal(i18n.translate('en', 'acctClaudeMethod', { method: 'team' }), '✓ Claude team connected');
+  assert.match(i18n.translate('en', 'acctClaude'), /Claude account connected/);
+  // 회의실 시스템 메시지
+  assert.match(i18n.translate('en', 'handoffReturn', { from: 'A', to: 'B' }), /resuming the original task/);
+  assert.match(i18n.translate('en', 'brokerToolFail'), /Could not prepare/);
+  // 렌더러가 실제로 이 키/헬퍼를 사용
+  assert.match(renderer, /label = m\.author === 'user' \? tc\('나'\) : m\.author === 'system' \? tc\('회의실'\)/);
+  // 실행 과정(run-log) 트레이스: 정적 라벨은 렌더 시점 tc, 합성 라벨은 L
+  assert.equal(i18n.chrome('en', '명령 전달'), 'Command dispatched');
+  assert.equal(i18n.chrome('en', '빈 응답 진단'), 'Empty-response diagnostics');
+  assert.equal(i18n.chrome('en', '상호 토론 완료'), 'Debate complete');
+  assert.equal(i18n.translate('en', 'traceProcExit', { code: 1 }), 'Process exited · code 1');
+  assert.equal(i18n.translate('en', 'phaseProposal'), 'Draft proposal');
+  assert.match(renderer, /title\.textContent=tc\(item\.title\)/);
+  assert.match(renderer, /L\('traceToolCall',\{tool:tn\|\|'tool'\}\)/);
+  assert.match(renderer, /const labels=\{proposal:L\('phaseProposal'\)/);
+  // 날짜/시간은 UI 로케일을 따른다 (오전/오후 → AM/PM)
+  assert.match(renderer, /const dtLocale=\(\)=>effectiveLocale\(\)==='en'\?'en-US':'ko-KR'/);
+  assert.doesNotMatch(renderer, /toLocaleString\('ko-KR'/);
+  assert.match(renderer, /copy\.textContent=tc\('전체 복사'\)/);
+  assert.match(renderer, /reply\.textContent=tc\('답장'\)/);
+  assert.match(renderer, /return L\('acctClaude'\)/);
+  assert.match(renderer, /L\('accountOf',\{name:names\[agent\]\}\)/);
+  assert.match(renderer, /addMessage\('system',L\('handoffReturn'/);
+});
+
 test('셸(main)은 자체 메시지 테이블로 메뉴·다이얼로그·오류를 지역화한다', () => {
   assert.match(main, /const MAIN_MSG = \{/);
   assert.match(main, /function M\(key, params\)/);

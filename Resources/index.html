@@ -662,9 +662,11 @@
     const hasNativeBridge = () => !!window.webkit?.messageHandlers?.triad;
     const id = () => crypto.randomUUID();
     const clone = value => JSON.parse(JSON.stringify(value));
-    const welcomeText='독립 실행에서는 태그 없이 보내면 두 AI가 응답합니다. 에이전트 협업에서는 시작 AI가 필요할 때 상대 AI에게 질문하고 답을 돌려받아 작업을 계속합니다. 상호 토론과 교차 검토도 사용할 수 있습니다. @문서로 프로젝트 파일을 참조할 수 있습니다.';
-    const createWelcomeMessage=()=>({id:id(),author:'system',text:welcomeText,streaming:false,createdAt:Date.now()});
-    const isInitialWelcome=message=>message?.author==='system'&&message?.text===welcomeText;
+    const WELCOME_KO='독립 실행에서는 태그 없이 보내면 두 AI가 응답합니다. 에이전트 협업에서는 시작 AI가 필요할 때 상대 AI에게 질문하고 답을 돌려받아 작업을 계속합니다. 상호 토론과 교차 검토도 사용할 수 있습니다. @문서로 프로젝트 파일을 참조할 수 있습니다.';
+    const welcomeText=()=>L('welcomeText'); // rendered at display time so it follows the current locale
+    const createWelcomeMessage=()=>({id:id(),author:'system',welcome:true,text:welcomeText(),streaming:false,createdAt:Date.now()});
+    // identity: the marker (new) OR either localized source text (already-persisted seeds)
+    const isInitialWelcome=message=>message?.author==='system'&&(message?.welcome===true||message?.text===WELCOME_KO||message?.text===window.TriadI18n.translate('en','welcomeText'));
     function seedInitialWelcome(messages=[]) {
       const list=Array.isArray(messages)?messages:[];
       if(!list.length)return [createWelcomeMessage()];
@@ -863,8 +865,8 @@
     }
     function conversationTime(timestamp) {
       const date=new Date(timestamp);const today=new Date();
-      if(date.toDateString()===today.toDateString())return date.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
-      return date.toLocaleDateString('ko-KR',{month:'short',day:'numeric'});
+      if(date.toDateString()===today.toDateString())return date.toLocaleTimeString(dtLocale(),{hour:'2-digit',minute:'2-digit'});
+      return date.toLocaleDateString(dtLocale(),{month:'short',day:'numeric'});
     }
     function renderConversations() {
       const root=document.getElementById('conversation-list');if(!root)return;
@@ -924,20 +926,20 @@
     }
     function usageTooltip(agent){
       const usage=state.usage[agent]||{};const lines=(usage.windows||[]).map(limit=>{
-        const reset=window.TriadUsage.formatReset(limit.resetsAt);return `${limit.label}: ${limit.remainingPercent}% 남음${reset?` · ${reset} 초기화`:''}`;
+        const reset=window.TriadUsage.formatReset(limit.resetsAt,Date.now(),effectiveLocale());return L('usageLeft',{label:limit.label,pct:limit.remainingPercent})+(reset?L('usageResets',{reset}):'');
       });
-      if(usage.updatedAt)lines.push(`마지막 확인: ${new Date(usage.updatedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}`);
-      if(agent==='claude')lines.push('Claude는 작업 중 수신한 최신 한도 정보를 표시합니다.');
-      if(usage.error)lines.push(`오류: ${usage.error}`);return lines.join('\n');
+      if(usage.updatedAt)lines.push(L('usageLastChecked',{time:new Date(usage.updatedAt).toLocaleTimeString(dtLocale(),{hour:'2-digit',minute:'2-digit'})}));
+      if(agent==='claude')lines.push(L('usageClaudeNote'));
+      if(usage.error)lines.push(L('usageErr',{error:usage.error}));return lines.join('\n');
     }
     function renderUsage(){
       for(const agent of agents){
         const element=document.getElementById(`usage-${agent}`);if(!element)continue;const usage=state.usage[agent]||{};
         // Rate-limit/usage is a Codex-account feature; a Claude-provider slot has none.
         if(providerOf(agent)!=='codex'){element.textContent='';element.title='';continue;}
-        if(state.usageRefreshing)element.textContent='잔여량 조회 중…';
-        else if(usage.error&&!usage.windows?.length)element.textContent='조회 실패 · ↻ 재시도';
-        else element.textContent=window.TriadUsage.summary(usage);
+        if(state.usageRefreshing)element.textContent=tc('잔여량 조회 중…');
+        else if(usage.error&&!usage.windows?.length)element.textContent=tc('조회 실패 · ↻ 재시도');
+        else element.textContent=window.TriadUsage.summary(usage,Date.now(),effectiveLocale());
         element.title=usageTooltip(agent);
       }
       const button=document.getElementById('refresh-usage');if(button){button.classList.toggle('loading',state.usageRefreshing);button.disabled=state.usageRefreshing;}
@@ -991,17 +993,17 @@
       const filtered=state.traces.filter(item=>state.traceFilter==='all'||item.agent===state.traceFilter);
       const items=newest?filtered.slice().reverse():filtered; // storage stays chronological (copy/export unchanged)
       root.innerHTML='';
-      if(!items.length){const empty=document.createElement('div');empty.className='trace-empty';empty.textContent='명령을 보내면 실행 과정과 오류가 여기에 표시됩니다.';root.appendChild(empty);return;}
+      if(!items.length){const empty=document.createElement('div');empty.className='trace-empty';empty.textContent=tc('명령을 보내면 실행 과정과 오류가 여기에 표시됩니다.');root.appendChild(empty);return;}
       for(const item of items){
         const entry=document.createElement('div');entry.className=`trace-entry ${item.agent} ${item.level}`;
         const meta=document.createElement('div');meta.className='trace-meta';
-        const time=new Date(item.createdAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        const time=new Date(item.createdAt).toLocaleTimeString(dtLocale(),{hour:'2-digit',minute:'2-digit',second:'2-digit'});
         meta.textContent=`${time} · ${names[item.agent]||item.agent}`;
-        const title=document.createElement('strong');title.textContent=item.title;
+        const title=document.createElement('strong');title.textContent=tc(item.title);
         entry.append(meta,title);
         if(item.detail){
           const details=document.createElement('details');details.className='trace-detail';
-          const summary=document.createElement('summary');summary.textContent=item.level==='error'?'오류 원문':'상세 보기';
+          const summary=document.createElement('summary');summary.textContent=tc(item.level==='error'?'오류 원문':'상세 보기');
           const pre=document.createElement('pre');pre.textContent=item.detail;details.append(summary,pre);entry.appendChild(details);
         }
         root.appendChild(entry);
@@ -1010,7 +1012,7 @@
     }
     function renderTraceVisibility(){
       const app=document.querySelector('.app');const button=document.getElementById('trace-toggle');if(!app||!button)return;
-      app.classList.toggle('trace-hidden',!state.traceVisible);button.textContent=state.traceVisible?'실행 과정 숨기기':'실행 과정 보기';button.title=state.traceVisible?'오른쪽 실행 과정 패널 숨기기':'오른쪽 실행 과정 패널 보기';
+      app.classList.toggle('trace-hidden',!state.traceVisible);button.textContent=tc(state.traceVisible?'실행 과정 숨기기':'실행 과정 보기');button.title=tc(state.traceVisible?'오른쪽 실행 과정 패널 숨기기':'오른쪽 실행 과정 패널 보기');
       requestAnimationFrame(()=>{updateScrollButton();window.dispatchEvent(new Event('resize'));});
     }
     function refreshProjectDiff(agent=state.diff.agent) {
@@ -1222,7 +1224,7 @@
     }
     function boardTimestamp(value) {
       const timestamp=Date.parse(value||'');if(Number.isNaN(timestamp))return value||'기록 시각 없음';
-      return new Date(timestamp).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+      return new Date(timestamp).toLocaleString(dtLocale(),{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
     }
     function historyContributionText(value) {
       if(!value||typeof value!=='object'||Array.isArray(value))return '';
@@ -1253,7 +1255,7 @@
       for(const sharedDocument of state.sharedDocuments){
         const row=document.createElement('button');row.className=`board-document ${documentIdOf(sharedDocument)===state.activeSharedDocumentId?'active':''}`;row.type='button';row.title=documentLocked?'문서를 열람하고 다음 실행 대상으로 선택합니다. 현재 AI 실행은 기존 작업 문서를 계속 사용합니다.':documentTitleOf(sharedDocument);
         const title=document.createElement('strong');title.textContent=documentTitleOf(sharedDocument);
-        const details=document.createElement('small');details.textContent=`${sharedDocument.phase||'proposal'} · r${sharedDocument.revision??0} · ${sharedDocument.updatedAt?new Date(sharedDocument.updatedAt).toLocaleDateString('ko-KR',{month:'numeric',day:'numeric'}):'방금'}`;
+        const details=document.createElement('small');details.textContent=`${sharedDocument.phase||'proposal'} · r${sharedDocument.revision??0} · ${sharedDocument.updatedAt?new Date(sharedDocument.updatedAt).toLocaleDateString(dtLocale(),{month:'numeric',day:'numeric'}):tc('방금')}`;
         row.append(title,details);row.onclick=()=>setActiveSharedDocument(documentIdOf(sharedDocument));list.appendChild(row);
       }
       if(!state.sharedDocuments.length){const empty=document.createElement('p');empty.className='board-empty';empty.textContent='아직 공유 문서가 없습니다.';list.appendChild(empty);}
@@ -1287,24 +1289,24 @@
         else if(data.type==='item.started') {
           const item=data.item||{};
           if(item.type==='command_execution') addTrace(agent,'info','명령 실행',item.command||item);
-          else if(item.type==='mcp_tool_call') { const tn=item.tool||item.name||''; if(/submit_contribution/.test(tn)&&state.pending[agent])state.pending[agent].contributed=true; if(/ask_agent/.test(tn))sealAgentSegment(agent); addTrace(agent,'info',`도구 호출 · ${item.server||''} ${tn}`.trim(),item); }
-          else if(item.type!=='agent_message') addTrace(agent,'info',`단계 시작 · ${item.type||'event'}`,item);
+          else if(item.type==='mcp_tool_call') { const tn=item.tool||item.name||''; if(/submit_contribution/.test(tn)&&state.pending[agent])state.pending[agent].contributed=true; if(/ask_agent/.test(tn))sealAgentSegment(agent); addTrace(agent,'info',L('traceToolCallSrv',{server:item.server||'',tool:tn}).trim(),item); }
+          else if(item.type!=='agent_message') addTrace(agent,'info',L('traceStepStart',{type:item.type||'event'}),item);
         } else if(data.type==='item.completed') {
           const item=data.item||{};
           if(item.type==='agent_message') addTrace(agent,'success','응답 생성 완료');
-          else if(item.type==='command_execution') addTrace(agent,item.exit_code===0?'success':'error',`명령 종료${item.exit_code!=null?` · code ${item.exit_code}`:''}`,item);
-          else if(item.type==='mcp_tool_call') addTrace(agent,item.status==='failed'?'error':'success',`도구 완료 · ${item.tool||item.name||''}`.trim(),item);
-          else addTrace(agent,'success',`단계 완료 · ${item.type||'event'}`,item);
+          else if(item.type==='command_execution') addTrace(agent,item.exit_code===0?'success':'error',L('traceCmdExit')+(item.exit_code!=null?` · code ${item.exit_code}`:''),item);
+          else if(item.type==='mcp_tool_call') addTrace(agent,item.status==='failed'?'error':'success',L('traceToolDone',{tool:item.tool||item.name||''}).trim(),item);
+          else addTrace(agent,'success',L('traceStepDone',{type:item.type||'event'}),item);
         } else if(data.type==='turn.completed') {addTrace(agent,'success','작업 완료',data.usage||data);recordTurnUsage(agent,data.usage,{trace:true});}
         else if(data.type==='error') addTrace(agent,'error','Codex 오류',data.error?.message||data.message||rawLine);
       } else {
-        if(data.type==='system'&&data.subtype==='init') addTrace(agent,'info',`세션 시작 · ${data.model||'Claude'}`,{session_id:data.session_id,permissionMode:data.permissionMode,mcp_servers:data.mcp_servers});
-        else if(data.type==='system'&&data.subtype==='status') addTrace(agent,'info',`상태 · ${data.status||data.subtype}`,data);
-        else if(data.type==='rate_limit_event') {const normalized=window.TriadUsage.normalizeClaude(data.rate_limit_info||data);if(normalized.windows.length)setUsage(agent,normalized,data.rate_limit_info||data);addTrace(agent,data.rate_limit_info?.status==='allowed'?'info':'error','사용량 한도 상태',data.rate_limit_info);}
+        if(data.type==='system'&&data.subtype==='init') addTrace(agent,'info',L('traceSessionModel',{model:data.model||'Claude'}),{session_id:data.session_id,permissionMode:data.permissionMode,mcp_servers:data.mcp_servers});
+        else if(data.type==='system'&&data.subtype==='status') addTrace(agent,'info',L('traceStatus',{status:data.status||data.subtype}),data);
+        else if(data.type==='rate_limit_event') {const normalized=window.TriadUsage.normalizeClaude(data.rate_limit_info||data,effectiveLocale());if(normalized.windows.length)setUsage(agent,normalized,data.rate_limit_info||data);addTrace(agent,data.rate_limit_info?.status==='allowed'?'info':'error','사용량 한도 상태',data.rate_limit_info);}
         else if(data.type==='stream_event') {
           const event=data.event||{};
-          if(event.type==='message_start') addTrace(agent,'info',`응답 생성 시작 · ${event.message?.model||'Claude'}`,event.message?.usage||'');
-          else if(event.type==='content_block_start'&&event.content_block?.type==='tool_use') { const tn=event.content_block.name||''; if(/submit_contribution/.test(tn)&&state.pending[agent])state.pending[agent].contributed=true; if(/ask_agent/.test(tn))sealAgentSegment(agent); addTrace(agent,'info',`도구 호출 · ${tn||'tool'}`,event.content_block.input||event.content_block); }
+          if(event.type==='message_start') addTrace(agent,'info',L('traceGenStart',{model:event.message?.model||'Claude'}),event.message?.usage||'');
+          else if(event.type==='content_block_start'&&event.content_block?.type==='tool_use') { const tn=event.content_block.name||''; if(/submit_contribution/.test(tn)&&state.pending[agent])state.pending[agent].contributed=true; if(/ask_agent/.test(tn))sealAgentSegment(agent); addTrace(agent,'info',L('traceToolCall',{tool:tn||'tool'}),event.content_block.input||event.content_block); }
           else if(event.type==='content_block_start'&&event.content_block?.type==='thinking') addTrace(agent,'info','추론 단계 시작 · 내용 비공개');
           else if(event.type==='message_stop') addTrace(agent,'success','응답 스트림 완료');
         } else if(data.type==='assistant') {addTrace(agent,'success','응답 메시지 완료',data.message?.usage||'');recordTurnUsage(agent,data.message?.usage);}
@@ -1368,7 +1370,7 @@
         // answer); the answer arrives as a separate message so both remain
         // visible in chronological order.
         state.brokerMessages[event.id]=addMessage('system',L('handoffAsk',{from:names[from],to:names[to],count,question:event.question||'',reason}),true);
-        addTrace(from,'info',`${names[to]} 보조 호출`,{question:event.question,reason:event.reason,count,depth:event.depth});
+        addTrace(from,'info',L('traceAuxCall',{name:names[to]}),{question:event.question,reason:event.reason,count,depth:event.depth});
       }else if(event.eventType==='agent_call_completed'){
         const answer=String(event.answer||'').trim();const truncated=answer.length>3000;
         const preview=truncated?`${answer.slice(0,3000)}\n\n${L('answerTruncated')}`:answer;
@@ -1377,7 +1379,7 @@
         const answerId=addMessage('system',L('handoffAnswer',{...fields,body:preview}),false); // separate answer message
         if(truncated)updateMessage(answerId,m=>{m.fullText=L('handoffAnswer',{...fields,body:answer});});
         if(state.orchestration?.mode==='agent')state.orchestration.mcpCalls=Math.max(state.orchestration.mcpCalls||0,Number(event.used)||1);
-        delete state.brokerMessages[event.id];addTrace(to,'success',`${names[from]}에게 보조 답변 반환`,{count,duration_ms:event.durationMs,characters:answer.length});
+        delete state.brokerMessages[event.id];addTrace(to,'success',L('traceReturnAux',{name:names[from]}),{count,duration_ms:event.durationMs,characters:answer.length});
         drainPendingAgentFinish();
       }else if(event.eventType==='agent_call_failed'){
         const qid=state.brokerMessages[event.id];if(qid)updateMessage(qid,m=>{m.streaming=false;});
@@ -1406,7 +1408,7 @@
     }
     function applyCopyFeedback(button, messageId, hasText) {
       const feedback=state.copyFeedback[messageId];
-      button.textContent=feedback?.label||'전체 복사';button.title=feedback?.title||'마크다운과 줄바꿈을 포함한 원문 전체 복사';
+      button.textContent=feedback?.label||tc('전체 복사');button.title=feedback?.title||tc('마크다운과 줄바꿈을 포함한 원문 전체 복사');
       button.disabled=!hasText||!!feedback?.pending;
     }
     async function copyTextFallback(text) {
@@ -1417,8 +1419,8 @@
       finally { input.remove(); }
     }
     function finishCopy(messageId, success, detail='') {
-      if(success)setCopyFeedback(messageId,{label:'복사됨',title:'원문 전체를 클립보드에 복사했습니다.',pending:false},1100);
-      else setCopyFeedback(messageId,{label:'복사 실패',title:detail||'클립보드에 복사하지 못했습니다.',pending:false},1800);
+      if(success)setCopyFeedback(messageId,{label:tc('복사됨'),title:tc('원문 전체를 클립보드에 복사했습니다.'),pending:false},1100);
+      else setCopyFeedback(messageId,{label:tc('복사 실패'),title:detail||tc('클립보드에 복사하지 못했습니다.'),pending:false},1800);
     }
     function completeNativeCopy(requestId, success, detail='') {
       const request=state.clipboardRequests[requestId];if(!request)return;
@@ -1428,8 +1430,8 @@
       copyTextFallback(request.text).then(()=>finishCopy(request.messageId,true)).catch(error=>finishCopy(request.messageId,false,detail||error.message));
     }
     function copyMessageText(messageId, text) {
-      if(!text){finishCopy(messageId,false,'아직 복사할 원문이 없습니다.');return;}
-      setCopyFeedback(messageId,{label:'복사 중…',title:'원문을 클립보드에 복사하고 있습니다.',pending:true});
+      if(!text){finishCopy(messageId,false,tc('아직 복사할 원문이 없습니다.'));return;}
+      setCopyFeedback(messageId,{label:tc('복사 중…'),title:tc('원문을 클립보드에 복사하고 있습니다.'),pending:true});
       if(!hasNativeBridge()){
         copyTextFallback(text).then(()=>finishCopy(messageId,true)).catch(error=>finishCopy(messageId,false,error.message));return;
       }
@@ -1440,7 +1442,7 @@
     }
     function copyPlainText(text, button) {
       const restore=button?button.textContent:'';
-      const done=ok=>{ if(!button)return; button.textContent=ok?'복사됨':'복사 실패'; button.disabled=true; setTimeout(()=>{button.textContent=restore;button.disabled=false;},1200); };
+      const done=ok=>{ if(!button)return; button.textContent=ok?tc('복사됨'):tc('복사 실패'); button.disabled=true; setTimeout(()=>{button.textContent=restore;button.disabled=false;},1200); };
       if(hasNativeBridge()){
         const requestId=id();
         const timer=setTimeout(()=>{ if(state.clipboardRequests[requestId]){delete state.clipboardRequests[requestId];copyTextFallback(text).then(()=>done(true)).catch(()=>done(false));} },2500);
@@ -1463,14 +1465,15 @@
         lines.push(`# 토큰/캐시 요약: ${usage.length}턴 · 입력 ${li} (캐시읽기 ${cr}, ${li?Math.round(cr/li*100):0}%) · 출력 ${out}`,'');
       }
       for(const item of items){
-        const time=new Date(item.createdAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        const time=new Date(item.createdAt).toLocaleTimeString(dtLocale(),{hour:'2-digit',minute:'2-digit',second:'2-digit'});
         lines.push(`[${time}] ${names[item.agent]||item.agent} · ${item.level} · ${item.title}`);
         if(item.detail)lines.push(item.detail.split('\n').map(l=>'  '+l).join('\n'));
       }
       return lines.join('\n');
     }
+    const dtLocale=()=>effectiveLocale()==='en'?'en-US':'ko-KR'; // date/time formatting follows the UI locale
     function stampFmt(ts) {
-      return ts ? new Date(ts).toLocaleString('ko-KR', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' }) : '';
+      return ts ? new Date(ts).toLocaleString(dtLocale(), { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' }) : '';
     }
     function imageFileURL(p){ return 'file://' + String(p).split('/').map(encodeURIComponent).join('/'); }
     function renderAttachStrip(){
@@ -1491,20 +1494,20 @@
       for (const m of state.messages) {
         if(!window.TriadQueue.shouldRenderMessage(m))continue;
         const el = document.createElement('div'); el.className = `message ${m.author}`;
-        const label = m.author === 'user' ? '나' : m.author === 'system' ? '회의실' : names[m.author];
+        const label = m.author === 'user' ? tc('나') : m.author === 'system' ? tc('회의실') : names[m.author];
         const wrap = document.createElement('div'); wrap.className = 'bubble-wrap';
         const who = document.createElement('div'); who.className = 'who'; who.textContent = label;
         if (m.streaming) { const spin = document.createElement('span'); spin.className='spinner'; who.appendChild(spin); }
         const actions=document.createElement('div');actions.className='bubble-actions';
         const fullBody=String(m.fullText||(m.boardResult?`${m.text}\n\n──────\n${m.boardResult}`:m.text)||''); // truncated bubbles copy/expand the full answer; collab turns also include the structured board result
-        const copy=document.createElement('button');copy.type='button';copy.className='bubble-copy';copy.textContent='전체 복사';copy.title='마크다운과 줄바꿈을 포함한 원문 전체 복사';
+        const copy=document.createElement('button');copy.type='button';copy.className='bubble-copy';copy.textContent=tc('전체 복사');copy.title=tc('마크다운과 줄바꿈을 포함한 원문 전체 복사');
         applyCopyFeedback(copy,m.id,fullBody.length>0);
         copy.addEventListener('mousedown',event=>event.stopPropagation());
         copy.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();copyMessageText(m.id,fullBody);});
         actions.appendChild(copy);
         if(m.fullText){const expandedNow=!!state.expandedTexts[m.id];const toggle=document.createElement('button');toggle.type='button';toggle.className='bubble-copy';toggle.textContent=expandedNow?L('collapseAnswer'):L('viewFullAnswer');toggle.addEventListener('mousedown',event=>event.stopPropagation());toggle.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(expandedNow)delete state.expandedTexts[m.id];else state.expandedTexts[m.id]=true;renderMessages();});actions.appendChild(toggle);}
         if(m.boardResult){const expandedNow=!!state.expandedTexts[m.id];const toggle=document.createElement('button');toggle.type='button';toggle.className='bubble-copy';toggle.textContent=expandedNow?L('collapseProcess'):L('viewProcess');toggle.title='이 턴을 제안·검토·결정으로 정리한 진행 과정을 봅니다.';toggle.addEventListener('mousedown',event=>event.stopPropagation());toggle.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(expandedNow)delete state.expandedTexts[m.id];else state.expandedTexts[m.id]=true;renderMessages();});actions.appendChild(toggle);}
-        if(agents.includes(m.author)){const reply=document.createElement('button');reply.type='button';reply.className='bubble-copy';reply.textContent='답장';reply.title=m.recordId?'이 AI에게 이 실행 기록을 참고해 답장합니다.':'이 AI에게 답장합니다.';reply.onclick=event=>{event.preventDefault();event.stopPropagation();const draft=document.getElementById('draft');const agentTag=`#${m.replyAgent||m.author}`;const text=draft.value;const additions=[];if(!/(?:^|\s)#(?:codex|claude)(?=\s|$)/.test(text))additions.push(agentTag);const reference=m.recordId?`@실행[${m.recordId}]`:'';if(reference&&!text.includes(reference))additions.push(reference);if(additions.length)draft.value=`${text}${text.trim()?' ':''}${additions.join(' ')} `;draft.focus();updateRoutingPreview();};actions.appendChild(reply);}
+        if(agents.includes(m.author)){const reply=document.createElement('button');reply.type='button';reply.className='bubble-copy';reply.textContent=tc('답장');reply.title=m.recordId?tc('이 AI에게 이 실행 기록을 참고해 답장합니다.'):tc('이 AI에게 답장합니다.');reply.onclick=event=>{event.preventDefault();event.stopPropagation();const draft=document.getElementById('draft');const agentTag=`#${m.replyAgent||m.author}`;const text=draft.value;const additions=[];if(!/(?:^|\s)#(?:codex|claude)(?=\s|$)/.test(text))additions.push(agentTag);const reference=m.recordId?`@실행[${m.recordId}]`:'';if(reference&&!text.includes(reference))additions.push(reference);if(additions.length)draft.value=`${text}${text.trim()?' ':''}${additions.join(' ')} `;draft.focus();updateRoutingPreview();};actions.appendChild(reply);}
         const bubble = document.createElement('div'); bubble.className='bubble';
         if(Array.isArray(m.attachments)&&m.attachments.length){
           const imgs=document.createElement('div');imgs.className='bubble-images';
@@ -1512,14 +1515,15 @@
           bubble.appendChild(imgs);
         }
         let displayBody=(m.fullText&&state.expandedTexts[m.id])?m.fullText:m.text;
+        if(m.welcome)displayBody=L('welcomeText'); // always in the current locale
         if(m.boardResult&&state.expandedTexts[m.id])displayBody=`${m.text}\n\n──────\n${m.boardResult}`;
-        renderMarkdownText(bubble,displayBody || '생각 중…');
+        renderMarkdownText(bubble,displayBody || L('msgThinking'));
         const stamp=document.createElement('div');stamp.className='bubble-time';
         if(agents.includes(m.author)){
           const t=[];
-          if(m.startedAt)t.push(`답변 시작 ${stampFmt(m.startedAt)}`);
-          if(m.completedAt)t.push(`작성 완료 ${stampFmt(m.completedAt)}`);
-          else if(m.streaming)t.push('작성 중…');
+          if(m.startedAt)t.push(L('msgStarted',{time:stampFmt(m.startedAt)}));
+          if(m.completedAt)t.push(L('msgCompleted',{time:stampFmt(m.completedAt)}));
+          else if(m.streaming)t.push(L('msgWriting'));
           stamp.textContent=t.join('  ·  ');
         } else if(m.createdAt) {
           stamp.textContent=stampFmt(m.createdAt);
@@ -1707,7 +1711,7 @@
       withConversation(item.conversationId,()=>{
         const message=state.messages.find(candidate=>candidate.id===item.messageId);
         if(window.TriadQueue.canRemoveMessage(state.queue,item,message))state.messages=state.messages.filter(candidate=>candidate.id!==item.messageId);
-        addTrace(agent,'info','대기 작업 취소',{target:item.kind==='collaboration'?'협업':item.kind==='independentBatch'?'독립 실행':names[item.agent]});save();
+        addTrace(agent,'info','대기 작업 취소',{target:item.kind==='collaboration'?tc('협업'):item.kind==='independentBatch'?tc('독립 실행'):names[item.agent]});save();
       });
       renderQueue();renderMessages();renderCollaboration();if(state.boardVisible)renderSharedBoard();
       scheduleQueueDrain();
@@ -1862,7 +1866,7 @@
     function runAgentTurn(task) {
       const flow=state.orchestration;if(!flow||flow.cancelled)return;
       if(flow.conversationId&&flow.conversationId!==state.activeConversationId)return withConversation(flow.conversationId,()=>runAgentTurn(task));
-      flow.current=task;task.label=task.kind==='agent_answer'?`${names[task.requester]} 질문 응답`:task.received?'답변 반영 후 작업 재개':'작업 시작';
+      flow.current=task;task.label=task.kind==='agent_answer'?L('taskAnswerTo',{name:names[task.requester]}):task.received?L('taskResume'):L('taskStart');
       addTrace(task.agent,'info',task.label,{handoffs:flow.handoffs,maxHandoffs:flow.maxHandoffs,from:task.from||task.requester||null});
       const store=collabSessionStore(flow,task.agent);dispatchAgent(task.agent,buildAgentPrompt(task),{isolated:true,sessionStore:store,conversationId:flow.conversationId,config:flow.settings?.[task.agent],agentConfigs:flow.settings,collaboration:flow.collaboration,images:flow.images||[]});renderCollaboration();
     }
@@ -1901,8 +1905,8 @@
       if(task?.conditional&&boardFor(flow)?.verdict==='agree')task=flow.tasks[flow.index++];
       if(!task){setTimeout(runNextCollaborationTurn,0);return;}
       flow.current=task;
-      const labels={proposal:'제안 작성',verdict:'좁은 검토',resolve:'이견 해결',decision:'최종 결정'};
-      task.label=labels[task.kind];addTrace(task.agent,'info',`${task.label} 시작`,{turn:flow.index,total:flow.tasks.length});
+      const labels={proposal:L('phaseProposal'),verdict:L('phaseVerdict'),resolve:L('phaseResolve'),decision:L('phaseDecision')};
+      task.label=labels[task.kind];addTrace(task.agent,'info',L('traceStarting',{label:task.label}),{turn:flow.index,total:flow.tasks.length});
       const store=collabSessionStore(flow,task.agent);dispatchAgent(task.agent,buildCollaborationPrompt(task),{isolated:true,sessionStore:store,conversationId:flow.conversationId,config:flow.settings?.[task.agent],agentConfigs:flow.settings,collaboration:flow.collaboration,images:flow.images||[]});renderCollaboration();
     }
     function startCollaboration(objective, runCollaboration=state.collaboration, conversationId=state.activeConversationId, settings=effectiveAgentConfigs(), referencePacket=[], images=[]) {
@@ -2109,7 +2113,7 @@
       state.stopRequested[agent]=false;state.retryOnTermination[agent]=false;
       updateMessage(state.responseIds[agent],m=>{m.text+=(m.text?'\n\n':'')+'사용자가 중지했습니다.';m.streaming=false;m.completedAt=Date.now();});
       state.running[agent]=false;delete state.pending[agent];delete state.responseIds[agent];
-      addTrace(agent,'info','사용자 중지','현재 실행만 중지하고 대기 작업은 유지합니다.');renderStatus(false);renderConversations();
+      addTrace(agent,'info','사용자 중지',tc('현재 실행만 중지하고 대기 작업은 유지합니다.'));renderStatus(false);renderConversations();
       // A user-initiated stop is neither a failed contribution nor a stale
       // session.  Do not wait for the independent-board grace period: the
       // next queued run can start as soon as every prior provider is idle.
@@ -2133,7 +2137,7 @@
       // or its output wasn't parsed) — log the raw tails so we can see why.
       if(wasEmpty&&!failed)addTrace(agent,'error','빈 응답 진단',{exitCode,stderr:(state.stderr[agent]||'').slice(-2000),stdoutTail:(state.lineBuffers[agent]||'').slice(-2000)});
       state.running[agent]=false;
-      addTrace(agent,failed?'error':'success',failed?`프로세스 종료 · code ${exitCode}`:'프로세스 정상 종료',failed?(providerError||err):'');
+      addTrace(agent,failed?'error':'success',failed?L('traceProcExit',{code:exitCode}):'프로세스 정상 종료',failed?(providerError||err):'');
       // Some CLI result streams omit usage.  A successful normal request
       // still occupies one continued-session turn, but never double-count a
       // request whose assistant/result usage was already recorded.
@@ -2180,13 +2184,13 @@
           flow.handoffs+=1;
           const reason=parsed.handoff.reason?`\n이유: ${parsed.handoff.reason}`:'';
           addMessage('system',L('handoffReq',{from:names[agent],to:names[parsed.handoff.to],n:flow.handoffs,max:flow.maxHandoffs,question:parsed.handoff.question,reason}));
-          addTrace(agent,'info',`${names[parsed.handoff.to]}에게 질문 전달`,parsed.handoff);
+          addTrace(agent,'info',L('traceDeliverQ',{name:names[parsed.handoff.to]}),parsed.handoff);
           setTimeout(()=>runAgentTurn({agent:parsed.handoff.to,kind:'agent_answer',requester:agent,question:parsed.handoff.question,reason:parsed.handoff.reason}),0);return;
         }
         if(task.kind==='agent_answer'){
           const answer=parsed.text||'(응답 없음)';
-          addMessage('system',`${names[agent]} → ${names[task.requester]} · 답변을 전달하고 원래 작업을 재개합니다.`);
-          addTrace(agent,'success',`${names[task.requester]}에게 답변 반환`,{characters:answer.length});
+          addMessage('system',L('handoffReturn',{from:names[agent],to:names[task.requester]}));
+          addTrace(agent,'success',L('traceReturnAns',{name:names[task.requester]}),{characters:answer.length});
           setTimeout(()=>runAgentTurn({agent:task.requester,kind:'agent_work',received:answer,from:agent}),0);return;
         }
         // Safety net: if the lead recorded its result on the board but gave no
@@ -2339,8 +2343,8 @@
       else if(event.type==='brokerEvent')handleBrokerEvent(event);
       else if(event.type==='clipboardResult')completeNativeCopy(event.requestId,!!event.success,event.message||'');
       else if(event.type==='sharedDocuments')applySharedDocuments(event.documents);
-      else if(event.type==='sharedDocumentsError'){addTrace('system','error','공유 문서 목록 오류',event.message||'공유 문서를 불러오지 못했습니다.');}
-      else if(event.type==='brokerWarning'){addTrace(event.agent||'codex','error','AI 간 호출 도구 준비 실패',event.message||'');addMessage('system',`⚠️ ${event.message||'AI 간 호출 도구를 준비하지 못했습니다.'}`);}
+      else if(event.type==='sharedDocumentsError'){addTrace('system','error','공유 문서 목록 오류',event.message||tc('공유 문서를 불러오지 못했습니다.'));}
+      else if(event.type==='brokerWarning'){addTrace(event.agent||'codex','error','AI 간 호출 도구 준비 실패',event.message||'');addMessage('system',`⚠️ ${event.message||L('brokerToolFail')}`);}
       else if(event.type==='updateCheck'){
         const banner=document.getElementById('update-banner');const newer=window.TriadVersion.isNewer(event.latest,event.current);banner.hidden=!newer;
         if(newer){banner.textContent=`새 버전 ${event.latest} · 릴리스 보기`;banner.dataset.url=event.url||'';banner.title=`현재 ${event.current} · 최신 ${event.latest}`;}
@@ -2353,7 +2357,7 @@
         addTrace(event.agent,event.connected?'success':'info',event.connected?'CLI 계정 연결 확인':'CLI 계정 연결 필요',safeAccountDetail(event.agent,event.message));
       }
       else if(event.type==='authResult') {
-        if(!event.success){state.accountStatus[event.agent]={...state.accountStatus[event.agent],checking:false,busy:false,connected:false,message:event.message||'인증 작업 실패'};renderSettings();addTrace(event.agent,'error','계정 인증 실패',event.message||'');alert(event.message||'계정 인증에 실패했습니다.');}
+        if(!event.success){state.accountStatus[event.agent]={...state.accountStatus[event.agent],checking:false,busy:false,connected:false,message:event.message||tc('인증 작업 실패')};renderSettings();addTrace(event.agent,'error','계정 인증 실패',event.message||'');alert(event.message||tc('계정 인증에 실패했습니다.'));}
         else addTrace(event.agent,'success',event.operation==='logout'?'CLI 계정 로그아웃':'CLI 계정 연결 완료');
       }
       else if(event.type==='diffResult') {state.diff={...state.diff,loading:false,agent:event.agent||state.diff.agent,text:event.text||'',error:event.error||'',workspace:event.workspace||'',truncated:!!event.truncated,selectedFileId:null};if(!isBackgroundRuntime())renderDiff();}
@@ -2361,8 +2365,8 @@
         if(effectiveWorkspacePath(event.agent)===event.workspace){state.branchStatus[event.agent]={loading:false,kind:event.kind||'unknown',label:event.label||'확인 불가',workspace:event.workspace};if(!isBackgroundRuntime())renderSettings();}
       }
       else if (event.type==='linkError') alert(event.message);
-      else if (event.type==='usage') {state.usageRefreshing=false;const normalized=window.TriadUsage.normalizeCodex(event.data);if(normalized.windows.length){setUsage('codex',normalized,event.data);addTrace('codex','success','계정 잔여량 갱신',normalized.windows);}else {state.usage.codex={...(state.usage.codex||{}),error:'계정 한도 정보가 제공되지 않았습니다.',updatedAt:Date.now()};saveUsage();renderUsage();}}
-      else if (event.type==='usageError') {state.usageRefreshing=false;state.usage.codex={...(state.usage.codex||{}),error:event.message||'사용량 조회 실패'};saveUsage();renderUsage();addTrace('codex','error','사용량 조회 실패',event.message||'응답 없음');}
+      else if (event.type==='usage') {state.usageRefreshing=false;const normalized=window.TriadUsage.normalizeCodex(event.data,effectiveLocale());if(normalized.windows.length){setUsage('codex',normalized,event.data);addTrace('codex','success','계정 잔여량 갱신',normalized.windows);}else {state.usage.codex={...(state.usage.codex||{}),error:L('usageNoData'),updatedAt:Date.now()};saveUsage();renderUsage();}}
+      else if (event.type==='usageError') {state.usageRefreshing=false;state.usage.codex={...(state.usage.codex||{}),error:event.message||tc('사용량 조회 실패')};saveUsage();renderUsage();addTrace('codex','error','사용량 조회 실패',event.message||tc('응답 없음'));}
     };
 
     function renderStatus(renderConversationList=true) {
@@ -2445,15 +2449,15 @@
     function escapeAttr(value='') { return value.replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;'); }
     function accountLabel(agent,status) {
       if(status.busy)return status.operation==='logout'?'로그아웃 중…':status.operation==='connect'?'브라우저 로그인 대기 중…':'연결 확인 중…';
-      if(status.checking)return '연결 확인 중…';
-      if(!status.connected)return '연결 필요';
+      if(status.checking)return L('acctChecking');
+      if(!status.connected)return L('acctNeeded');
       const raw=String(status.message||'');
-      if(providerOf(agent)==='codex')return /api key/i.test(raw)?'✓ API 계정 연결됨':/chatgpt/i.test(raw)?'✓ ChatGPT 연결됨':'✓ Codex 계정 연결됨';
+      if(providerOf(agent)==='codex')return /api key/i.test(raw)?L('acctCodexApi'):/chatgpt/i.test(raw)?L('acctCodexChatGpt'):L('acctCodex');
       try {
         const value=JSON.parse(raw);const method=value.subscriptionType||value.subscription_type||value.authMethod||value.auth_method;
-        if(method)return `✓ Claude ${String(method).replaceAll('_',' ')} 연결됨`;
+        if(method)return L('acctClaudeMethod',{method:String(method).replaceAll('_',' ')});
       } catch {}
-      return '✓ Claude 계정 연결됨';
+      return L('acctClaude');
     }
     function safeAccountDetail(agent,raw) {
       if(agent!=='claude')return String(raw||'').trim();
@@ -2543,7 +2547,7 @@
             <div class="settings-group-body">
               <div class="field"><label>CLI 실행 파일</label><input data-key="executablePath" value="${escapeAttr(c.executablePath)}"></div>
               <div class="field"><label>인증 연동</label><select data-key="authMode"><option value="existing" ${c.authMode==='existing'?'selected':''}>구독 계정 (CLI)</option><option value="apiKey" ${c.authMode==='apiKey'?'selected':''}>API 키</option></select></div>
-              ${c.authMode==='existing'?`<div class="field"><label>${names[agent]} 계정</label><div class="token-row"><span class="token-status ${account.connected?'saved':''}">${accountLabel(agent,account)}</span><span class="spacer"></span>${account.connected?'<button class="small-btn auth-connect">다시 연결</button><button class="small-btn auth-logout">로그아웃</button>':'<button class="small-btn auth-refresh">↻</button><button class="small-btn auth-connect">계정 연결</button>'}</div></div>`:''}
+              ${c.authMode==='existing'?`<div class="field"><label>${L('accountOf',{name:names[agent]})}</label><div class="token-row"><span class="token-status ${account.connected?'saved':''}">${accountLabel(agent,account)}</span><span class="spacer"></span>${account.connected?'<button class="small-btn auth-connect">다시 연결</button><button class="small-btn auth-logout">로그아웃</button>':'<button class="small-btn auth-refresh">↻</button><button class="small-btn auth-connect">계정 연결</button>'}</div></div>`:''}
               ${c.authMode==='apiKey'?`<div class="field"><label>${provider==='codex'?'OpenAI':'Anthropic'} API 키 · macOS 키체인 저장</label><input class="token" type="password" autocomplete="off" placeholder="키 입력"><div class="token-row"><span class="token-status ${state.tokenStatus[agent]?'saved':''}">${state.tokenStatus[agent]?'✓ 키체인에 저장됨':'저장된 키 없음'}</span><span class="spacer"></span>${state.tokenStatus[agent]?'<button class="small-btn delete-token">삭제</button>':''}<button class="small-btn save-token">저장</button></div></div>`:''}
             </div>
           </details>
@@ -2565,7 +2569,7 @@
         card.querySelector('.provider-select').onchange=event=>{if(state.running[agent])return;applyProvider(agent,event.target.value);save();renderSettings();renderStatus();requestAuthStatus(agent);requestBranch(agent);requestProjectFiles(agent);};
         card.querySelector('.choose').onclick=()=>post({action:'chooseDirectory',agent});
         card.querySelector('.branch-refresh').onclick=()=>requestBranch(agent);
-        card.querySelector('.reset-session').onclick=()=>{if(state.running[agent])return;state.sessions[agent]=null;state.sessionStats=window.TriadSessionBudget.resetAgent(state.sessionStats,agent,{incrementRotation:true});addTrace(agent,'info','다음 작업 새 세션','사용자가 세션을 초기화했습니다.');save();renderSettings();};
+        card.querySelector('.reset-session').onclick=()=>{if(state.running[agent])return;state.sessions[agent]=null;state.sessionStats=window.TriadSessionBudget.resetAgent(state.sessionStats,agent,{incrementRotation:true});addTrace(agent,'info','다음 작업 새 세션',tc('사용자가 세션을 초기화했습니다.'));save();renderSettings();};
         card.querySelector('.save-token')?.addEventListener('click',()=>{const token=card.querySelector('.token').value;post({action:'saveToken',agent,token});card.querySelector('.token').value='';});
         card.querySelector('.delete-token')?.addEventListener('click',()=>post({action:'deleteToken',agent}));
         card.querySelector('.auth-refresh')?.addEventListener('click',()=>requestAuthStatus(agent));
@@ -2591,16 +2595,16 @@
       else if(state.collaboration.mode!=='independent'){
         const lead=collaborationLeadFor(routed,state.collaboration.lead,state.defaultTarget);
         if(!lead)toggle.textContent='전송 불가 · 협업에서는 #codex 또는 #claude 중 하나만 시작 AI로 지정';
-        else toggle.textContent=`협업 의제 · ${names[lead]} 시작 · ${routed.prompt.length.toLocaleString('ko-KR')}자 · 입력 약 ${window.TriadSessionBudget.estimateTokens(routed.prompt).toLocaleString('ko-KR')} 토큰 · 클릭하여 확인`;
+        else toggle.textContent=`협업 의제 · ${names[lead]} 시작 · ${routed.prompt.length.toLocaleString(dtLocale())}자 · 입력 약 ${window.TriadSessionBudget.estimateTokens(routed.prompt).toLocaleString(dtLocale())} 토큰 · 클릭하여 확인`;
       }
       else {
         const counts=routed.targets.map(agent=>promptEstimateLabel(agent,routed.prompts[agent]));
-        const common=routed.commonText?` · 공통 ${routed.commonText.length.toLocaleString('ko-KR')}자`:'';
+        const common=routed.commonText?` · 공통 ${routed.commonText.length.toLocaleString(dtLocale())}자`:'';
         toggle.textContent=`전달 예정${routed.mode==='block'?' · 블록 모드':''} · ${counts.join(' · ')}${common} · 클릭하여 확인`;
       }
       details.innerHTML='';
       const entries=state.collaboration.mode!=='independent'?[['system','협업 의제',routed.prompt]]:routed.targets.map(agent=>[agent,names[agent],routed.prompts[agent]]);
-      for(const [agent,label,prompt] of entries){const card=document.createElement('div');card.className='routing-preview-card';const title=document.createElement('strong');title.textContent=state.collaboration.mode==='independent'?promptEstimateLabel(agent,prompt):`${label} · ${prompt.length.toLocaleString('ko-KR')}자 · 입력 약 ${window.TriadSessionBudget.estimateTokens(prompt).toLocaleString('ko-KR')} 토큰`;title.className=agent;const pre=document.createElement('pre');pre.textContent=prompt;card.append(title,pre);details.appendChild(card);}
+      for(const [agent,label,prompt] of entries){const card=document.createElement('div');card.className='routing-preview-card';const title=document.createElement('strong');title.textContent=state.collaboration.mode==='independent'?promptEstimateLabel(agent,prompt):`${label} · ${prompt.length.toLocaleString(dtLocale())}자 · 입력 약 ${window.TriadSessionBudget.estimateTokens(prompt).toLocaleString(dtLocale())} 토큰`;title.className=agent;const pre=document.createElement('pre');pre.textContent=prompt;card.append(title,pre);details.appendChild(card);}
       details.hidden=!state.routingPreviewOpen;
     }
     function promptEstimateLabel(agent,prompt) {
@@ -2608,8 +2612,8 @@
       const stats=state.sessionStats?.[agent]||{};const resume=state.sessions?.[agent]
         && config.sessionPolicy!=='alwaysNew'
         && !window.TriadSessionBudget.shouldRotate(config,stats,true);
-      const context=resume&&stats.lastInputTokens?` · 세션 문맥 약 ${stats.lastInputTokens.toLocaleString('ko-KR')} 토큰`:'';
-      return `${names[agent]} ${prompt.length.toLocaleString('ko-KR')}자 · 입력 약 ${input.toLocaleString('ko-KR')} 토큰${context}`;
+      const context=resume&&stats.lastInputTokens?` · 세션 문맥 약 ${stats.lastInputTokens.toLocaleString(dtLocale())} 토큰`:'';
+      return `${names[agent]} ${prompt.length.toLocaleString(dtLocale())}자 · 입력 약 ${input.toLocaleString(dtLocale())} 토큰${context}`;
     }
 
     const autocompleteOptions=[

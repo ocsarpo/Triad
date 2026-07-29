@@ -6,8 +6,12 @@ const path=require('node:path');
 const renderer=fs.readFileSync(path.join(__dirname,'../Resources/index.html'),'utf8');
 
 test('환영 말풍선은 대화 생성 시 한 번만 seed하고 렌더 함수는 상태를 바꾸지 않는다',()=>{
-  assert.match(renderer,/const createWelcomeMessage=\(\)=>\(\{id:id\(\),author:'system',text:welcomeText/);
+  assert.match(renderer,/const createWelcomeMessage=\(\)=>\(\{id:id\(\),author:'system',welcome:true,text:welcomeText\(\)/);
   assert.match(renderer,/messages:\[createWelcomeMessage\(\)\],settings:clone\(state\.settings\)/);
+  // 환영문은 렌더 시점에 현재 로케일로 번역 (마커 기반), identity는 마커+양쪽 언어 원문
+  assert.match(renderer,/if\(m\.welcome\)displayBody=L\('welcomeText'\)/);
+  assert.match(renderer,/const welcomeText=\(\)=>L\('welcomeText'\)/);
+  assert.match(renderer,/message\?\.welcome===true\|\|message\?\.text===WELCOME_KO/);
   const render=renderer.slice(renderer.indexOf('function renderMessages'),renderer.indexOf('function renderLinkedText'));
   assert.doesNotMatch(render,/createWelcomeMessage\(/);
   assert.doesNotMatch(renderer,/function addWelcome\(/);

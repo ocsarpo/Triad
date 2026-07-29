@@ -25,8 +25,8 @@ test('클립보드는 native bridge를 우선하고 WKWebView 외 환경에서�
 });
 
 test('복사 결과는 성공·실패를 버튼에 명확하게 표시한다', () => {
-  assert.match(renderer, /setCopyFeedback\(messageId,\{label:'복사됨'/);
-  assert.match(renderer, /setCopyFeedback\(messageId,\{label:'복사 실패'/);
+  assert.match(renderer, /setCopyFeedback\(messageId,\{label:tc\('복사됨'\)/);
+  assert.match(renderer, /setCopyFeedback\(messageId,\{label:tc\('복사 실패'\)/);
   assert.match(renderer, /delete state\.copyFeedback\[messageId\];renderMessages\(\)/);
 });
 
@@ -52,8 +52,8 @@ test('AI 말풍선 하단에는 전체 복사와 답장 액션을 함께 표시�
 test('말풍선에 시각·날짜 스탬프를 표시한다 (답변 시작 / 작성 완료)', () => {
   assert.match(renderer, /function stampFmt\(ts\)/);
   assert.match(renderer, /className='bubble-time'/);
-  assert.match(renderer, /답변 시작 \$\{stampFmt\(m\.startedAt\)\}/);
-  assert.match(renderer, /작성 완료 \$\{stampFmt\(m\.completedAt\)\}/);
+  assert.match(renderer, /L\('msgStarted',\{time:stampFmt\(m\.startedAt\)\}\)/);
+  assert.match(renderer, /L\('msgCompleted',\{time:stampFmt\(m\.completedAt\)\}\)/);
   // 첫 토큰에 startedAt, 완료 지점에 completedAt 기록
   assert.match(renderer, /if\(!m\.startedAt\)m\.startedAt=Date\.now\(\)/);
   assert.match(renderer, /m\.completedAt=Date\.now\(\)/);
@@ -64,5 +64,5 @@ test('답장은 실행 기록이 있으면 참조를 붙이고 없어도 해당 
   assert.match(renderer, /const reference=m\.recordId\?`@실행\[\$\{m\.recordId\}\]`:\'\'/);
   assert.match(renderer, /const additions=\[\];[\s\S]*?additions\.push\(agentTag\)/);
   assert.match(renderer, /if\(reference&&!text\.includes\(reference\)\)additions\.push\(reference\)/);
-  assert.match(renderer, /m\.recordId\?'이 AI에게 이 실행 기록을 참고해 답장합니다\.':'이 AI에게 답장합니다\.'/);
+  assert.match(renderer, /m\.recordId\?tc\('이 AI에게 이 실행 기록을 참고해 답장합니다\.'\):tc\('이 AI에게 답장합니다\.'\)/);
 });

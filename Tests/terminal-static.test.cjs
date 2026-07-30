@@ -58,7 +58,7 @@ test('렌더러는 터미널 패널을 xterm/node-pty에 연결한다', () => {
   assert.match(renderer, /id="terminal-pane"/);
   assert.match(renderer, /id="terminal-toggle"/);
   assert.match(renderer, /\.chat\.terminal-open \.chat-workspace/);
-  assert.match(renderer, /function openTerminal\(\)/);
+  assert.match(renderer, /function openTerminal\(cwd\)/);
   assert.match(renderer, /function startTerminalSession\(\)/);
   assert.match(renderer, /new window\.Terminal\(/);
   assert.match(renderer, /new window\.FitAddon\.FitAddon\(\)/);

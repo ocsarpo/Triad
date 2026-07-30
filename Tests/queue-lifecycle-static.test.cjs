@@ -58,9 +58,9 @@ test('독립 실행은 대상 슬롯과 공유 문서 충돌을 분리해 판단
   assert.match(renderer, /pending\.conversationId===conversationId[\s\S]*?pending\.sharedContext\?\.runId===sharedContext\?\.runId/);
   assert.match(renderer, /function independentRequestQueued\(targets, documentId, sharedContext=null\)/);
   assert.match(renderer, /if\(targets\.some\(agent=>state\.running\[agent\]\)\)return true/);
-  assert.match(renderer, /const sameConversationContext=state\.collaboration\.mode==='independent'\?independentContextForConversation\(state\.activeConversationId\):null/);
+  assert.match(renderer, /const sameConversationContext=!collabRun\?independentContextForConversation\(state\.activeConversationId\):null/);
   assert.match(renderer, /const reusableContext=sameConversationContext&&routed\.targets\.every\(agent=>!state\.running\[agent\]\)\?sameConversationContext:null/);
-  assert.match(renderer, /enqueueIndependentBatch\(routed\.targets,routed\.prompts,original,userMessageId,\{objective:references\.clean,sharedContext:null,documentId:requestedDocumentId,recentContexts,fallbackContexts,referencePacket,images\}\)/);
+  assert.match(renderer, /enqueueIndependentBatch\(routed\.targets,routed\.prompts,original,userMessageId,\{objective:references\.clean,sharedContext:null,documentId:requestedDocumentId,recentContexts,fallbackContexts,crossContexts,referencePacket,images,review:routed\.review\}\)/);
   assert.match(renderer, /const independentContext=reusableContext\|\|createIndependentSharedContext/);
   assert.match(renderer, /item\.sharedContext\|\|createIndependentSharedContext/);
   assert.match(renderer, /targets\.some\(agent=>state\.running\[agent\]\)\|\|runningDocumentConflict\(item\.conversationId,documentId,item\.sharedContext\)/);
@@ -92,7 +92,6 @@ test('백그라운드 실행은 시작 대화에 설정과 스트림을 고정�
   // submit_contribution / ask_agent tool calls are latched deterministically from the stream
   assert.match(renderer, /if\(\/submit_contribution\/\.test\(tn\)&&state\.pending\[agent\]\)state\.pending\[agent\]\.contributed=true; if\(\/ask_agent\/\.test\(tn\)\)sealAgentSegment\(agent\)/);
   assert.match(renderer, /state\.backgroundWaits\.delete\(conversationId\);[\s\S]*?state\.backgroundDocumentIds\.delete\(documentId\);[\s\S]*?done\(\);/);
-  assert.match(renderer, /setTimeout\(\(\)=>\{\s*withConversation\(flow\.conversationId,\(\)=>\{/);
   assert.match(renderer, /const runtime=runtimeFor\(conversationId\);if\(Object\.keys\(runtime\.pending\)\.length\|\|state\.backgroundWaits\.has\(conversationId\)\|\|runtime\.queue\.length\|\|runtime\.orchestration\)return/);
   assert.doesNotMatch(renderer, /function newConversation\(skipPersist=false\) \{\s*if\(agents\.some/);
   assert.doesNotMatch(renderer, /function selectConversation\(conversationId\) \{\s*if\(conversationId===state\.activeConversationId\|\|agents\.some/);

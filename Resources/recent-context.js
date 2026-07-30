@@ -89,9 +89,49 @@
     return header + blocks.join('\n\n');
   }
 
+  // 방 따라잡기(cross-agent catch-up): 태그된 메시지는 그 슬롯 세션에만 들어가므로
+  // 상대 AI의 답변은 이 에이전트의 어떤 세션에도 존재하지 않는다.  "A가 얘기한
+  // 대로 해줘" 같은 연결을 위해, 이 에이전트의 마지막 발언 이후에 나온 상대
+  // 답변(사용자에게 보인 그 질문 포함)을 압축해 넘긴다.  이 에이전트가 한 번
+  // 답하고 나면 그 이전 상대 답변은 다시 실리지 않아 중복 누적이 없다.
+  const CROSS_RESPONSE_LIMIT = 1700;
+  const CROSS_REQUEST_LIMIT = 350;
+  const CROSS_MAX_ANSWERS = 2;
+  function crossAgentPacket(messages, agent, names = {}) {
+    const list = Array.isArray(messages) ? messages : [];
+    let ownLast = -1;
+    for (let index = list.length - 1; index >= 0; index--) {
+      if (list[index]?.author === agent) { ownLast = index; break; }
+    }
+    const other = agent === 'codex' ? 'claude' : 'codex';
+    const picked = [];
+    for (let index = list.length - 1; index > ownLast && picked.length < CROSS_MAX_ANSWERS; index--) {
+      const message = list[index];
+      if (message?.author !== other) continue;
+      const response = String(message.text || '').trim();
+      if (!response) continue;
+      let request = '';
+      for (let back = index - 1; back > ownLast; back--) {
+        if (list[back]?.author === 'user') { request = String(list[back].text || '').trim(); break; }
+      }
+      picked.push({ request, response });
+    }
+    if (!picked.length) return '';
+    picked.reverse(); // chronological
+    const label = names[other] || other;
+    const blocks = picked.map(turn => {
+      const parts = [];
+      if (turn.request) parts.push(`[사용자 → ${label}]\n${clip(turn.request, CROSS_REQUEST_LIMIT)}`);
+      parts.push(`[${label}의 답변]\n${clip(turn.response, CROSS_RESPONSE_LIMIT)}`);
+      return parts.join('\n\n');
+    });
+    return blocks.join('\n\n');
+  }
+
   const api = {
-    clip, packetFor, collectTurns,
-    REQUEST_LIMIT, RESPONSE_LIMIT, OLDER_REQUEST_LIMIT, OLDER_RESPONSE_LIMIT, MAX_TURNS, TOTAL_LIMIT
+    clip, packetFor, collectTurns, crossAgentPacket,
+    REQUEST_LIMIT, RESPONSE_LIMIT, OLDER_REQUEST_LIMIT, OLDER_RESPONSE_LIMIT, MAX_TURNS, TOTAL_LIMIT,
+    CROSS_RESPONSE_LIMIT, CROSS_REQUEST_LIMIT, CROSS_MAX_ANSWERS
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.TriadRecentContext = api;

@@ -9,18 +9,10 @@ const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html')
 // guard against a future edit silently moving the board snapshot ahead of the
 // stable objective/role/policy text (which would break caching every turn).
 
-test('buildCollaborationPrompt은 안정 콘텐츠를 volatile 보드 스냅샷 앞에 둔다', () => {
-  const block = renderer.slice(
-    renderer.indexOf('function buildCollaborationPrompt'),
-    renderer.indexOf('function agentHandoffProtocol')
-  );
-  assert.ok(block.indexOf('사용자 의제') >= 0 && block.indexOf('공유 보드 스냅샷') >= 0);
-  assert.ok(block.indexOf('사용자 의제') < block.indexOf('공유 보드 단계'), '의제는 보드 단계보다 앞');
-  assert.ok(block.indexOf('공유 보드는 프로젝트가 아니라') < block.indexOf('공유 보드 스냅샷'), '정책 문구는 스냅샷보다 앞');
-  // 재개 턴이면 불변 정책 문단을 생략(첫 턴 히스토리에 이미 있음) — 의제·역할은 유지
-  assert.match(block, /const policy=resuming\?'':/);
-  // 빈 보드면 스냅샷 블록 생략
-  assert.match(block, /const snapshot=packet\?/);
+test('토론/교차검토 하니스 프롬프트는 제거되었다 (모드 축소)', () => {
+  assert.doesNotMatch(renderer, /function buildCollaborationPrompt/);
+  assert.doesNotMatch(renderer, /function runNextCollaborationTurn/);
+  assert.doesNotMatch(renderer, /submit_verdict 도구로/);
 });
 
 test('buildAgentPrompt은 안정 콘텐츠를 volatile 보드 스냅샷 앞에 둔다', () => {

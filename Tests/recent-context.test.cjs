@@ -70,6 +70,41 @@ test('전송 시점 패킷은 즉시 실행과 대기열에 같은 agent별 snap
   assert.match(renderer, /fallbackContexts\[agent\]=willResume\?packet:'';/);
   assert.match(renderer, /recentContexts:clone\(options\.recentContexts\|\|\{\}\)/);
   assert.match(renderer, /item\.recentContexts\?\.\[agent\]\|\|''/);
-  assert.match(renderer, /buildIndependentPrompt\(agent,routed\.prompts\[agent\],independentContext,recentContexts\[agent\],referencePacket\)/);
+  assert.match(renderer, /buildIndependentPrompt\(agent,routed\.prompts\[agent\],independentContext,recentContexts\[agent\],referencePacket,crossContexts\[agent\]\)/);
   assert.match(packager, /Resources\/recent-context\.js/);
+});
+
+test('crossAgentPacket: 상대 답변만, 내 마지막 발언 이후 것만, 압축해서 넘긴다', () => {
+  const rc = context; // vm 로드본 (require는 UMD에서 빈 객체 — Node 25)
+  const names = { codex: 'Claude A', claude: 'Claude B' };
+  const messages = [
+    { author: 'user', text: '#a 검증식 분석해줘' },
+    { author: 'codex', text: '분석 결과: 서버는 등호(==) 검증입니다. refundedAmount + deductedDeliveryPrice != totalPaidPrice 이면 400.' },
+    { author: 'user', text: '#b 야 너 a가 얘기한대로 검증식 바꿔라' }
+  ];
+  // B(claude)는 아직 발언 없음 → A의 답변 + 그 질문이 실린다
+  const packet = rc.crossAgentPacket(messages, 'claude', names);
+  assert.match(packet, /\[Claude A의 답변\]/);
+  assert.match(packet, /등호\(==\) 검증/);
+  assert.match(packet, /\[사용자 → Claude A\]/);
+  // A 입장에서는 자기 답변 이후 상대(B) 발언이 없음 → 빈 문자열
+  assert.equal(rc.crossAgentPacket(messages, 'codex', names), '');
+  // B가 답하고 나면 그 이전 A 답변은 다시 실리지 않는다 (중복 누적 방지)
+  const after = [...messages, { author: 'claude', text: '수정 완료했습니다.' }, { author: 'user', text: '#b 테스트도 돌려' }];
+  assert.equal(rc.crossAgentPacket(after, 'claude', names), '');
+  // 긴 답변은 …(중략)…으로 압축
+  const long = [{ author: 'codex', text: 'x'.repeat(4000) }];
+  assert.match(rc.crossAgentPacket(long, 'claude', names), /…\(중략\)…/);
+});
+
+test('방 따라잡기 배선: 단일 대상·협업 리드에만 주입, 둘 다 답하는 실행은 제외', () => {
+  assert.match(renderer, /crossContexts\[agent\]=routed\.targets\.length===1\?window\.TriadRecentContext\.crossAgentPacket\(state\.messages,agent,names\):'';/);
+  assert.match(renderer, /crossContexts:clone\(options\.crossContexts\|\|\{\}\)/);
+  assert.match(renderer, /item\.crossContexts\?\.\[agent\]\|\|''/);
+  // buildIndependentPrompt가 cross 블록을 포함
+  assert.match(renderer, /const cross=crossContext\?/);
+  assert.match(renderer, /상대 AI가 방금 이 대화에서 답한 내용/);
+  // 협업: 리드 첫 턴에만 (재개 턴은 히스토리에 있음)
+  assert.match(renderer, /const crossContext=window\.TriadRecentContext\.crossAgentPacket\(state\.messages,collaboration\.lead,names\)/);
+  assert.match(renderer, /const catchUp=\(!resuming&&task\.agent===flow\.collaboration\?\.lead&&flow\.crossContext\)\?/);
 });

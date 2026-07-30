@@ -88,6 +88,7 @@
     .trace-toggle.has-alert::after { content: ''; position: absolute; top: -3px; right: -3px; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 2px var(--panel); }
     .chat-workspace { min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0,1fr); overflow: hidden; }
     .chat.diff-open .chat-workspace, .chat.board-open .chat-workspace, .chat.terminal-open .chat-workspace { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+    .recent-workspace { max-width: 96px; flex: 0 0 auto; }
     .terminal-pane { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0,1fr); overflow: hidden; border-left: 1px solid var(--line); background: #1a1b1e; }
     .terminal-pane[hidden] { display: none; }
     .terminal-head { display: flex; align-items: center; gap: 9px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
@@ -426,14 +427,11 @@
           <div class="collab-modes" role="radiogroup" aria-label="진행 방식">
             <button type="button" class="collab-mode-btn" data-collab-mode="independent" role="radio">독립 실행</button>
             <button type="button" class="collab-mode-btn" data-collab-mode="agent" role="radio">에이전트 협업</button>
-            <button type="button" class="collab-mode-btn" data-collab-mode="debate" role="radio">상호 토론</button>
-            <button type="button" class="collab-mode-btn" data-collab-mode="review" role="radio">교차 검토</button>
           </div>
-          <label for="collab-lead" id="collab-lead-label">첫 발언</label>
-          <select id="collab-lead"><option value="codex">Codex</option><option value="claude">Claude</option></select>
-          <span id="collab-rounds-wrap"><label for="collab-rounds" id="collab-rounds-label">라운드</label> <select id="collab-rounds"></select></span>
+          <label for="collab-lead" id="collab-lead-label">작업 시작</label>
+          <select id="collab-lead"><option value="auto">자동 (폴더 매칭)</option><option value="codex">Codex</option><option value="claude">Claude</option></select>
+          <span id="collab-rounds-wrap"><label for="collab-rounds" id="collab-rounds-label">AI 간 호출 한도</label> <select id="collab-rounds"></select></span>
           <span id="collab-helper-timeout-wrap"><label for="collab-helper-timeout">보조 AI 제한(분)</label> <input id="collab-helper-timeout" type="number" min="1" max="120" step="1" inputmode="numeric" aria-label="보조 AI 응답 제한 시간(분)"></span>
-          <span id="collab-finalizer-wrap"><label for="collab-finalizer">최종 종합</label> <select id="collab-finalizer"><option value="none">없음</option><option value="codex">Codex</option><option value="claude" selected>Claude</option></select></span>
           <span class="collab-document" id="collab-document" hidden></span>
           <span class="collab-state" id="collab-state">각 AI가 독립적으로 응답</span>
         </div>
@@ -513,8 +511,9 @@
       sessionStats: JSON.parse(localStorage.getItem('triad.sessionStats') || '{}'),
       traces: JSON.parse(localStorage.getItem('triad.traces') || '[]'), traceFilter:'all', traceSort: localStorage.getItem('triad.traceSort')||'newest',
       conversations: [], activeConversationId: localStorage.getItem('triad.activeConversationId'), unread:false, workspace:{separate:false,commonPath:''},
+      recentWorkspaces:(()=>{try{const v=JSON.parse(localStorage.getItem('triad.recentWorkspaces')||'[]');return Array.isArray(v)?v.filter(p=>typeof p==='string'&&p.trim()).slice(0,5):[];}catch{return [];}})(),
       storageReady: false, saveTimer: null, conversationSearch: '',
-      collaboration: {mode:'independent',lead:'codex',rounds:2,finalizer:'claude',helperTimeoutMinutes:5}, defaultTarget:'all', orchestration:null, sharedContext:null,
+      collaboration: {mode:'independent',lead:'auto',rounds:2,helperTimeoutMinutes:5}, defaultTarget:'all', orchestration:null, sharedContext:null,
       sharedDocuments:[], activeSharedDocumentId:null, pendingSharedDocumentDeleteId:null,
       queue: [], queueDrainScheduled:false,
       runtimes: {},
@@ -635,9 +634,8 @@
       set('[data-trace-filter="codex"]',names.codex); set('[data-trace-filter="claude"]',names.claude);
       set('#diff-agent option[value="codex"]',L('folderLabel',{name:names.codex}));
       set('#diff-agent option[value="claude"]',L('folderLabel',{name:names.claude}));
-      // collaboration lead (작업 시작) + finalizer pickers follow the providers too
+      // collaboration lead (작업 시작) picker follows the providers too
       set('#collab-lead option[value="codex"]',names.codex); set('#collab-lead option[value="claude"]',names.claude);
-      set('#collab-finalizer option[value="codex"]',names.codex); set('#collab-finalizer option[value="claude"]',names.claude);
       // compose tag buttons: relabel to the slot name, route via #a/#b
       const tagCodex=document.querySelector('.tag.codex');if(tagCodex){tagCodex.textContent=names.codex;tagCodex.dataset.tag='#a';}
       const tagClaude=document.querySelector('.tag.claude');if(tagClaude){tagClaude.textContent=names.claude;tagClaude.dataset.tag='#b';}
@@ -679,7 +677,13 @@
       return Number.isInteger(minutes)&&minutes>=1&&minutes<=120?minutes:5;
     }
     function normalizeCollaboration(value) {
-      const collaboration={mode:'independent',lead:'codex',rounds:2,finalizer:'claude',...(value||{})};
+      const collaboration={mode:'independent',lead:'auto',rounds:2,...(value||{})};
+      // 모드 2개로 축소 — 저장돼 있던 토론(debate)/교차 검토(review)는 독립 실행으로
+      // 흡수된다(적대적 검증은 #검토, 직접 대화는 #대화 — 둘 다 메시지별 태그).
+      // 'dialog'는 저장 설정이 아니라 #대화 태그가 만드는 실행별 모드다.
+      if(!['agent','dialog'].includes(collaboration.mode))collaboration.mode='independent';
+      if(!['auto','codex','claude'].includes(collaboration.lead))collaboration.lead='auto';
+      delete collaboration.finalizer;
       collaboration.helperTimeoutMinutes=helperTimeoutMinutes(collaboration.helperTimeoutMinutes);
       return collaboration;
     }
@@ -693,6 +697,19 @@
     }
     function effectiveWorkspacePath(agent, settings=state.settings, workspace=state.workspace) {
       const normalized=normalizeWorkspace(workspace,settings);return normalized.separate?settings?.[agent]?.workspacePath||normalized.commonPath:normalized.commonPath||settings?.[agent]?.workspacePath||'';
+    }
+    // 작업 폴더 MRU — 사용자가 골랐던 폴더 최근 5개를 앱 전역으로 유지해
+    // 매번 파일 다이얼로그를 열지 않고 "최근" 드롭다운으로 바로 고른다.
+    function rememberWorkspace(path) {
+      const value=String(path||'').trim().replace(/\/+$/,'');
+      if(!value)return;
+      state.recentWorkspaces=[value,...state.recentWorkspaces.filter(p=>p!==value)].slice(0,5);
+      try{localStorage.setItem('triad.recentWorkspaces',JSON.stringify(state.recentWorkspaces));}catch{}
+    }
+    function recentWorkspaceSelect(target, disabled) {
+      if(!state.recentWorkspaces.length)return '';
+      const options=state.recentWorkspaces.map(p=>`<option value="${escapeAttr(p)}" title="${escapeAttr(p)}">${escapeAttr(p.split('/').pop()||p)}</option>`).join('');
+      return `<select class="recent-workspace" data-recent-target="${escapeAttr(target)}" title="최근 사용한 작업 폴더" ${disabled||''}><option value="">최근</option>${options}</select>`;
     }
     function effectiveAgentConfig(agent, settings=state.settings, workspace=state.workspace) {
       const cfg={...(settings?.[agent]||{}),workspacePath:effectiveWorkspacePath(agent,settings,workspace)};
@@ -1072,8 +1089,13 @@
     function closeDiff(){state.diff.visible=false;renderDiff();requestAnimationFrame(updateScrollButton);}
     // ---- integrated terminal (xterm.js ↔ node-pty via the shell) ----------
     let termSession=null;
-    function openTerminal(){
-      if(state.terminalVisible){closeTerminal();return;}
+    function openTerminal(cwd){
+      const requested=typeof cwd==='string'&&cwd.trim()?cwd.trim():'';
+      if(state.terminalVisible){
+        if(requested&&requested!==state.terminalCwd){state.terminalCwd=requested;restartTerminalSession();return;}
+        closeTerminal();return;
+      }
+      if(requested)state.terminalCwd=requested;
       closeDiff();closeBoard();
       state.terminalVisible=true;document.querySelector('.chat').classList.add('terminal-open');
       document.getElementById('terminal-pane').hidden=false;
@@ -1093,7 +1115,7 @@
       const dark=matchMedia('(prefers-color-scheme: dark)').matches;
       const term=new window.Terminal({fontFamily:'ui-monospace, SFMono-Regular, Menlo, monospace',fontSize:12,cursorBlink:true,allowProposedApi:true,theme:{background:'#1a1b1e',foreground:dark?'#e6e6e6':'#f3f4f6',cursor:'#e6e6e6'}});
       const fit=new window.FitAddon.FitAddon();term.loadAddon(fit);term.open(host);
-      const cwd=effectiveWorkspacePath('codex')||effectiveWorkspacePath('claude')||'';
+      const cwd=state.terminalCwd||effectiveWorkspacePath('codex')||effectiveWorkspacePath('claude')||'';
       document.getElementById('terminal-cwd').textContent=cwd;
       const dataOff=window.triadPty.onData(d=>term.write(d));
       const exitOff=window.triadPty.onExit(({exitCode})=>term.write(`\r\n\x1b[90m[${tc('셸 종료')} · exit ${exitCode}]\x1b[0m\r\n`));
@@ -1597,7 +1619,7 @@
       const runId=id();
       const responseRecordId=sharedContext?.runId?window.TriadRunReference.recordIdFor({runId:sharedContext.runId},contextDocumentId(sharedContext)):null;
       const bubbleMeta={recordId:responseRecordId,runId:sharedContext?.runId||null,documentId:contextDocumentId(sharedContext),replyAgent:agent};
-      state.pending[agent]={prompt,retried:false,isolated,sessionStore,sharedContext,usageRecorded:false,sessionId:session,runId,conversationId,config,agentConfigs,collaboration,images,bubbleMeta,fallbackContext:options.fallbackContext||''};
+      state.pending[agent]={prompt,retried:false,isolated,sessionStore,sharedContext,usageRecorded:false,sessionId:session,runId,conversationId,config,agentConfigs,collaboration,images,bubbleMeta,fallbackContext:options.fallbackContext||'',reviewRequested:!!options.reviewRequested,reviewSource:options.reviewSource||''};
       // Create the answer bubble immediately (spinner) so the user always sees
       // the agent is working — even while it's only using tools. On a handoff
       // the segment is sealed (see the broker handler) so a single bubble never
@@ -1664,13 +1686,13 @@
       return item;
     }
     function enqueueIndependentBatch(targets,prompts,sourceText,messageId,options={}) {
-      const item={id:id(),kind:'independentBatch',targets:[...targets],prompts:clone(prompts),sourceText,objective:options.objective||sourceText,messageId,conversationId:state.activeConversationId,settings:clone(effectiveAgentConfigs()),collaboration:clone(activeCollaboration()),recentContexts:clone(options.recentContexts||{}),fallbackContexts:clone(options.fallbackContexts||{}),referencePacket:clone(options.referencePacket||[]),images:clone(options.images||[]),sharedContext:options.sharedContext||null,documentId:options.documentId||contextDocumentId(options.sharedContext),createdAt:Date.now()};
+      const item={id:id(),kind:'independentBatch',targets:[...targets],prompts:clone(prompts),sourceText,objective:options.objective||sourceText,messageId,conversationId:state.activeConversationId,settings:clone(effectiveAgentConfigs()),collaboration:clone(activeCollaboration()),recentContexts:clone(options.recentContexts||{}),fallbackContexts:clone(options.fallbackContexts||{}),crossContexts:clone(options.crossContexts||{}),referencePacket:clone(options.referencePacket||[]),images:clone(options.images||[]),sharedContext:options.sharedContext||null,documentId:options.documentId||contextDocumentId(options.sharedContext),review:!!options.review,createdAt:Date.now()};
       state.queue.push(item);renderQueue();renderCollaboration();if(state.boardVisible)renderSharedBoard();
       addTrace(targets[0]||'codex','info','독립 실행 묶음 대기열 등록',{targets,position:state.queue.filter(candidate=>candidate.kind==='independentBatch').length});
       return item;
     }
-    function enqueueCollaboration(objective,sourceText,messageId,collaboration=state.collaboration,referencePacket=[],images=[]) {
-      const item={id:id(),kind:'collaboration',objective,sourceText,messageId,conversationId:state.activeConversationId,settings:clone(effectiveAgentConfigs()),collaboration:clone(collaboration),referencePacket:clone(referencePacket),images:clone(images||[]),createdAt:Date.now()};
+    function enqueueCollaboration(objective,sourceText,messageId,collaboration=state.collaboration,referencePacket=[],images=[],review=false) {
+      const item={id:id(),kind:'collaboration',objective,sourceText,messageId,conversationId:state.activeConversationId,settings:clone(effectiveAgentConfigs()),collaboration:clone(collaboration),referencePacket:clone(referencePacket),images:clone(images||[]),review:!!review,createdAt:Date.now()};
       state.queue.push(item);renderQueue();renderCollaboration();if(state.boardVisible)renderSharedBoard();
       addTrace(collaboration.lead,'info','협업 순차 대기열 등록',{position:window.TriadQueue.positionFor(state.queue,item),mode:collaboration.mode});
       return item;
@@ -1715,8 +1737,8 @@
         const independentContext=item.sharedContext||createIndependentSharedContext(item.objective,item.targets[0]||item.collaboration?.lead);
         addTrace(item.targets[0]||'codex','info','대기 독립 실행 시작',{targets:item.targets,remaining:state.queue.filter(candidate=>candidate.kind==='independentBatch').length});
         for(const agent of item.targets){
-          const prompt=buildIndependentPrompt(agent,item.prompts[agent]||item.sourceText,independentContext,item.recentContexts?.[agent]||'',item.referencePacket||[]);
-          dispatchAgent(agent,prompt,{sharedContext:independentContext,conversationId:item.conversationId,config:item.settings?.[agent],agentConfigs:item.settings,collaboration:item.collaboration,images:item.images||[],fallbackContext:item.fallbackContexts?.[agent]||''});
+          const prompt=buildIndependentPrompt(agent,item.prompts[agent]||item.sourceText,independentContext,item.recentContexts?.[agent]||'',item.referencePacket||[],item.crossContexts?.[agent]||'');
+          dispatchAgent(agent,prompt,{sharedContext:independentContext,conversationId:item.conversationId,config:item.settings?.[agent],agentConfigs:item.settings,collaboration:item.collaboration,images:item.images||[],fallbackContext:item.fallbackContexts?.[agent]||'',reviewRequested:!!item.review,reviewSource:item.objective||item.sourceText||''});
         }
         renderQueue();renderCollaboration();
       });
@@ -1728,7 +1750,7 @@
         if(item.kind==='collaboration'){
           if(earlier.length||agents.some(agent=>state.running[agent]))return;
           state.queue.splice(index,1);const collaboration=normalizeCollaboration(item.collaboration);
-          withConversation(item.conversationId,()=>{markMessageWorkStarted(item.messageId);renderQueue();renderCollaboration();addTrace(collaboration.lead,'info','대기 협업 시작',{remaining:state.queue.filter(candidate=>candidate.kind==='collaboration').length});startCollaboration(item.objective,collaboration,item.conversationId,item.settings,item.referencePacket||[],item.images||[]);});return;
+          withConversation(item.conversationId,()=>{markMessageWorkStarted(item.messageId);renderQueue();renderCollaboration();addTrace(collaboration.lead,'info','대기 협업 시작',{remaining:state.queue.filter(candidate=>candidate.kind==='collaboration').length});startCollaboration(item.objective,collaboration,item.conversationId,item.settings,item.referencePacket||[],item.images||[],!!item.review);});return;
         }
         if(earlier.some(candidate=>queueItemsConflict(candidate,item)))continue;
         const targets=queueTargets(item);const documentId=queueDocumentId(item);
@@ -1739,14 +1761,7 @@
         scheduleQueueDrain();return;
       }
     }
-    function collaborationTasks(collaboration=activeCollaboration()) {
-      return window.TriadCollaboration.harnessTasks(collaboration.lead);
-    }
     function boardFor(flow=state.orchestration) { return flow?.sharedContext?.board || activeSharedDocument() || state.sharedContext?.board || null; }
-    function boardSectionsFor(task) {
-      if(task.kind==='proposal')return ['constraints'];
-      return [];
-    }
     function createRunBoard(objective, lead, independent=false) {
       const owner=window.TriadCollaboration.rolesFor(lead).owner;
       const continuation=window.TriadCollaboration.continuationInput({conversationId:state.activeConversationId||id(),runId:id(),objective,owner});
@@ -1771,39 +1786,29 @@
       const sharedContext=createRunBoard(objective,lead,true);state.sharedContext=sharedContext;
       upsertSharedDocument(sharedContext.board,{select:true});save();renderSharedBoard();return sharedContext;
     }
-    function boardPacket(task, flow) {
-      const board=boardFor(flow);if(!board)return null;
-      try {
-        const sections=boardSectionsFor(task);
-        // manifest 대신 빈 섹션을 걷어낸 인덱스 — 빈 보드는 null(스냅샷 생략).
-        return sections.length?window.TriadSharedContext.compactPacket(board,{sections,maxCharacters:4000}):promptBoardIndex(board);
-      }
-      catch(error) { addTrace(task.agent,'error','공유 보드 패킷 준비 실패',error.message);return promptBoardIndex(board); }
+    // 자동 리드 해석: router의 순수 휴리스틱(폴더·파일 매칭)에 현재 상태를 공급.
+    // 무승부/신호 없음이면 이 대화의 직전 리드, 그것도 없으면 첫 슬롯.
+    function resolveAutoLead(routed, cleanText) {
+      const picked=window.TriadRouter.autoLead({
+        text:cleanText,
+        files:routed?.files||[],
+        workspaces:{codex:effectiveWorkspacePath('codex'),claude:effectiveWorkspacePath('claude')},
+        projectFiles:{codex:state.projectFiles?.codex?.files||[],claude:state.projectFiles?.claude?.files||[]}
+      });
+      if(picked.lead)return picked;
+      return {lead:state.lastCollabLead||'codex',reason:''};
     }
-    function buildCollaborationPrompt(task) {
-      const flow=state.orchestration;const board=boardFor(flow);const packet=boardPacket(task,flow);
-      const role=task.agent===board?.owner?'owner/proposer':'reviewer';
-      // opt2: 재개 세션이면 무거운 reference packet은 이미 첫 턴 히스토리에 있으므로
-      // 생략(의제는 항상 유지 — 재개가 서버측에서 조용히 실패해도 에이전트가 의제를 잃지 않음).
-      const resuming=!!flow.sessions?.[task.agent];
-      const references=(!resuming&&flow.referencePacket?.length)?`\n\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(flow.referencePacket)}`:'';
-      // 안정 prefix(의제·참고·역할·정책은 한 실행 안에서 에이전트 턴마다 바뀌지 않음)를
-      // 먼저 두고, 매 턴 revision이 바뀌는 보드 단계·스냅샷은 맨 뒤로 — prompt prefix
-      // 캐시가 volatile 델타에 깨지지 않도록.
-      // Present agents by their display names (e.g. "Claude A"/"Claude B"), not
-      // the internal slot codes — otherwise a Claude×2 run says "Codex 검수".
-      const other=task.agent===board?.owner?board?.reviewer:board?.owner;
-      const otherName=other?(names[other]||other):'상대 AI';
-      const relabel=(p)=>(p&&typeof p==='object')?{...p,...(p.owner?{owner:names[p.owner]||p.owner}:{}),...(p.reviewer?{reviewer:names[p.reviewer]||p.reviewer}:{})}:p;
-      // 재개 세션이면 불변 정책 문단(슬롯 코드 지칭·보드 관리 규칙)도 생략 —
-      // 첫 턴 히스토리에 이미 있다. 의제·역할·단계·스냅샷은 항상 유지.
-      const policy=resuming?'':` 상대나 검토자를 'Codex'/'Claude' 같은 슬롯 코드가 아니라 이 표시 이름으로 지칭하세요.\n\n공유 보드는 프로젝트가 아니라 Triad가 관리합니다. 전체 채팅 기록이나 다른 AI의 원문 답변을 요청하거나 반복하지 마세요. 필요한 프로젝트 근거는 직접 필요한 파일·라인만 읽으세요. 사용자에게 보이는 답변에서는 보드·기록 절차를 언급하지 마세요.`;
-      const snapshot=packet?`\n공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(relabel(packet))}`:'';
-      const common=`사용자 의제:\n${flow.objective}${references}\n\n당신=${names[task.agent]} (${role}), 상대=${otherName}.${policy}\n\n공유 보드 단계: ${task.phase}${snapshot}`;
-      if(task.kind==='proposal')return `${common}\n\ninline에는 제약만 있습니다. 필요한 경우 shared_context_read로 필요한 섹션만 읽으세요. 먼저 shared_context_update 도구로 proposal과 필요한 constraints/evidence를 작성하세요. 그 뒤 사용자에게는 실행 가능한 제안과 근거만 간결하게 설명하세요.`;
-      if(task.kind==='verdict')return `${common}\n\nshared_context_read로 proposal과 evidence만 읽고 반례·누락만 검토하세요. submit_verdict 도구로 agree | disagree | conditional 중 하나와 최대 3개의 findings를 기록하세요. agree라면 새 동의 라운드를 시작하지 마세요. 사용자에게는 판정과 핵심 근거를 한두 문장으로 설명하세요('agree' 한 단어로 끝내지 마세요).`;
-      if(task.kind==='resolve')return `${common}\n\nshared_context_read로 verdict와 disputes만 읽고 해결하세요. 필요한 변경은 shared_context_update로 proposal/evidence에 반영하고, 해결 결과를 짧게 남기세요.`;
-      return `${common}\n\nshared_context_read로 proposal, evidence, verdict, disputes만 읽어 현재 보드 근거로 최종 결론을 내리세요. shared_context_update로 decision을 기록해 보드를 완료하고, 사용자에게 바로 실행 가능한 결론을 제시하세요. **제안이 '누가 무엇을 한다'는 계획에 머물렀더라도, 결론에는 사용자가 실제로 요청한 산출물(코드·표·계산 결과 등)을 직접 만들어 포함하세요. 계획 재진술로 끝내지 마세요.** 새 토론이나 상대 AI 호출은 시작하지 마세요.`;
+    // 토론/교차 검토 보드 하니스(제안→검토→결정)는 제거 — 적대적 검증은 이제
+    // 메시지별 #검토 태그가 담당한다: 답변이 끝나면 상대 에이전트가 그 답변을
+    // 검토하는 일반 실행을 대기열로 돌린다. 보드 의식 없음, 채팅에 바로 표시.
+    function buildReviewPrompt(author, userText, answerText) {
+      return `사용자의 요청:\n${userText}\n\n${names[author]}의 답변:\n${answerText}\n\n위 답변을 검토하세요. 오류·반례·빠진 조건만 확인하고, 판정(동의 / 보완 필요)으로 시작한 뒤 핵심 근거를 간결하게 설명하세요. 필요한 프로젝트 파일은 직접 확인하세요. 답변 전체를 다시 쓰거나 새 작업을 시작하지 마세요.`;
+    }
+    function enqueueReviewRun(author, userText, answerText) {
+      const other=author==='codex'?'claude':'codex';
+      addTrace(other,'info','교차 검토 대기열 등록',{author:names[author],characters:answerText.length});
+      enqueueAgent(other,buildReviewPrompt(author,userText,answerText),`🔍 ${names[author]} 답변 검토`,null,null);
+      scheduleQueueDrain();
     }
     function agentHandoffProtocol(agent, disabled=false) {
       if(disabled)return '위임 한도에 도달했습니다. 상대 AI에게 추가 질문을 요청하지 말고 현재 정보로 사용자에게 줄 최선의 결과를 이 응답 본문(채팅)에 직접 완성해 작성하세요.';
@@ -1813,14 +1818,15 @@
     function buildAgentPrompt(task) {
       const flow=state.orchestration;
       const board=boardFor(flow);
-      // opt2: 재개 세션이면 reference packet 생략(의제·역할은 유지).
+      // opt2: 재개 세션이면 reference packet·방 따라잡기 생략(첫 턴 히스토리에 있음).
       const resuming=!!flow.sessions?.[task.agent];
       const references=(!resuming&&flow.referencePacket?.length)?`\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(flow.referencePacket)}\n`:'';
+      const catchUp=(!resuming&&task.agent===flow.collaboration?.lead&&flow.crossContext)?`\n상대 AI가 방금 이 대화에서 답한 내용(당신 세션에는 없음 — 작업이 이를 참조하면 활용하세요):\n${flow.crossContext}\n`:'';
       // 안정 prefix(작업·참고·역할·정책) 먼저, volatile 보드 스냅샷은 뒤로.
       // 빈 보드는 스냅샷 블록 자체를 생략(빈 manifest만 ~170토큰).
       const boardIndex=promptBoardIndex(board);
       const snapshot=boardIndex?`공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(boardIndex)}`:'공유 보드는 아직 비어 있습니다(기록하면 상대와 공유됩니다).';
-      const context=`사용자의 원래 작업:\n${flow.objective}${references}\n당신의 역할: ${task.agent===board?.owner?'owner/proposer':'reviewer'}\n\n전체 채팅 기록은 제공되지 않습니다. 필요한 프로젝트 파일만 직접 읽고, 확인한 근거는 공유 보드에 짧게 기록하세요.\n\n${snapshot}\n\n`;
+      const context=`사용자의 원래 작업:\n${flow.objective}${references}${catchUp}\n당신의 역할: ${task.agent===board?.owner?'owner/proposer':'reviewer'}\n\n전체 채팅 기록은 제공되지 않습니다. 필요한 프로젝트 파일만 직접 읽고, 확인한 근거는 공유 보드에 짧게 기록하세요.\n\n${snapshot}\n\n`;
       if(task.kind==='agent_answer'){
         return `${context}${names[task.requester]}가 당신에게 다음 작업을 요청했습니다.\n질문: ${task.question}\n${task.reason?`요청 이유: ${task.reason}\n`:''}\n연결된 MCP나 작업 도구가 필요하면 실제로 사용해 확인하세요. 추측으로 조회 결과를 만들지 말고, 실패하면 실제 오류를 설명하세요. 질문에 답하면 앱이 그 답을 ${names[task.requester]}에게 자동으로 돌려줍니다.\n\n${agentHandoffProtocol(task.agent,task.noHandoff)}`;
       }
@@ -1838,7 +1844,7 @@
       if(!sections.length)return null;
       return {documentId:m.documentId,title:m.title,phase:m.phase,revision:m.revision,sections};
     }
-    function buildIndependentPrompt(agent, prompt, sharedContext, recentContext='', referencePacket=[]) {
+    function buildIndependentPrompt(agent, prompt, sharedContext, recentContext='', referencePacket=[], crossContext='') {
       // Short greetings/acks skip the full task-run scaffold (project & board
       // reads, mandatory submit_contribution) so a "ㅎㅇ?" stays a "ㅎㅇ?".
       if(!referencePacket.length&&window.TriadMessageIntent?.isConversational(prompt)){
@@ -1847,6 +1853,7 @@
       }
       const board=sharedContext?.board;const boardIndex=promptBoardIndex(board);
       const related=recentContext?`\n\n직전 관련 맥락(대명사·수정 지시를 현재 요청과 연결할 때만 사용하고, 프로젝트의 현재 상태는 직접 확인하세요):\n${recentContext}`:'';const references=referencePacket.length?`\n\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(referencePacket)}`:'';
+      const cross=crossContext?`\n\n상대 AI가 방금 이 대화에서 답한 내용(당신 세션에는 없음 — 요청이 이를 참조하면 활용하세요):\n${crossContext}`:'';
       const boardBlock=boardIndex?`\n\n공유 문서 인덱스(필요 섹션만 shared_context_read로 읽기):\n${JSON.stringify(boardIndex)}`:'';
       // 질문·논의성(작업 신호 없음)이면 기여 기록을 선택으로 낮춘다 — 문구가
       // contribution 체크 정규식(`submit_contribution 도구로 runId`)과 일치하지
@@ -1855,7 +1862,7 @@
       const record=inquiry
         ?`결과가 다음 작업에 참고될 만하면 submit_contribution(runId: ${sharedContext?.runId||''})으로 짧게 남겨도 됩니다(선택).`
         :`작업을 마친 뒤 submit_contribution 도구로 runId: ${sharedContext?.runId||''}에 요약과 근거를 짧게 기록하세요.`;
-      return `${prompt}${related}${references}${boardBlock}\n\n전체 transcript나 상대 AI의 원문 답변은 제공되지 않으며 요청하지 마세요. 과거 맥락이 꼭 필요할 때만 shared_context_read(history/contributions)를 사용하세요. ${record} 이 실행에서는 상대 AI를 호출하지 마세요. 사용자에게 보이는 답변에서는 보드·기록 절차를 언급하지 말고 요청 자체에 집중하세요.`;
+      return `${prompt}${related}${cross}${references}${boardBlock}\n\n위에 제공된 것 외의 전체 transcript나 상대 AI 원문 답변은 요청하지 마세요. 과거 맥락이 꼭 필요할 때만 shared_context_read(history/contributions)를 사용하세요. ${record} 이 실행에서는 상대 AI를 호출하지 마세요. 사용자에게 보이는 답변에서는 보드·기록 절차를 언급하지 말고 요청 자체에 집중하세요.`;
     }
     function collabSessionStore(flow, agent) {
       // Flow sessions resume for the whole collaboration (no turn cap) — the
@@ -1877,7 +1884,14 @@
     function finishAgentCollaboration(flow, agent, message=L('agentCollabDone')) {
       if(flow?.conversationId&&flow.conversationId!==state.activeConversationId)return withConversation(flow.conversationId,()=>finishAgentCollaboration(flow,agent,message));
       addTrace(agent,'success','에이전트 협업 완료',{handoffs:flow.handoffs});
-      state.orchestration=null;addMessage('system',message);renderCollaboration();scheduleQueueDrain();
+      state.orchestration=null;addMessage('system',message);renderCollaboration();
+      // #검토: 협업이 결과를 냈으면 마지막 답변을 상대 에이전트가 교차 검토
+      if(flow?.reviewRequested){
+        const author=agent||flow.lastAgent||flow.collaboration?.lead||state.collaboration.lead;
+        const last=[...state.messages].reverse().find(m=>m.author===author&&String(m.text||'').trim()&&!/^응답 없이 종료/.test(m.text));
+        if(last)enqueueReviewRun(author,flow.objective||'',String(last.text).trim());
+      }
+      scheduleQueueDrain();
     }
     // The 회의실 Q&A messages arrive over a 150ms file-watch tail, so the agent
     // process can exit before the last answer is rendered — which would post
@@ -1898,34 +1912,51 @@
         const pf=flow.pendingFinish;flow.pendingFinish=null;finishAgentCollaboration(flow,pf.agent,pf.message);
       }
     }
-    function runNextCollaborationTurn() {
-      const flow=state.orchestration;if(!flow||flow.cancelled)return;
-      if(flow.conversationId&&flow.conversationId!==state.activeConversationId)return withConversation(flow.conversationId,()=>runNextCollaborationTurn());
-      if(flow.index>=flow.tasks.length){
-        addTrace(flow.lastAgent||flow.collaboration?.lead||state.collaboration.lead,'success',flow.mode==='debate'?'상호 토론 완료':'교차 검토 완료');
-        state.orchestration=null;addMessage('system',flow.mode==='debate'?L('debateDone'):L('reviewDone'));renderCollaboration();scheduleQueueDrain();return;
-      }
-      let task=flow.tasks[flow.index++];
-      if(task?.conditional&&boardFor(flow)?.verdict==='agree')task=flow.tasks[flow.index++];
-      if(!task){setTimeout(runNextCollaborationTurn,0);return;}
-      flow.current=task;
-      const labels={proposal:L('phaseProposal'),verdict:L('phaseVerdict'),resolve:L('phaseResolve'),decision:L('phaseDecision')};
-      task.label=labels[task.kind];addTrace(task.agent,'info',L('traceStarting',{label:task.label}),{turn:flow.index,total:flow.tasks.length});
-      const store=collabSessionStore(flow,task.agent);dispatchAgent(task.agent,buildCollaborationPrompt(task),{isolated:true,sessionStore:store,conversationId:flow.conversationId,config:flow.settings?.[task.agent],agentConfigs:flow.settings,collaboration:flow.collaboration,images:flow.images||[]});renderCollaboration();
-    }
-    function startCollaboration(objective, runCollaboration=state.collaboration, conversationId=state.activeConversationId, settings=effectiveAgentConfigs(), referencePacket=[], images=[]) {
-      const collaboration=normalizeCollaboration(runCollaboration);
-      const sharedContext=createSharedContext(objective,collaboration.lead);
+    function startCollaboration(objective, runCollaboration=state.collaboration, conversationId=state.activeConversationId, settings=effectiveAgentConfigs(), referencePacket=[], images=[], review=false) {
+      const collaboration=normalizeCollaboration(runCollaboration); // agent | dialog
+      // 대기열 등 해석 전에 저장된 'auto'가 넘어오면 여기서 최종 해석
+      if(collaboration.lead==='auto'){const picked=resolveAutoLead(null,objective);collaboration.lead=picked.lead;collaboration.autoLeadReason=picked.reason;}
+      state.lastCollabLead=collaboration.lead; // 자동 무승부 시 다음 기본값
       const flowImages=clone(images||[]);
-      if(collaboration.mode==='agent'){
-        state.orchestration={mode:'agent',objective,tasks:[],index:0,current:null,cancelled:false,lastAgent:null,handoffs:0,mcpCalls:0,maxHandoffs:collaboration.rounds,sessions:{codex:null,claude:null},sessionTurns:{codex:0,claude:0},sharedContext,collaboration,conversationId,settings:clone(settings),referencePacket:clone(referencePacket),images:flowImages};
-        addTrace(collaboration.lead,'info','에이전트 협업 시작',{lead:names[collaboration.lead],maxHandoffs:collaboration.rounds});
-        addMessage('system',L('agentStart',{lead:names[collaboration.lead]}));
-        runAgentTurn({agent:collaboration.lead,kind:'agent_work'});return;
+      if(collaboration.mode==='dialog'){
+        // #대화: 두 AI가 사용자 앞에서 직접 말을 주고받는다 — 보드·MCP 없음,
+        // 각 턴이 그 AI의 실제 말풍선. [[대화종료]] 또는 최대 턴에서 끝난다.
+        state.orchestration={mode:'dialog',objective,turns:1,maxTurns:DIALOG_MAX_TURNS,tasks:[],index:0,current:null,cancelled:false,lastAgent:null,handoffs:0,mcpCalls:0,maxHandoffs:0,sessions:{codex:null,claude:null},sessionTurns:{codex:0,claude:0},sharedContext:null,collaboration,conversationId,settings:clone(settings),referencePacket:clone(referencePacket),images:flowImages,
+          dialogCatchUp:{codex:window.TriadRecentContext.crossAgentPacket(state.messages,'codex',names),claude:window.TriadRecentContext.crossAgentPacket(state.messages,'claude',names)}};
+        addTrace(collaboration.lead,'info','상호 대화 시작',{lead:names[collaboration.lead],maxTurns:DIALOG_MAX_TURNS,autoLead:collaboration.autoLeadReason||undefined});
+        addMessage('system',L('dialogStart',{lead:names[collaboration.lead]})+(collaboration.autoLeadReason?L('autoLeadPicked',{reason:collaboration.autoLeadReason}):''));
+        runDialogueTurn(collaboration.lead,'');return;
       }
-      const tasks=collaborationTasks(collaboration);state.orchestration={mode:collaboration.mode,objective,tasks,index:0,current:null,cancelled:false,lastAgent:null,sessions:{codex:null,claude:null},sessionTurns:{codex:0,claude:0},sharedContext,collaboration,conversationId,settings:clone(settings),referencePacket:clone(referencePacket),images:flowImages};
-      addTrace(collaboration.lead,'info',collaboration.mode==='debate'?'상호 토론 시작':'교차 검토 시작',{rounds:collaboration.rounds,lead:names[collaboration.lead],finalizer:collaboration.finalizer});
-      runNextCollaborationTurn();
+      const sharedContext=createSharedContext(objective,collaboration.lead);
+      // 방 따라잡기: 리드의 세션에 없는 상대 AI의 직전 답변을 첫 턴에 압축 제공
+      // ("A가 얘기한 대로 해줘"가 연결되도록).
+      const crossContext=window.TriadRecentContext.crossAgentPacket(state.messages,collaboration.lead,names);
+      state.orchestration={mode:'agent',objective,tasks:[],index:0,current:null,cancelled:false,lastAgent:null,handoffs:0,mcpCalls:0,maxHandoffs:collaboration.rounds,sessions:{codex:null,claude:null},sessionTurns:{codex:0,claude:0},sharedContext,collaboration,conversationId,settings:clone(settings),referencePacket:clone(referencePacket),images:flowImages,reviewRequested:!!review,crossContext};
+      addTrace(collaboration.lead,'info','에이전트 협업 시작',{lead:names[collaboration.lead],maxHandoffs:collaboration.rounds,review:!!review,autoLead:collaboration.autoLeadReason||undefined});
+      addMessage('system',L('agentStart',{lead:names[collaboration.lead]})+(collaboration.autoLeadReason?L('autoLeadPicked',{reason:collaboration.autoLeadReason}):''));
+      runAgentTurn({agent:collaboration.lead,kind:'agent_work'});
+    }
+    const DIALOG_MAX_TURNS=8;
+    const DIALOG_END=/\[\[\s*대화\s*종료\s*\]\]/u;
+    function runDialogueTurn(agent, received) {
+      const flow=state.orchestration;if(!flow||flow.cancelled)return;
+      if(flow.conversationId&&flow.conversationId!==state.activeConversationId)return withConversation(flow.conversationId,()=>runDialogueTurn(agent,received));
+      const other=agent==='codex'?'claude':'codex';
+      flow.current={agent,kind:'dialog',label:'대화'};
+      const first=!flow.sessions?.[agent];
+      const catchUp=(first&&flow.dialogCatchUp?.[agent])?`\n\n이 대화 직전 맥락(참고):\n${flow.dialogCatchUp[agent]}`:'';
+      // 첫 턴만 주제·규칙을 실어주고, 이후 턴은 재개 세션이라 상대의 말만 전달한다.
+      const prompt=first
+        ?`대화 주제:\n${flow.objective}${catchUp}\n\n당신은 ${names[agent]}, 상대는 ${names[other]}입니다. 사용자가 지켜보는 채팅에서 상대와 직접 대화하세요. 한 턴에 3~6문장으로 짧고 실질적으로, 상대의 마지막 말에 반응하며 진행하세요. 근거가 필요하면 프로젝트 파일을 직접 확인해도 됩니다. 대화가 충분히 마무리되었다고 판단되면 답변 맨 끝에 [[대화종료]]라고 적으세요.${received?`\n\n${names[other]}: ${received}`:'\n\n당신이 먼저 말문을 여세요.'}`
+        :`${names[other]}: ${received}`;
+      addTrace(agent,'info','상호 대화 턴',{turn:flow.turns,max:flow.maxTurns});
+      const store=collabSessionStore(flow,agent);
+      dispatchAgent(agent,prompt,{isolated:true,sessionStore:store,conversationId:flow.conversationId,config:flow.settings?.[agent],agentConfigs:flow.settings,collaboration:flow.collaboration,images:flow.images||[]});
+      renderCollaboration();
+    }
+    function finishDialogue(flow, agent) {
+      addTrace(agent,'success','상호 대화 완료',{turns:flow.turns});
+      state.orchestration=null;addMessage('system',L('dialogDone'));renderCollaboration();scheduleQueueDrain();
     }
     function cancelCollaboration(reason='사용자가 중지함') {
       if(!state.orchestration)return;
@@ -1943,20 +1974,29 @@
       const routed=route(references.clean,{defaultTarget:state.defaultTarget});if(!routed){document.getElementById('routing-error').textContent=L('needTask');return;}
       if(routed.errors?.length){document.getElementById('routing-error').textContent=routed.errors[0];return;}
       let runCollaboration=null;
-      if(state.collaboration.mode!=='independent'){
-        const lead=collaborationLeadFor(routed,state.collaboration.lead,state.defaultTarget);
+      // #대화 태그는 현재 모드와 무관하게 이 실행을 두-AI 직접 대화로 돌린다.
+      if(routed.dialog||state.collaboration.mode!=='independent'){
+        let lead=collaborationLeadFor(routed,state.collaboration.lead,state.defaultTarget);
         if(!lead){document.getElementById('routing-error').textContent=L('collabLeadOne');return;}
+        // 자동 리드: 메시지가 실제로 어느 슬롯 폴더 얘기인지로 시작 AI를 고른다
+        // (태그·핀이 없을 때만 여기까지 옴). 무승부면 직전 리드 → 첫 슬롯.
+        let autoLeadReason='';
+        if(lead==='auto'){const picked=resolveAutoLead(routed,references.clean);lead=picked.lead;autoLeadReason=picked.reason;}
         // The pin applies only to this run; it never rewrites the conversation's
         // collaboration setting or changes a queued/running collaboration.
-        runCollaboration={...state.collaboration,lead};
+        runCollaboration={...state.collaboration,...(routed.dialog?{mode:'dialog'}:{}),lead,autoLeadReason};
       }
       document.getElementById('routing-error').textContent='';draft.value='';updateRoutingPreview();
       state.pendingImages=[];renderAttachStrip();
-      const sameConversationContext=state.collaboration.mode==='independent'?independentContextForConversation(state.activeConversationId):null;
+      const collabRun=!!runCollaboration; // 협업 또는 #대화 — 오케스트레이션 경로
+      const sameConversationContext=!collabRun?independentContextForConversation(state.activeConversationId):null;
       // Capture before adding this user bubble: both immediate and queued work
       // get the same bounded, per-agent continuation packet from send time.
-      const recentContexts={};const fallbackContexts={};
+      const recentContexts={};const fallbackContexts={};const crossContexts={};
       for(const agent of routed.targets){
+        // 방 따라잡기: 상대 답변은 이 슬롯의 어떤 세션에도 없다. 단일 대상일 때만
+        // 주입(둘 다 답하는 실행은 독립성 유지 — 서로의 답을 보지 않는다).
+        crossContexts[agent]=routed.targets.length===1?window.TriadRecentContext.crossAgentPacket(state.messages,agent,names):'';
         // A resumed session already holds the previous turn; only inject the
         // continuation packet when a fresh/rotated session would start blind.
         // When we DO plan to resume, keep the packet aside — if the CLI can't
@@ -1974,7 +2014,7 @@
       // (and contribution grace period) finishes.
       const reusableContext=sameConversationContext&&routed.targets.every(agent=>!state.running[agent])?sameConversationContext:null;
       const requestedDocumentId=contextDocumentId(sameConversationContext)||documentIdOf(activeSharedDocument());
-      const queued=state.collaboration.mode==='independent'
+      const queued=!collabRun
         ? independentRequestQueued(routed.targets,requestedDocumentId,reusableContext)
         : !!state.orchestration||agents.some(agent=>state.running[agent])||state.queue.length>0;
       state.forceMessageBottom=!queued;
@@ -1985,19 +2025,19 @@
       }
       const userMessageId=addMessage('user',original,false,{deferred:queued,attachments:images});
       try {
-        if(state.collaboration.mode==='independent'){
+        if(!collabRun){
           // Do not create the next document run while a prior run is writing to
           // the same document.  A queued batch creates one fresh run only when
           // every provider is idle, then launches its selected targets together.
-          if(queued)enqueueIndependentBatch(routed.targets,routed.prompts,original,userMessageId,{objective:references.clean,sharedContext:null,documentId:requestedDocumentId,recentContexts,fallbackContexts,referencePacket,images});
+          if(queued)enqueueIndependentBatch(routed.targets,routed.prompts,original,userMessageId,{objective:references.clean,sharedContext:null,documentId:requestedDocumentId,recentContexts,fallbackContexts,crossContexts,referencePacket,images,review:routed.review});
           else {
             const independentContext=reusableContext||createIndependentSharedContext(references.clean,routed.targets[0]||state.collaboration.lead);
             if(!independentContext?.board||!independentContext.documentId)throw new Error('공유 문서를 준비하지 못했습니다. 문서 목록을 새로고침한 뒤 다시 시도해주세요.');
             markMessageWorkStarted(userMessageId);
-            routed.targets.forEach(agent=>dispatchAgent(agent,buildIndependentPrompt(agent,routed.prompts[agent],independentContext,recentContexts[agent],referencePacket),{sharedContext:independentContext,images,fallbackContext:fallbackContexts[agent]}));
+            routed.targets.forEach(agent=>dispatchAgent(agent,buildIndependentPrompt(agent,routed.prompts[agent],independentContext,recentContexts[agent],referencePacket,crossContexts[agent]),{sharedContext:independentContext,images,fallbackContext:fallbackContexts[agent],reviewRequested:routed.review,reviewSource:references.clean}));
           }
-        } else if(queued)enqueueCollaboration(routed.prompt,original,userMessageId,runCollaboration,referencePacket,images);
-        else {markMessageWorkStarted(userMessageId);startCollaboration(routed.prompt,runCollaboration,state.activeConversationId,effectiveAgentConfigs(),referencePacket,images);}
+        } else if(queued)enqueueCollaboration(routed.prompt,original,userMessageId,runCollaboration,referencePacket,images,routed.review);
+        else {markMessageWorkStarted(userMessageId);startCollaboration(routed.prompt,runCollaboration,state.activeConversationId,effectiveAgentConfigs(),referencePacket,images,routed.review);}
       } catch(error) {
         markMessageWorkStarted(userMessageId);
         const detail=error instanceof Error&&error.message?error.message:String(error||'알 수 없는 오류');
@@ -2160,6 +2200,12 @@
       if(providerOf(agent)==='codex'&&!failed)refreshUsage(true);
       if(!failed){requestBranch(agent);requestProjectFiles(agent);}
       if(!failed&&state.diff.visible&&state.diff.agent===agent)refreshProjectDiff(agent);
+      // #검토: 답을 낸 독립 실행이면 상대 에이전트의 교차 검토를 대기열에 등록
+      // (양쪽 응답 시 서로를 교차 검토 — 상대가 작업 중이면 대기열이 순서를 보장).
+      if(!failed&&!wasEmpty&&pending?.reviewRequested&&!state.orchestration){
+        const answerText=String(state.messages.find(m=>m.id===state.responseIds[agent])?.text||'').trim();
+        if(answerText)enqueueReviewRun(agent,pending.reviewSource||'',answerText);
+      }
       if(state.orchestration){
         if(!failed)advanceCollaboration(agent);
         else cancelCollaboration(`프로세스 종료 코드 ${exitCode}`);
@@ -2173,6 +2219,20 @@
     }
     function advanceCollaboration(agent) {
       const flow=state.orchestration;const task=flow?.current;if(!flow||flow.cancelled||task?.agent!==agent)return;
+      if(flow.mode==='dialog'){
+        flow.lastAgent=agent;flow.current=null;
+        let text=currentText(agent).trim();
+        const ended=DIALOG_END.test(text);
+        if(ended){
+          updateMessage(state.responseIds[agent],m=>{m.text=String(m.text||'').replace(DIALOG_END,'').trim();});
+          text=currentText(agent).trim();
+        }
+        if(ended||!text||flow.turns>=flow.maxTurns){finishDialogue(flow,agent);return;}
+        flow.turns+=1;
+        const next=agent==='codex'?'claude':'codex';
+        setTimeout(()=>runDialogueTurn(next,text),0);
+        return;
+      }
       if(flow.mode==='agent'){
         const parsed=window.TriadCollaboration.extractHandoff(currentText(agent),agent);
         if(parsed.text!==currentText(agent))updateMessage(state.responseIds[agent],message=>{message.text=parsed.text||'상대 AI에게 협업을 요청했습니다.';});
@@ -2217,44 +2277,6 @@
         }
         finishAgentFlowWhenReady(flow,agent);return;
       }
-      flow.lastAgent=agent;flow.current=null;
-      const turnBubbleId=state.responseIds[agent]; // capture before finishAgent deletes it
-      // MCP broker events can arrive a fraction after the CLI termination
-      // event, so wait briefly for that event before checking the board.
-      setTimeout(()=>{
-        withConversation(flow.conversationId,()=>{
-          if(state.orchestration!==flow||flow.cancelled)return;
-          // Display-only (no tokens/API): show each turn's actual board
-          // contribution (proposal/verdict/decision) with a role label so the
-          // A↔B exchange is visible, instead of the agent's meta narration.
-          if(turnBubbleId){
-            const b=boardFor(flow);const field=window.TriadCollaboration.requiredBoardField(task);
-            const flatten=v=>Array.isArray(v)?v.map(x=>typeof x==='string'?x:JSON.stringify(x)).join('\n'):String(v??'');
-            const labels={proposal:'📝 제안',verdict:'🔍 검토',resolve:'🔧 이견 해결',decision:'✅ 결정'};
-            let content=field?flatten(b?.[field]).trim():'';
-            if(task.kind==='verdict'){const d=flatten(b?.disputes).trim();if(d)content+=(content?'\n\n':'')+`이견·근거:\n${d}`;}
-            if(content)updateMessage(turnBubbleId,m=>{
-              const orig=String(m.text||'').trim();
-              const labeled=`${labels[task.kind]?labels[task.kind]+'\n\n':''}${content}`;
-              const hasNarration=orig&&orig!==labeled&&orig!==content&&!/^(응답 없이 종료|출력 없이 정상 종료|생각 중…)/.test(orig);
-              // The agent's streamed narration IS the conversation → keep it in the
-              // chat; move the structured board result (제안/검토/결정) to a toggle.
-              // A board-only turn (no narration) shows the board result directly.
-              if(hasNarration){m.boardResult=labeled;}
-              else{m.text=labeled;delete m.boardResult;}
-            });
-          }
-          // A missing board write is NOT fatal: record the miss, tell the user,
-          // and keep the collaboration going without that entry (the next turn
-          // just reads a board where this stage is empty).
-          const error=window.TriadCollaboration.boardStageError(task,boardFor(flow));
-          if(error){
-            addTrace(agent,'error','공유 보드 단계 미기록',{phase:task.phase,required:window.TriadCollaboration.requiredBoardField(task)});
-            addMessage('system',L('boardWriteFail',{agent:names[agent]||agent,phase:task.phase}));
-          }
-          runNextCollaborationTurn();
-        });
-      },120);
     }
     // CLI가 headless 모드에서 자체 압축에 실패하고 문맥 한도로 죽는 드문 경우의
     // 안전망 — 무차별 회전 대신, 실제 초과 에러일 때만 새 세션 + 압축맥락으로
@@ -2322,6 +2344,8 @@
         }
         const base=defaults(event.home);
         state.settings={codex:normalizeSessionSettings({...base.codex,...(state.settings?.codex||{})}),claude:normalizeSessionSettings({...base.claude,...(state.settings?.claude||{})})};
+        // 작업 폴더 MRU 첫 시드 — 기능 도입 전부터 쓰던 폴더를 목록에 채워둔다
+        if(!state.recentWorkspaces.length){[state.settings.claude?.workspacePath,state.settings.codex?.workspacePath,state.workspace?.commonPath].forEach(p=>rememberWorkspace(p));}
         state.workspace=normalizeWorkspace(loaded.find(item=>item.id===state.activeConversationId)?.workspace,state.settings,event.home);
         normalizeSessionStats(state.sessionStats||{});
         providerPaths={codex:event.codexPath||'codex',claude:event.claudePath||'claude'};
@@ -2353,7 +2377,7 @@
       }
       else if (event.type==='error') {if(event.runId&&state.pending[event.agent]?.runId!==event.runId)return;failAgent(event.agent,event.message,{source:'native',terminal:true});}
       else if (event.type==='session') { withPendingConversation(event.agent,()=>{if(!agents.includes(event.agent))return;const p=state.pending[event.agent];if(p?.isolated){if(p.sessionStore)p.sessionStore[event.agent]=event.session;p.sessionId=event.session;}else if(!p?.isolated){state.sessions[event.agent]=event.session;const stats=ensureAgentSessionStats(event.agent);if(stats)stats.sessionId=event.session;if(p)p.sessionId=event.session; save(); renderSettings();}}); }
-      else if (event.type==='directory') { if(event.agent==='common'){state.workspace.commonPath=event.path;}else if(state.settings[event.agent])state.settings[event.agent].workspacePath=event.path;save();renderSettings();renderStatus();refreshBranches();refreshProjectFiles(); }
+      else if (event.type==='directory') { rememberWorkspace(event.path); if(event.agent==='common'){state.workspace.commonPath=event.path;}else if(state.settings[event.agent])state.settings[event.agent].workspacePath=event.path;save();renderSettings();renderStatus();refreshBranches();refreshProjectFiles(); }
       else if (event.type==='files') {
         const draft=document.getElementById('draft');
         const refs=event.paths.map(path=>`@"${path.replaceAll('"','\\"')}"`).join(' ');
@@ -2430,22 +2454,19 @@
       const c=state.collaboration;const modeButtons=[...document.querySelectorAll('[data-collab-mode]')];if(!modeButtons.length)return;
       renderDefaultTarget();
       modeButtons.forEach(button=>{const active=button.dataset.collabMode===c.mode;button.classList.toggle('active',active);button.setAttribute('aria-checked',String(active));});
-      const independent=c.mode==='independent';const review=c.mode==='review';const agentMode=c.mode==='agent';
+      const independent=c.mode==='independent';const agentMode=c.mode==='agent';
       c.helperTimeoutMinutes=helperTimeoutMinutes(c.helperTimeoutMinutes);
-      const roundSelect=document.getElementById('collab-rounds');const roundValues=agentMode?[2,4,6,8,10]:[1,2,3,4,5];
-      if(!roundValues.includes(Number(c.rounds)))c.rounds=agentMode?6:Math.min(5,Math.max(1,Number(c.rounds)||3));
+      const roundSelect=document.getElementById('collab-rounds');const roundValues=[2,4,6,8,10];
+      if(!roundValues.includes(Number(c.rounds)))c.rounds=6;
       roundSelect.innerHTML=roundValues.map(value=>`<option value="${value}" ${value===Number(c.rounds)?'selected':''}>${value}</option>`).join('');
-      document.getElementById('collab-lead').value=c.lead;document.getElementById('collab-finalizer').value=c.finalizer;
+      document.getElementById('collab-lead').value=c.lead;
       document.getElementById('collab-lead-label').hidden=independent;document.getElementById('collab-lead').hidden=independent;
-      document.getElementById('collab-rounds-wrap').hidden=independent;document.getElementById('collab-finalizer-wrap').hidden=independent||review;
+      document.getElementById('collab-rounds-wrap').hidden=independent;
       document.getElementById('collab-helper-timeout-wrap').hidden=!agentMode;document.getElementById('collab-helper-timeout').value=String(c.helperTimeoutMinutes);
-      document.getElementById('collab-finalizer-wrap').hidden=independent||review||agentMode;
-      document.getElementById('collab-lead-label').textContent=agentMode?'작업 시작':review?'초안 작성':'첫 발언';
-      document.getElementById('collab-rounds-label').textContent=agentMode?'AI 간 호출 한도':'라운드';
       const status=document.getElementById('collab-state');
       const activeFlow=state.orchestration?.conversationId===state.activeConversationId?state.orchestration:null;
-      if(activeFlow){const task=activeFlow.current;status.textContent=task?(activeFlow.mode==='agent'?L('flowAgentState',{agent:names[task.agent],label:tc(task.label),n:activeFlow.handoffs,max:activeFlow.maxHandoffs}):L('flowState',{agent:names[task.agent],label:tc(task.label),index:activeFlow.index,total:activeFlow.tasks.length})):tc('다음 작업 준비 중');status.classList.add('live');}
-      else {status.textContent=independent?'각 AI가 독립적으로 응답':agentMode?'필요할 때 서로 질문하고 답을 돌려받아 작업':review?'작성 → 검토 → 수정':'두 AI가 번갈아 토론';status.classList.remove('live');}
+      if(activeFlow){const task=activeFlow.current;status.textContent=task?(activeFlow.mode==='dialog'?L('flowDialogState',{agent:names[task.agent],n:activeFlow.turns,max:activeFlow.maxTurns}):L('flowAgentState',{agent:names[task.agent],label:tc(task.label),n:activeFlow.handoffs,max:activeFlow.maxHandoffs})):tc('다음 작업 준비 중');status.classList.add('live');}
+      else {status.textContent=tc(independent?'각 AI가 독립적으로 응답 · #검토 교차 검토 · #대화 직접 대화':'필요할 때 서로 질문하고 답을 돌려받아 작업');status.classList.remove('live');}
       document.querySelectorAll('[data-tag]').forEach(button=>button.disabled=!independent&&button.dataset.tag==='#all');
       const documentLabel=document.getElementById('collab-document');const workDocument=currentWorkSharedDocument();const selectedDocument=activeSharedDocument()||state.sharedContext?.board;
       const showingDifferentDocument=workDocument&&selectedDocument&&documentIdOf(workDocument)!==documentIdOf(selectedDocument);
@@ -2453,7 +2474,7 @@
       documentLabel.textContent=workDocument?L('docCurrent',{title:documentTitleOf(workDocument)})+(showingDifferentDocument?L('docNext',{title:documentTitleOf(selectedDocument)}):''):selectedDocument?L('docSelected',{title:documentTitleOf(selectedDocument)}):'';
       documentLabel.title=documentLabel.textContent;
       document.getElementById('block-template').disabled=!independent;
-      document.getElementById('compose-hint').textContent=independent?L('hintIndependent',{target:defaultTargetLabel()}):agentMode?L('hintAgent',{hint:collaborationDefaultTargetHint()}):L('hintDebate',{hint:collaborationDefaultTargetHint()});
+      document.getElementById('compose-hint').textContent=independent?L('hintIndependent',{target:defaultTargetLabel()}):L('hintAgent',{hint:collaborationDefaultTargetHint()});
       const controlsLocked=!!activeFlow||agents.some(agent=>state.running[agent]&&state.pending[agent]?.conversationId===state.activeConversationId)||state.queue.some(item=>item.conversationId===state.activeConversationId);
       document.querySelectorAll('.collab-controls select, .collab-controls input, .collab-mode-btn').forEach(control=>control.disabled=controlsLocked);
       requestAnimationFrame(updateScrollButton);
@@ -2525,9 +2546,11 @@
       state.workspace=normalizeWorkspace(state.workspace,state.settings);
       const workspaceCard=document.createElement('div');workspaceCard.className='settings-card workspace-common';
       const separate=!!state.workspace.separate;const commonDisabled=separate?'disabled':'';
-      workspaceCard.innerHTML=`<div class="settings-head"><h3>공통 작업 폴더</h3></div><div class="field"><label class="toggle-label"><input type="checkbox" class="workspace-separate" ${separate?'checked':''}> 에이전트별 작업 폴더 사용</label><p class="fast-note">기본은 두 AI가 같은 작업 폴더를 사용합니다. 켜면 아래 각 AI의 저장된 작업 폴더를 다시 사용합니다.</p></div><div class="field workspace-path-field ${separate?'is-disabled':''}"><label>기본 작업 폴더</label><div class="path-row"><input class="common-workspace" value="${escapeAttr(state.workspace.commonPath)}" ${commonDisabled} aria-disabled="${separate}" title="${separate?'에이전트별 작업 폴더 사용 중입니다.':'두 AI에 공통으로 적용됩니다.'}"><button class="small-btn common-choose" ${commonDisabled}>선택</button></div></div>`;
+      workspaceCard.innerHTML=`<div class="settings-head"><h3>공통 작업 폴더</h3></div><div class="field"><label class="toggle-label"><input type="checkbox" class="workspace-separate" ${separate?'checked':''}> 에이전트별 작업 폴더 사용</label><p class="fast-note">기본은 두 AI가 같은 작업 폴더를 사용합니다. 켜면 아래 각 AI의 저장된 작업 폴더를 다시 사용합니다.</p></div><div class="field workspace-path-field ${separate?'is-disabled':''}"><label>기본 작업 폴더</label><div class="path-row"><input class="common-workspace" value="${escapeAttr(state.workspace.commonPath)}" ${commonDisabled} aria-disabled="${separate}" title="${separate?'에이전트별 작업 폴더 사용 중입니다.':'두 AI에 공통으로 적용됩니다.'}">${recentWorkspaceSelect('common',commonDisabled)}<button class="small-btn common-choose" ${commonDisabled}>선택</button></div></div>`;
       workspaceCard.querySelector('.workspace-separate').onchange=event=>{state.workspace.separate=event.target.checked;save();renderSettings();refreshBranches();refreshProjectFiles();};
-      workspaceCard.querySelector('.common-workspace').onchange=event=>{state.workspace.commonPath=event.target.value;save();renderSettings();refreshBranches();refreshProjectFiles();};
+      workspaceCard.querySelector('.common-workspace').onchange=event=>{state.workspace.commonPath=event.target.value;rememberWorkspace(event.target.value);save();renderSettings();refreshBranches();refreshProjectFiles();};
+      const commonRecent=workspaceCard.querySelector('.recent-workspace');
+      if(commonRecent)commonRecent.onchange=event=>{const pick=event.target.value;if(!pick)return;state.workspace.commonPath=pick;rememberWorkspace(pick);save();renderSettings();refreshBranches();refreshProjectFiles();};
       workspaceCard.querySelector('.common-choose').onclick=()=>post({action:'chooseDirectory',agent:'common'});
       root.appendChild(workspaceCard);
       for (const agent of agents) {
@@ -2552,7 +2575,7 @@
         const unrestricted=(provider==='codex'&&c.permissionMode==='danger-full-access')||(provider==='claude'&&c.permissionMode==='bypassPermissions');
         const open=state.settingsOpen[agent];const workspaceDisabled=separate?'':'disabled';const workspaceTitle=separate?'이 AI에만 적용되는 저장된 작업 폴더입니다.':'공통 작업 폴더를 사용 중입니다. 위 설정에서 변경하세요.';
         card.innerHTML=`
-          <div class="settings-head"><h3>${names[agent]}</h3><span class="spacer"></span><select class="provider-select" data-provider-slot="${agent}" title="이 슬롯이 실행할 AI (멀티세션)"><option value="codex" ${provider==='codex'?'selected':''}>Codex</option><option value="claude" ${provider==='claude'?'selected':''}>Claude</option></select><span class="health"></span></div>
+          <div class="settings-head"><h3>${names[agent]}</h3><span class="spacer"></span><button class="small-btn agent-terminal" title="이 AI의 작업 폴더에서 터미널 열기">⌨ 터미널</button><select class="provider-select" data-provider-slot="${agent}" title="이 슬롯이 실행할 AI (멀티세션)"><option value="codex" ${provider==='codex'?'selected':''}>Codex</option><option value="claude" ${provider==='claude'?'selected':''}>Claude</option></select><span class="health"></span></div>
           <details class="settings-group" data-section="model" ${open.model?'open':''}>
             <summary>모델 · 응답 <span class="settings-group-summary">${escapeAttr(c.model)} · ${escapeAttr(c.effort)}</span></summary>
             <div class="settings-group-body">
@@ -2565,7 +2588,7 @@
             <summary>실행 환경 <span class="settings-group-summary">${unrestricted?'샌드박스 밖':escapeAttr(state.branchStatus[agent]?.label||'브랜치 확인 전')}</span></summary>
             <div class="settings-group-body">
               <div class="field"><label>작업 권한</label><select data-key="permissionMode">${permissionOptionList}</select>${unrestricted?'<p class="fast-note">⚠️ 에이전트가 사용자 계정 권한으로 명령을 실행합니다. 신뢰하는 프로젝트에서만 사용하세요.</p>':'<p class="fast-note">Gradle 테스트·개발 서버처럼 자식 프로세스가 직접 소켓을 열어야 하면 ‘샌드박스 밖 실행’을 선택하세요.</p>'}</div>
-              <div class="field workspace-path-field ${separate?'':'is-disabled'}"><label>작업 폴더</label><div class="path-row"><input data-key="workspacePath" value="${escapeAttr(c.workspacePath)}" ${workspaceDisabled} aria-disabled="${!separate}" title="${workspaceTitle}"><button class="small-btn choose" ${workspaceDisabled} title="${workspaceTitle}">선택</button></div><div class="branch-row ${state.branchStatus[agent]?.kind==='branch'?'active':state.branchStatus[agent]?.kind==='detached'?'detached':''}"><span>⑂</span><span class="branch-name">${escapeAttr(state.branchStatus[agent]?.label||'확인 전')}</span><button class="branch-refresh" title="브랜치 새로고침" ${workspaceDisabled}>↻</button></div></div>
+              <div class="field workspace-path-field ${separate?'':'is-disabled'}"><label>작업 폴더</label><div class="path-row"><input data-key="workspacePath" value="${escapeAttr(c.workspacePath)}" ${workspaceDisabled} aria-disabled="${!separate}" title="${workspaceTitle}">${recentWorkspaceSelect(agent,workspaceDisabled)}<button class="small-btn choose" ${workspaceDisabled} title="${workspaceTitle}">선택</button></div><div class="branch-row ${state.branchStatus[agent]?.kind==='branch'?'active':state.branchStatus[agent]?.kind==='detached'?'detached':''}"><span>⑂</span><span class="branch-name">${escapeAttr(state.branchStatus[agent]?.label||'확인 전')}</span><button class="branch-refresh" title="브랜치 새로고침" ${workspaceDisabled}>↻</button></div></div>
               <div class="field"><label>추가 쓰기 폴더 · 쉼표 구분</label><input data-key="writableRoots" value="${escapeAttr(c.writableRoots||'')}" placeholder="예: ~/.gradle, ~/.m2"><p class="fast-note">빌드 캐시처럼 작업 폴더 밖에서 쓰기가 필요한 경로만 추가하세요.</p></div>
               <div class="row"><div class="field"><label>외부 네트워크</label><select data-key="networkAccess"><option value="false" ${c.networkAccess?'':'selected'}>차단</option><option value="true" ${c.networkAccess?'selected':''}>허용</option></select></div><div class="field"><label>로컬 바인딩</label><select data-key="allowLocalBinding"><option value="false" ${c.allowLocalBinding?'':'selected'}>차단</option><option value="true" ${c.allowLocalBinding?'selected':''}>허용</option></select></div></div>
               <p class="fast-note">로컬 바인딩은 에이전트의 네트워크 프록시용입니다. 의존성 다운로드가 필요할 때만 외부 네트워크도 허용하세요.</p>
@@ -2591,10 +2614,13 @@
         card.querySelectorAll('[data-key]').forEach(input=>input.addEventListener('change',()=>{
           const key=input.dataset.key;c[key]=(key==='networkAccess'||key==='allowLocalBinding')?input.value==='true':input.value;
           if(agent==='codex'&&input.dataset.key==='model') { const selected=state.codexModels.find(model=>model.slug===c.model); if(selected&&!selected.efforts.includes(c.effort))c.effort=selected.defaultEffort||selected.efforts[0]; }
-          save(); renderSettings(); renderStatus();if(input.dataset.key==='authMode'||input.dataset.key==='executablePath')requestAuthStatus(agent);if(input.dataset.key==='workspacePath'){requestBranch(agent);requestProjectFiles(agent);}
+          save(); renderSettings(); renderStatus();if(input.dataset.key==='authMode'||input.dataset.key==='executablePath')requestAuthStatus(agent);if(input.dataset.key==='workspacePath'){rememberWorkspace(c.workspacePath);requestBranch(agent);requestProjectFiles(agent);}
         }));
         card.querySelector('.provider-select').onchange=event=>{if(state.running[agent])return;applyProvider(agent,event.target.value);save();renderSettings();renderStatus();requestAuthStatus(agent);requestBranch(agent);requestProjectFiles(agent);};
         card.querySelector('.choose').onclick=()=>post({action:'chooseDirectory',agent});
+        card.querySelector('.agent-terminal').onclick=()=>openTerminal(effectiveWorkspacePath(agent));
+        const recentSelect=card.querySelector('.recent-workspace');
+        if(recentSelect)recentSelect.onchange=event=>{const pick=event.target.value;if(!pick)return;c.workspacePath=pick;rememberWorkspace(pick);save();renderSettings();renderStatus();requestBranch(agent);requestProjectFiles(agent);};
         card.querySelector('.branch-refresh').onclick=()=>requestBranch(agent);
         card.querySelector('.reset-session').onclick=()=>{if(state.running[agent])return;state.sessions[agent]=null;state.sessionStats=window.TriadSessionBudget.resetAgent(state.sessionStats,agent,{incrementRotation:true});addTrace(agent,'info','다음 작업 새 세션',tc('사용자가 세션을 초기화했습니다.'));save();renderSettings();};
         card.querySelector('.save-token')?.addEventListener('click',()=>{const token=card.querySelector('.token').value;post({action:'saveToken',agent,token});card.querySelector('.token').value='';});
@@ -2620,9 +2646,11 @@
       const routed=route(value,{defaultTarget:state.defaultTarget});if(!routed){root.hidden=true;return;}root.hidden=false;root.classList.toggle('invalid',!!routed.errors?.length);
       if(routed.errors?.length)toggle.textContent=`전송 불가 · ${routed.errors.join(' · ')}`;
       else if(state.collaboration.mode!=='independent'){
-        const lead=collaborationLeadFor(routed,state.collaboration.lead,state.defaultTarget);
+        let lead=collaborationLeadFor(routed,state.collaboration.lead,state.defaultTarget);
+        let autoNote='';
+        if(lead==='auto'){const picked=resolveAutoLead(routed,routed.commonText||value);lead=picked.lead;autoNote=picked.reason?` (자동: ${picked.reason})`:' (자동)';}
         if(!lead)toggle.textContent='전송 불가 · 협업에서는 #codex 또는 #claude 중 하나만 시작 AI로 지정';
-        else toggle.textContent=`협업 의제 · ${names[lead]} 시작 · ${routed.prompt.length.toLocaleString(dtLocale())}자 · 입력 약 ${window.TriadSessionBudget.estimateTokens(routed.prompt).toLocaleString(dtLocale())} 토큰 · 클릭하여 확인`;
+        else toggle.textContent=`협업 의제 · ${names[lead]} 시작${autoNote} · ${routed.prompt.length.toLocaleString(dtLocale())}자 · 입력 약 ${window.TriadSessionBudget.estimateTokens(routed.prompt).toLocaleString(dtLocale())} 토큰 · 클릭하여 확인`;
       }
       else {
         const counts=routed.targets.map(agent=>promptEstimateLabel(agent,routed.prompts[agent]));
@@ -2645,7 +2673,9 @@
     const autocompleteOptions=[
       {tag:'#codex',name:'Codex',description:'Codex만 호출'},
       {tag:'#claude',name:'Claude',description:'Claude만 호출'},
-      {tag:'#all',name:'전체',description:'두 AI 모두 호출'}
+      {tag:'#all',name:'전체',description:'두 AI 모두 호출'},
+      {tag:'#검토',name:'검토',description:'답변을 상대 AI가 교차 검토'},
+      {tag:'#대화',name:'대화',description:'두 AI가 직접 대화 (최대 8턴, 채팅에 표시)'}
     ];
     const autocomplete={open:false,type:'agent',index:0,start:0,items:[]};
     function closeAutocomplete(){autocomplete.open=false;const root=document.getElementById('agent-autocomplete');root.hidden=true;root.classList.remove('file-mode');}
@@ -2722,8 +2752,7 @@
     document.addEventListener('visibilitychange',()=>{if(!document.hidden&&Date.now()-state.lastUsageRefresh>5*60*1000)refreshUsage(true);});
     document.querySelectorAll('.collab-controls select').forEach(select=>select.addEventListener('change',()=>{
       state.collaboration.lead=document.getElementById('collab-lead').value;
-      state.collaboration.rounds=Number(document.getElementById('collab-rounds').value);
-      state.collaboration.finalizer=document.getElementById('collab-finalizer').value;save();renderCollaboration();
+      state.collaboration.rounds=Number(document.getElementById('collab-rounds').value);save();renderCollaboration();
     }));
     const saveHelperTimeout=event=>{
       state.collaboration.helperTimeoutMinutes=helperTimeoutMinutes(event.target.value);

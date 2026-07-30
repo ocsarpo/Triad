@@ -41,7 +41,7 @@ test('렌더러는 대기 이미지 상태와 첨부 UI를 갖는다', () => {
 test('이미지는 실행 페이로드로 흐르며 사용자 메시지 첨부로 저장된다', () => {
   // dispatchAgent 옵션 -> pending -> run 페이로드
   assert.match(renderer, /const images=Array\.isArray\(options\.images\)\?options\.images\.filter\(Boolean\):\[\]/);
-  assert.match(renderer, /collaboration,images,bubbleMeta,fallbackContext:options\.fallbackContext\|\|''\};/); // state.pending 항목
+  assert.match(renderer, /collaboration,images,bubbleMeta,fallbackContext:options\.fallbackContext\|\|'',reviewRequested:!!options\.reviewRequested,reviewSource:options\.reviewSource\|\|''\};/); // state.pending 항목
   assert.match(renderer, /sharedContext,session,runId,images\}\)/); // run 페이로드
   // send()에서 대기 이미지를 캡처하고 전송 후 비운다.
   assert.match(renderer, /const images=state\.pendingImages\.slice\(\)/);
@@ -53,13 +53,13 @@ test('이미지는 실행 페이로드로 흐르며 사용자 메시지 첨부�
 
 test('협업 흐름은 이미지를 flow에 실어 매 턴 두 AI에게 전달한다', () => {
   // startCollaboration이 images를 받아 orchestration에 저장
-  assert.match(renderer, /function startCollaboration\(objective, runCollaboration=state\.collaboration, conversationId=state\.activeConversationId, settings=effectiveAgentConfigs\(\), referencePacket=\[\], images=\[\]\)/);
+  assert.match(renderer, /function startCollaboration\(objective, runCollaboration=state\.collaboration, conversationId=state\.activeConversationId, settings=effectiveAgentConfigs\(\), referencePacket=\[\], images=\[\], review=false\)/);
   assert.match(renderer, /const flowImages=clone\(images\|\|\[\]\)/);
-  assert.match(renderer, /images:flowImages\}/);
-  // 두 턴 실행기 모두 flow.images를 dispatch에 넘긴다.
+  assert.match(renderer, /images:flowImages,reviewRequested:!!review,crossContext\}/);
+  // 협업(agent) + 대화(dialog) 턴 실행기가 flow.images를 dispatch에 넘긴다.
   const turnMatches = renderer.match(/collaboration:flow\.collaboration,images:flow\.images\|\|\[\]\}/g) || [];
   assert.equal(turnMatches.length, 2);
   // 대기열에도 이미지를 보존한다.
   assert.match(renderer, /images:clone\(options\.images\|\|\[\]\)/); // independentBatch
-  assert.match(renderer, /images:clone\(images\|\|\[\]\),createdAt/); // collaboration
+  assert.match(renderer, /images:clone\(images\|\|\[\]\),review:!!review,createdAt/); // collaboration
 });

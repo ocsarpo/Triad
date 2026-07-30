@@ -26,18 +26,27 @@ test('시간순 배치: 말풍선은 즉시 생성(작업 표시)하고 핸드�
   assert.match(renderer, /else if\(seg\)updateMessage\(segId,m=>\{m\.streaming=false;if\(!m\.completedAt\)m\.completedAt=Date\.now\(\);\}\)/);
 });
 
-test('토론/교차검토 턴은 원문(대화)을 채팅에 띄우고 제안·검토·결정 정리는 과정 보기 토글로 둔다', () => {
-  // 결과 라벨 구성 — 표시만, 추가 토큰/호출 없음
-  assert.match(renderer, /const labels=\{proposal:'📝 제안',verdict:'🔍 검토',resolve:'🔧 이견 해결',decision:'✅ 결정'\}/);
-  // 검토 턴은 이견·근거까지 붙여서 실속을 보여준다
-  assert.match(renderer, /if\(task\.kind==='verdict'\)\{const d=flatten\(b\?\.disputes\)\.trim\(\);if\(d\)content\+=/);
-  // 원문이 있으면 그게 채팅(m.text) 유지, 결과는 m.boardResult 토글로. 원문 없으면 결과를 직접 표시
-  assert.match(renderer, /const hasNarration=orig&&orig!==labeled&&orig!==content&&!\/\^\(응답 없이 종료.*\)\/\.test\(orig\)/);
-  assert.match(renderer, /if\(hasNarration\)\{m\.boardResult=labeled;\}\s*\n\s*else\{m\.text=labeled;delete m\.boardResult;\}/);
-  // "과정 보기" 토글 + expandedTexts로 정리 과정 펼침
-  assert.match(renderer, /if\(m\.boardResult\)\{const expandedNow=!!state\.expandedTexts\[m\.id\]/);
-  assert.match(renderer, /toggle\.textContent=expandedNow\?L\('collapseProcess'\):L\('viewProcess'\)/);
-  assert.match(renderer, /if\(m\.boardResult&&state\.expandedTexts\[m\.id\]\)displayBody=/);
+test('모드 축소: 저장된 토론/교차 검토 설정은 독립 실행으로 흡수된다', () => {
+  assert.match(renderer, /if\(!\['agent','dialog'\]\.includes\(collaboration\.mode\)\)collaboration\.mode='independent';/);
+  assert.match(renderer, /delete collaboration\.finalizer;/);
+  // 컴포저에는 두 모드 버튼만 남는다
+  assert.doesNotMatch(renderer, /data-collab-mode="debate"/);
+  assert.doesNotMatch(renderer, /data-collab-mode="review"/);
+  assert.doesNotMatch(renderer, /collab-finalizer/);
+});
+
+test('#검토 태그: 답변이 끝나면 상대 에이전트의 교차 검토 실행을 대기열로 돌린다', () => {
+  // 라우터 플래그 → pending → finishAgent 훅 → enqueueReviewRun
+  assert.match(renderer, /function buildReviewPrompt\(author, userText, answerText\)/);
+  assert.match(renderer, /function enqueueReviewRun\(author, userText, answerText\)/);
+  assert.match(renderer, /pending\?\.reviewRequested&&!state\.orchestration/);
+  assert.match(renderer, /enqueueReviewRun\(agent,pending\.reviewSource\|\|'',answerText\)/);
+  // 협업(agent) 완료 후에도 검토 가능
+  assert.match(renderer, /if\(flow\?\.reviewRequested\)\{/);
+  // 검토 프롬프트는 보드 의식 없이 판정+근거만 요구
+  assert.match(renderer, /판정\(동의 \/ 보완 필요\)으로 시작/);
+  // 진행 중이면 대기열이 순서를 보장 (검토 실행은 kind 'agent' 큐 항목)
+  assert.match(renderer, /교차 검토 대기열 등록/);
 });
 
 test('완료 조기표기 방지: 미해결 회의실 질답이 있으면 "완료"를 보류한다', () => {
@@ -50,4 +59,23 @@ test('완료 조기표기 방지: 미해결 회의실 질답이 있으면 "완�
   assert.match(renderer, /if\(flow\?\.pendingFinish&&!Object\.keys\(state\.brokerMessages\)\.length\)/);
   // advanceCollaboration의 최종 완료는 지연 버전을 쓴다
   assert.match(renderer, /finishAgentFlowWhenReady\(flow,agent\);return;/);
+});
+
+test('#대화: 두 AI가 채팅에서 직접 말을 주고받고 [[대화종료]] 또는 최대 턴에서 끝난다', () => {
+  // send: dialog 태그가 실행별 dialog 모드를 만든다
+  assert.match(renderer, /if\(routed\.dialog\|\|state\.collaboration\.mode!=='independent'\)\{/);
+  assert.match(renderer, /\.\.\.\(routed\.dialog\?\{mode:'dialog'\}:\{\}\)/);
+  // dialog flow: 보드 없음(sharedContext null) + MCP 없음(shouldEnableMcp는 agent만)
+  assert.match(renderer, /state\.orchestration=\{mode:'dialog'/);
+  assert.match(renderer, /sharedContext:null,collaboration,conversationId/);
+  // 턴 루프: 첫 턴만 주제·규칙, 이후엔 상대의 말만 (재개 세션)
+  assert.match(renderer, /function runDialogueTurn\(agent, received\)/);
+  assert.match(renderer, /당신이 먼저 말문을 여세요/);
+  assert.match(renderer, /:`\$\{names\[other\]\}: \$\{received\}`;/);
+  // 종료: [[대화종료]] 마커 제거 후 종료, 빈 답/최대 턴도 종료
+  assert.match(renderer, /const DIALOG_END=\/\\\[\\\[\\s\*대화\\s\*종료\\s\*\\\]\\\]\/u;/);
+  assert.match(renderer, /if\(ended\|\|!text\|\|flow\.turns>=flow\.maxTurns\)\{finishDialogue\(flow,agent\);return;\}/);
+  assert.match(renderer, /const DIALOG_MAX_TURNS=8;/);
+  // 시작 전 양쪽 catch-up 캡처 (첫 턴 연결용)
+  assert.match(renderer, /dialogCatchUp:\{codex:window\.TriadRecentContext\.crossAgentPacket\(state\.messages,'codex',names\),claude:window\.TriadRecentContext\.crossAgentPacket\(state\.messages,'claude',names\)\}/);
 });

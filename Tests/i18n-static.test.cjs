@@ -61,10 +61,8 @@ test('AI 응답은 UI 언어로 — dispatchAgent가 프롬프트 끝에 지시�
 
 test('보간 시스템 메시지는 L()로 감싼다', () => {
   assert.match(renderer, /textContent=L\('refMax3'\)/);
-  assert.match(renderer, /addMessage\('system',flow\.mode==='debate'\?L\('debateDone'\):L\('reviewDone'\)\)/);
   assert.match(renderer, /L\('agentStart',\{lead:names\[collaboration\.lead\]\}\)/);
   assert.match(renderer, /L\('sendPrepFailed',\{detail\}\)/);
-  assert.match(renderer, /L\('boardWriteFail',\{agent:names\[agent\]\|\|agent,phase:task\.phase\}\)/);
 });
 
 test('Phase 2: 설정·협업·상태 크롬이 사전에 있고 텍스트노드 스윕으로 번역된다', () => {
@@ -73,10 +71,10 @@ test('Phase 2: 설정·협업·상태 크롬이 사전에 있고 텍스트노드
   assert.equal(i18n.chrome('en', '작업 권한'), 'Permissions');
   assert.equal(i18n.chrome('en', '언어 모델'), 'Language model');
   assert.equal(i18n.chrome('en', '계속 유지 (기본)'), 'Keep session (default)');
-  // 협업 컨트롤 라벨/상태
+  // 협업 컨트롤 라벨/상태 (모드 축소: 독립 실행 + 협업, #검토 태그)
   assert.equal(i18n.chrome('en', '작업 시작'), 'Start work');
-  assert.equal(i18n.chrome('en', '두 AI가 번갈아 토론'), 'The two AIs debate in turns');
-  assert.equal(i18n.chrome('en', '제안 작성'), 'Draft proposal');
+  assert.equal(i18n.chrome('en', '각 AI가 독립적으로 응답 · #검토 교차 검토 · #대화 직접 대화'), 'Each AI answers independently · #검토 cross-review · #대화 direct AI talk');
+  assert.equal(i18n.chrome('en', '교차 검토 대기열 등록'), 'Cross-review queued');
   // 계정 상태
   assert.equal(i18n.chrome('en', '연결 필요'), 'Not connected');
   // 보간 UI 문자열
@@ -134,12 +132,10 @@ test('메시지 영역 chrome·타임스탬프·계정 상태·시스템 메시�
   // 실행 과정(run-log) 트레이스: 정적 라벨은 렌더 시점 tc, 합성 라벨은 L
   assert.equal(i18n.chrome('en', '명령 전달'), 'Command dispatched');
   assert.equal(i18n.chrome('en', '빈 응답 진단'), 'Empty-response diagnostics');
-  assert.equal(i18n.chrome('en', '상호 토론 완료'), 'Debate complete');
+  assert.equal(i18n.chrome('en', '에이전트 협업 완료'), 'Agent collaboration complete');
   assert.equal(i18n.translate('en', 'traceProcExit', { code: 1 }), 'Process exited · code 1');
-  assert.equal(i18n.translate('en', 'phaseProposal'), 'Draft proposal');
   assert.match(renderer, /title\.textContent=tc\(item\.title\)/);
   assert.match(renderer, /L\('traceToolCall',\{tool:tn\|\|'tool'\}\)/);
-  assert.match(renderer, /const labels=\{proposal:L\('phaseProposal'\)/);
   // 날짜/시간은 UI 로케일을 따른다 (오전/오후 → AM/PM)
   assert.match(renderer, /const dtLocale=\(\)=>effectiveLocale\(\)==='en'\?'en-US':'ko-KR'/);
   assert.doesNotMatch(renderer, /toLocaleString\('ko-KR'/);

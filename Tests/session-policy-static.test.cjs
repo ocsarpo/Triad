@@ -15,7 +15,7 @@ test('렌더러는 세션 정책(회전 없음)·대화별 stats migration을 �
   assert.match(renderer, /config\.sessionPolicy==='alwaysNew'/);
   assert.match(renderer, /'정책: 항상 새 세션'/);
   assert.match(renderer, /\.reset-session/);
-  assert.match(renderer, /collaboration: \{mode:'independent',lead:'codex',rounds:2/);
+  assert.match(renderer, /collaboration: \{mode:'independent',lead:'auto',rounds:2/);
   // 통계는 표시용으로 유지
   assert.match(renderer, /const contextInput=Math\.round\(\(stats\.lastInputTokens\|\|0\)\/1000\)/);
   assert.match(renderer, /L\('sessionSummary',\{policy,turns:stats\.turns\|\|0,total:totalInput,context:contextInput,fresh\}\)/);

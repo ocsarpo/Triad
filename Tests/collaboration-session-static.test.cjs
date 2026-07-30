@@ -9,7 +9,7 @@ const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html')
 
 test('협업 orchestration은 flow별 세션 저장소와 턴 카운터를 갖는다', () => {
   const matches = renderer.match(/sessions:\{codex:null,claude:null\},sessionTurns:\{codex:0,claude:0\}/g) || [];
-  assert.ok(matches.length >= 2, 'agent 모드와 debate/review 모드 orchestration 둘 다 flow 세션을 초기화해야 함');
+  assert.ok(matches.length >= 1, '협업(agent) orchestration이 flow 세션을 초기화해야 함');
 });
 
 test('dispatchAgent은 isolated일 때 sessionStore에서 재개하고 pending에 실어 보낸다', () => {
@@ -23,9 +23,9 @@ test('flow 세션은 협업 내내 캡 없이 유지된다 (자동 회전 제거
   assert.doesNotMatch(renderer, /COLLAB_SESSION_TURN_CAP/);
   assert.match(renderer, /function collabSessionStore\(flow, agent\)/);
   assert.match(renderer, /flow\.sessionTurns\[agent\]=\(flow\.sessionTurns\[agent\]\|\|0\)\+1;/);
-  // 두 협업 dispatch 경로 모두 flow 세션 store를 전달
+  // 협업 dispatch 경로가 flow 세션 store를 전달 (토론 하니스는 제거됨)
   assert.match(renderer, /const store=collabSessionStore\(flow,task\.agent\);dispatchAgent\(task\.agent,buildAgentPrompt/);
-  assert.match(renderer, /const store=collabSessionStore\(flow,task\.agent\);dispatchAgent\(task\.agent,buildCollaborationPrompt/);
+  assert.doesNotMatch(renderer, /buildCollaborationPrompt/);
 });
 
 test('세션 캡처는 isolated면 flow 저장소에만 쓰고 chat 세션엔 안 쓴다 (격리·rider b)', () => {
@@ -44,7 +44,7 @@ test('세션 캡처는 isolated면 flow 저장소에만 쓰고 chat 세션엔 �
 
 test('opt2: 재개 턴이면 reference packet만 생략하고 의제는 유지한다', () => {
   const gates = renderer.match(/const resuming=!!flow\.sessions\?\.\[task\.agent\];/g) || [];
-  assert.ok(gates.length >= 2, 'buildCollaborationPrompt와 buildAgentPrompt 둘 다 resuming을 판정해야 함');
+  assert.ok(gates.length >= 1, 'buildAgentPrompt가 resuming을 판정해야 함');
   assert.match(renderer, /const references=\(!resuming&&flow\.referencePacket\?\.length\)\?/);
   // 의제(사용자 의제 / 사용자의 원래 작업)는 resuming과 무관하게 항상 프롬프트에 포함 (게이팅 대상 아님)
   assert.doesNotMatch(renderer, /resuming[^;]*사용자 의제/);

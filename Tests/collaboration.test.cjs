@@ -8,41 +8,26 @@ vm.runInNewContext(
   fs.readFileSync(path.join(__dirname, '../Resources/collaboration.js'), 'utf8'),
   context
 );
-const { tasksFor, rolesFor, harnessTasks, shouldRunResolution, shouldEnableMcp, boardStageError, promptEnvelope, extractHandoff, documentTitleFromObjective, upsertDocument, selectedDocument, continuationInput } = context.TriadCollaboration;
+const { rolesFor, shouldEnableMcp, extractHandoff, documentTitleFromObjective, upsertDocument, selectedDocument, continuationInput } = context.TriadCollaboration;
 const plain = value => JSON.parse(JSON.stringify(value));
 
-test('상호 토론은 두 AI를 라운드마다 교대시킨다', () => {
-  assert.deepEqual(plain(tasksFor({ mode: 'debate', lead: 'codex', rounds: 2, finalizer: 'none' })), [
-    { agent: 'codex', kind: 'debate', round: 1 },
-    { agent: 'claude', kind: 'debate', round: 1 },
-    { agent: 'codex', kind: 'debate', round: 2 },
-    { agent: 'claude', kind: 'debate', round: 2 }
-  ]);
-});
-
-test('상호 토론의 최종 종합자를 마지막에 배치한다', () => {
-  const tasks = tasksFor({ mode: 'debate', lead: 'claude', rounds: 1, finalizer: 'codex' });
-  assert.deepEqual(plain(tasks.at(-1)), { agent: 'codex', kind: 'synthesize', round: 2 });
-});
-
-test('교차 검토는 초안, 검토, 수정 순서로 진행한다', () => {
-  assert.deepEqual(plain(tasksFor({ mode: 'review', lead: 'claude', rounds: 1 })), [
-    { agent: 'claude', kind: 'draft', round: 0 },
-    { agent: 'codex', kind: 'critique', round: 1 },
-    { agent: 'claude', kind: 'revise', round: 1 }
-  ]);
-});
-
-test('독립 실행에는 릴레이 작업이 없다', () => {
-  assert.deepEqual(plain(tasksFor({ mode: 'independent', lead: 'codex', rounds: 3 })), []);
+test('모드 축소: 토론/교차 검토 하니스는 제거되고 협업(agent)만 orchestration을 갖는다', () => {
+  // 적대적 검증은 이제 메시지별 #검토 태그 (라우터 + 검토 실행)
+  assert.equal(context.TriadCollaboration.tasksFor, undefined);
+  assert.equal(context.TriadCollaboration.harnessTasks, undefined);
+  assert.equal(context.TriadCollaboration.shouldRunResolution, undefined);
+  assert.equal(context.TriadCollaboration.boardStageError, undefined);
+  assert.equal(context.TriadCollaboration.promptEnvelope, undefined);
+  assert.deepEqual(plain(rolesFor('codex')), { owner: 'codex', reviewer: 'claude' });
+  assert.deepEqual(plain(rolesFor('claude')), { owner: 'claude', reviewer: 'codex' });
 });
 
 test('독립 실행 또는 orchestration 부재에서는 MCP 브로커를 켜지 않는다', () => {
   assert.equal(shouldEnableMcp(null), false);
   assert.equal(shouldEnableMcp(undefined), false);
   assert.equal(shouldEnableMcp({ mode: 'independent' }), false);
-  assert.equal(shouldEnableMcp({ mode: 'review' }), true);
   assert.equal(shouldEnableMcp({ mode: 'agent' }), true);
+  assert.equal(shouldEnableMcp({ mode: 'dialog' }), false); // #대화는 브로커 없이 순수 대화
   assert.equal(shouldEnableMcp(null, { board: { documentId: 'doc-1' } }), true);
 });
 
@@ -75,12 +60,10 @@ test('렌더러의 실행과 재시도 요청은 명시적 MCP predicate와 공�
   assert.match(renderer, /for\s*\(const sharedDocument of state\.sharedDocuments\)/);
 });
 
-test('공유 보드 프롬프트는 manifest-first이며 독립 실행에 과거 기여를 반복 주입하지 않는다', () => {
+test('공유 보드 프롬프트는 인덱스-first이며 독립 실행에 과거 기여를 반복 주입하지 않는다', () => {
   const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html'), 'utf8');
-  assert.match(renderer, /sections,maxCharacters:4000/);
   assert.match(renderer, /window\.TriadSharedContext\.manifest\(board\)/);
   assert.match(renderer, /shared_context_read\(history\/contributions\)를 사용하세요/);
-  assert.doesNotMatch(renderer, /sections:\['objective','constraints','decision'\],maxCharacters:12000/);
   // 빈 보드 인덱스는 생략(빈 manifest ~170토큰 낭비 방지), 내용 있는 섹션만 나열
   assert.match(renderer, /function promptBoardIndex\(board\)/);
   assert.match(renderer, /\(s\.characters\|\|0\)>4\|\|\(s\.items\|\|0\)>0/);
@@ -118,34 +101,6 @@ test('새 실행 시 의제 제목과 run ID만 넘겨 이전 단계 값을 재�
   assert.deepEqual(plain(continuationInput({ conversationId: 'chat-1', runId: 'run-2', objective: '새 의제', owner: 'claude' })), {
     conversationId: 'chat-1', runId: 'run-2', objective: '새 의제', owner: 'claude'
   });
-});
-
-test('공유 보드 하네스는 시작 AI와 무관하게 owner → reviewer → owner 순서다', () => {
-  assert.deepEqual(plain(rolesFor('codex')), { owner: 'codex', reviewer: 'claude' });
-  assert.deepEqual(plain(rolesFor('claude')), { owner: 'claude', reviewer: 'codex' });
-  assert.deepEqual(plain(harnessTasks('claude').map(task => [task.agent, task.kind])), [
-    ['claude', 'proposal'], ['codex', 'verdict'], ['claude', 'resolve'], ['claude', 'decision']
-  ]);
-});
-
-test('agree verdict는 이견 해결 라운드를 생략한다', () => {
-  assert.equal(shouldRunResolution('agree'), false);
-  assert.equal(shouldRunResolution('conditional'), true);
-  assert.equal(shouldRunResolution('disagree'), true);
-});
-
-test('하네스는 필수 보드 기록을 강제한다', () => {
-  assert.match(boardStageError({ kind: 'proposal' }, { proposal: '' }), /proposal/);
-  assert.match(boardStageError({ kind: 'verdict' }, { verdict: null }), /verdict/);
-  assert.match(boardStageError({ kind: 'decision' }, { decision: '' }), /decision/);
-  assert.equal(boardStageError({ kind: 'verdict' }, { verdict: 'agree' }), null);
-});
-
-test('협업 프롬프트 봉투에는 전체 transcript가 포함되지 않는다', () => {
-  const envelope = promptEnvelope({ lead: 'claude', objective: '요청', task: { agent: 'claude', phase: 'proposal' }, board: { revision: 0 }, sections: ['objective'] });
-  assert.equal(envelope.role, 'owner');
-  assert.equal(envelope.includesTranscript, false);
-  assert.equal(Object.hasOwn(envelope, 'transcript'), false);
 });
 
 test('Codex의 Claude 인계 요청을 구조화해 추출한다', () => {

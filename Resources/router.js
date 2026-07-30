@@ -60,7 +60,18 @@
     return agents.includes(value) ? value : 'all';
   }
 
+  // #검토: not a routing target — a per-message flag asking the OTHER agent to
+  // cross-review the finished answer(s).  Stripped before routing.
+  const REVIEW_TAG = /(^|[\s,])[#@](?:검토|리뷰|review)(?=$|[\s,.:;!?])/giu;
+  // #대화/#토론: run a direct visible conversation between the two agents on
+  // this message's topic (no board, no MCP — plain turn-by-turn bubbles).
+  const DIALOG_TAG = /(^|[\s,])[#@](?:대화|토론|dialog|debate)(?=$|[\s,.:;!?])/giu;
+
   function route(input, options = {}) {
+    let review = false;
+    let dialog = false;
+    input = String(input || '').replace(REVIEW_TAG, (full, prefix) => { review = true; return prefix; });
+    input = input.replace(DIALOG_TAG, (full, prefix) => { dialog = true; return prefix; });
     const blockMatches = blockTagMatches(input);
     const matches = blockMatches.length ? blockMatches : tagMatches(input);
     const mode = blockMatches.length ? 'block' : matches.length ? 'inline' : 'broadcast';
@@ -111,7 +122,47 @@
     const prompt = targets.length === 1 || prompts.codex === prompts.claude
       ? prompts[targets[0]]
       : `[Codex 지시]\n${prompts.codex || '(없음)'}\n\n[Claude 지시]\n${prompts.claude || '(없음)'}`;
-    return { targets, prompts, prompt, files: [...new Set(agents.flatMap(agent => filesByAgent[agent]))], mode, commonText, errors };
+    return { targets, prompts, prompt, files: [...new Set(agents.flatMap(agent => filesByAgent[agent]))], mode, commonText, errors, review, dialog };
+  }
+
+  // Auto-lead: pick the collaboration lead from workspace relevance — which
+  // slot's folder the message is actually about.  Deterministic, zero tokens.
+  // Signals (only when the two slots watch DIFFERENT folders):
+  //  ①(+3/file) referenced @file path lives under a slot's workspace
+  //  ②(+2/name) a filename mentioned in the text exists in exactly one slot's
+  //             project file list
+  //  ③(+2)      the workspace folder's basename is mentioned
+  // Tie or no signal → {lead:null} and the caller falls back.
+  function autoLead(input = {}) {
+    const text = String(input.text || '');
+    const files = Array.isArray(input.files) ? input.files : [];
+    const norm = p => String(p || '').replace(/\/+$/, '');
+    const ws = { codex: norm(input.workspaces?.codex), claude: norm(input.workspaces?.claude) };
+    if (!ws.codex || !ws.claude || ws.codex === ws.claude) return { lead: null, reason: '' };
+    const lists = { codex: input.projectFiles?.codex || [], claude: input.projectFiles?.claude || [] };
+    const score = { codex: 0, claude: 0 };
+    const reasons = { codex: [], claude: [] };
+    for (const file of files) {
+      const f = String(file || '');
+      for (const agent of agents) {
+        if (f === ws[agent] || f.startsWith(ws[agent] + '/')) { score[agent] += 3; reasons[agent].push(`참조 파일이 ${ws[agent].split('/').pop()} 폴더 소속`); }
+      }
+    }
+    const names = { codex: new Set(lists.codex.map(p => String(p).split('/').pop().toLowerCase())), claude: new Set(lists.claude.map(p => String(p).split('/').pop().toLowerCase())) };
+    const mentioned = [...new Set([...text.matchAll(/[\w.\-/]+\.[A-Za-z][A-Za-z0-9]{0,7}\b/gu)].map(m => m[0].split('/').pop().toLowerCase()))];
+    for (const name of mentioned) {
+      const inCodex = names.codex.has(name); const inClaude = names.claude.has(name);
+      if (inCodex !== inClaude) { const agent = inCodex ? 'codex' : 'claude'; score[agent] += 2; reasons[agent].push(`${name} 파일 보유`); }
+    }
+    const lower = text.toLowerCase();
+    for (const agent of agents) {
+      const base = ws[agent].split('/').pop();
+      const otherBase = ws[agent === 'codex' ? 'claude' : 'codex'].split('/').pop();
+      if (base && base.length >= 3 && base !== otherBase && lower.includes(base.toLowerCase())) { score[agent] += 2; reasons[agent].push(`'${base}' 폴더 언급`); }
+    }
+    if (score.codex === score.claude) return { lead: null, reason: '' };
+    const lead = score.codex > score.claude ? 'codex' : 'claude';
+    return { lead, reason: [...new Set(reasons[lead])].join(' · ') };
   }
 
   function collaborationLeadFor(result, currentLead, defaultTarget = 'all') {
@@ -125,5 +176,5 @@
     return result.targets.length === 1 ? result.targets[0] : null;
   }
 
-  return { route, collaborationLeadFor };
+  return { route, collaborationLeadFor, autoLead };
 });

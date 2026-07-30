@@ -61,7 +61,7 @@ test('기본 대상 고정의 렌더러 연결을 보장한다', () => {
   assert.match(renderer, /data-default-target="codex"/);
   assert.match(renderer, /aria-pressed/);
   assert.match(renderer, /route\(references\.clean,\{defaultTarget:state\.defaultTarget\}\)/);
-  assert.match(renderer, /startCollaboration\(routed\.prompt,runCollaboration,state\.activeConversationId,effectiveAgentConfigs\(\),referencePacket,images\)/);
+  assert.match(renderer, /startCollaboration\(routed\.prompt,runCollaboration,state\.activeConversationId,effectiveAgentConfigs\(\),referencePacket,images,routed\.review\)/);
   assert.match(renderer, /const collaboration=clone\(options\.collaboration\|\|activeCollaboration\(\)\)/);
   assert.match(renderer, /\.compose-tools \{ display: flex; flex-wrap: wrap;/);
   assert.match(renderer, /@media \(max-width: 1180px\) \{ \.compose-tools > \.hint \{ display: none; \} \}/);
@@ -161,4 +161,66 @@ test('#a·#b 슬롯 별칭이 코덱스/클로드 슬롯으로 라우팅된다 (
   // @a 는 파일 참조가 아니라 태그로 처리
   const both = route('#a 코덱스일 #b 클로드일');
   assert.deepEqual(plain(both.targets).sort(), ['claude', 'codex']);
+});
+
+test('#검토 태그는 라우팅 대상이 아니라 교차 검토 플래그다', () => {
+  const flagged = plain(route('이 함수 설계 어때? #검토'));
+  assert.equal(flagged.review, true);
+  assert.deepEqual(flagged.targets.sort(), ['claude', 'codex']); // 대상은 그대로
+  assert.doesNotMatch(flagged.prompts.codex, /#검토/); // 프롬프트에서 제거
+  // 별칭 #리뷰/#review, 단일 대상과 조합
+  assert.equal(plain(route('#a 이거 구현해줘 #리뷰')).review, true);
+  assert.equal(plain(route('#review please check with #b design')).review, true);
+  // 태그가 없으면 false
+  assert.equal(plain(route('그냥 질문')).review, false);
+  // 검토 태그만 있으면 보낼 내용이 없다 → null
+  assert.equal(route('#검토'), null);
+});
+
+test('autoLead: 참조 파일·파일명·폴더명으로 시작 AI를 고른다 (다른 폴더일 때만)', () => {
+  const base = {
+    workspaces: { codex: '/work/api-server', claude: '/work/web-front' },
+    projectFiles: { codex: ['src/OrderService.kt', 'build.gradle'], claude: ['src/App.tsx', 'package.json'] }
+  };
+  // ① @참조 파일 경로가 슬롯 폴더 아래
+  const byFile = context.TriadRouter.autoLead({ ...base, text: '이거 고쳐줘', files: ['/work/web-front/src/App.tsx'] });
+  assert.equal(byFile.lead, 'claude');
+  assert.match(byFile.reason, /web-front 폴더 소속/);
+  // ② 파일명이 정확히 한쪽 목록에만 존재
+  const byName = context.TriadRouter.autoLead({ ...base, text: 'OrderService.kt 버그 원인 찾아줘', files: [] });
+  assert.equal(byName.lead, 'codex');
+  assert.match(byName.reason, /orderservice\.kt 파일 보유/);
+  // ③ 폴더 이름 언급
+  const byFolder = context.TriadRouter.autoLead({ ...base, text: 'web-front 쪽 빌드 왜 깨져?', files: [] });
+  assert.equal(byFolder.lead, 'claude');
+  // 무승부/신호 없음 → null (호출자가 직전 리드로 폴백)
+  assert.equal(context.TriadRouter.autoLead({ ...base, text: '안녕 뭐해', files: [] }).lead, null);
+  // 같은 폴더를 보면 항상 null (지금 동작 유지)
+  const same = { ...base, workspaces: { codex: '/work/app', claude: '/work/app' } };
+  assert.equal(context.TriadRouter.autoLead({ ...same, text: 'OrderService.kt 봐줘', files: [] }).lead, null);
+});
+
+test('자동 리드 배선: 렌더러는 auto를 해석해 실행·미리보기·시작 메시지에 반영한다', () => {
+  const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html'), 'utf8');
+  // 기본값 auto + 셀렉트 옵션
+  assert.match(renderer, /collaboration: \{mode:'independent',lead:'auto',rounds:2/);
+  assert.match(renderer, /<option value="auto">자동 \(폴더 매칭\)<\/option>/);
+  assert.match(renderer, /if\(!\['auto','codex','claude'\]\.includes\(collaboration\.lead\)\)collaboration\.lead='auto';/);
+  // send: auto → resolveAutoLead(폴더 매칭) → 무승부 시 직전 리드
+  assert.match(renderer, /function resolveAutoLead\(routed, cleanText\)/);
+  assert.match(renderer, /window\.TriadRouter\.autoLead\(\{/);
+  assert.match(renderer, /if\(lead==='auto'\)\{const picked=resolveAutoLead\(routed,references\.clean\);lead=picked\.lead;autoLeadReason=picked\.reason;\}/);
+  assert.match(renderer, /return \{lead:state\.lastCollabLead\|\|'codex',reason:''\};/);
+  assert.match(renderer, /state\.lastCollabLead=collaboration\.lead;/);
+  // 자동 선택 사유를 시작 메시지에 표시
+  assert.match(renderer, /L\('autoLeadPicked',\{reason:collaboration\.autoLeadReason\}\)/);
+});
+
+test('#대화 태그는 두-AI 직접 대화 플래그다 (라우팅 대상 아님)', () => {
+  const flagged = plain(route('MSA 전환 어떻게 생각하는지 둘이 얘기해봐 #대화'));
+  assert.equal(flagged.dialog, true);
+  assert.doesNotMatch(flagged.prompts.codex, /#대화/);
+  assert.equal(plain(route('#토론 이 설계 괜찮은지')).dialog, true);
+  assert.equal(plain(route('#debate is this design ok')).dialog, true);
+  assert.equal(plain(route('그냥 질문')).dialog, false);
 });

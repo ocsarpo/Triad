@@ -44,9 +44,11 @@ test('종료 이벤트는 실행 ID로 늦은 이벤트를 무시한다', () => 
   assert.match(native, /@"runId": runId/);
 });
 
-test('대기열 생명주기 변경의 앱 버전은 이 테스트에서 검증한다', () => {
-  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.48\.18<\/string>/);
-  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>88<\/string>/);
+test('Info.plist 버전은 electron/package.json과 일치한다 (수동 카나리 아님)', () => {
+  // 릴리즈마다 이 테스트를 고치지 않는다 — 한쪽만 범프하는 실수만 잡는다.
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../electron/package.json'), 'utf8'));
+  assert.match(plist, new RegExp(`<key>CFBundleShortVersionString</key>\\s*<string>${pkg.version.replace(/\./g, '\\.')}</string>`));
+  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>\d+<\/string>/);
 });
 
 test('독립 실행은 대상 슬롯과 공유 문서 충돌을 분리해 판단한다', () => {

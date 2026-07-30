@@ -51,8 +51,14 @@ test('공유 작업 보드는 제한된 MCP 도구와 revision 기반 협업 흐
   assert.equal(manifest.revision,0);
   const read=parsed(await request(3,'tools/call',{name:'shared_context_read',arguments:{sections:['objective','proposal']}}));
   assert.deepEqual(read,{objective:'토큰 절감',proposal:''});
-  const premature=await request(4,'tools/call',{name:'ask_agent',arguments:{question:'검토해줘'}});
-  assert.equal(premature.result.isError,true);assert.match(premature.result.content[0].text,/proposal/);
+  // 역할 게이트 폐지: proposal 선기록 없이도 ask_agent 가능 (대등 분담 — 기록은 권장일 뿐)
+  const early=await request(4,'tools/call',{name:'ask_agent',arguments:{question:'검토해줘'}});
+  assert.equal(early.result.isError,false);assert.match(early.result.content[0].text,/공유 보드 검토 완료/);
+  // 패킷에서 owner/reviewer/phase 프레이밍 제거 (소스 계약)
+  const mcpSource=fs.readFileSync(path.join(__dirname,'../Resources/triad-mcp-server.cjs'),'utf8');
+  assert.match(mcpSource,/delete compact\.owner; delete compact\.reviewer; delete compact\.phase;/);
+  assert.match(mcpSource,/협업 파트너 AI/);
+  assert.doesNotMatch(mcpSource,/작업 소유자는 ask_agent 호출 전에/);
   const updated=parsed(await request(5,'tools/call',{name:'shared_context_update',arguments:{section:'proposal',value:'공유 보드 초안',expectedRevision:0}}));
   assert.equal(updated.revision,1);
   const called=await request(6,'tools/call',{name:'ask_agent',arguments:{question:'검토해줘',sections:['proposal']}});

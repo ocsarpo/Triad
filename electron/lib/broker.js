@@ -87,7 +87,7 @@ function setup(agent, slotId, metadata, request, emit) {
   let callLimit = Math.floor(Number(collaboration.rounds));
   if (!(callLimit >= 1)) callLimit = 6;
   if (callLimit > 10) callLimit = 10;
-  let helperTimeoutMinutes = 5;
+  let helperTimeoutMinutes = 15;
   const configuredTimeout = collaboration.helperTimeoutMinutes;
   if (typeof configuredTimeout === 'number' && Number.isFinite(configuredTimeout)
     && Math.floor(configuredTimeout) === configuredTimeout && configuredTimeout >= 1 && configuredTimeout <= 120) {
@@ -99,7 +99,9 @@ function setup(agent, slotId, metadata, request, emit) {
   const payload = {
     nodePath, brokerPath, statePath, eventsPath,
     callLimit, maxDepth: 2, timeoutMs: helperTimeoutMinutes * 60 * 1000, helperTimeoutMinutes,
-    agents: agentConfigs, collaborationMode, allowAskAgent: collaborationMode === 'agent', owner,
+    agents: agentConfigs, collaborationMode,
+    // 통합: 독립 실행도 상대를 자연스럽게 부른다 — ask_agent는 dialog(순수 대화)만 제외
+    allowAskAgent: collaborationMode !== 'dialog', owner,
   };
   if (sharedContextPath) payload.sharedContextPath = sharedContextPath;
 

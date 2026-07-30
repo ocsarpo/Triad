@@ -66,8 +66,8 @@ test('전송 시점 패킷은 즉시 실행과 대기열에 같은 agent별 snap
   // 재개 세션이면 최근맥락을 생략(히스토리에 이미 있음), 신규/회전 세션에만 주입.
   // 재개 예정이던 턴은 fallback으로 보관 — 재개 실패 재시도 때 재주입.
   assert.match(renderer, /const packet=window\.TriadRecentContext\.packetFor\(state\.messages,agent\)/);
-  assert.match(renderer, /recentContexts\[agent\]=willResume\?'':packet;/);
-  assert.match(renderer, /fallbackContexts\[agent\]=willResume\?packet:'';/);
+  assert.match(renderer, /recentContexts\[agent\]=\(willResume&&!firstSinceBoot\)\?'':packet;/);
+  assert.match(renderer, /fallbackContexts\[agent\]=\(willResume&&!firstSinceBoot\)\?packet:'';/);
   assert.match(renderer, /recentContexts:clone\(options\.recentContexts\|\|\{\}\)/);
   assert.match(renderer, /item\.recentContexts\?\.\[agent\]\|\|''/);
   assert.match(renderer, /buildIndependentPrompt\(agent,routed\.prompts\[agent\],independentContext,recentContexts\[agent\],referencePacket,crossContexts\[agent\]\)/);
@@ -104,7 +104,6 @@ test('방 따라잡기 배선: 단일 대상·협업 리드에만 주입, 둘 �
   // buildIndependentPrompt가 cross 블록을 포함
   assert.match(renderer, /const cross=crossContext\?/);
   assert.match(renderer, /상대 AI가 방금 이 대화에서 답한 내용/);
-  // 협업: 리드 첫 턴에만 (재개 턴은 히스토리에 있음)
-  assert.match(renderer, /const crossContext=window\.TriadRecentContext\.crossAgentPacket\(state\.messages,collaboration\.lead,names\)/);
-  assert.match(renderer, /const catchUp=\(!resuming&&task\.agent===flow\.collaboration\?\.lead&&flow\.crossContext\)\?/);
+  // 대화 시작 시 양쪽 catch-up 캡처 (첫 턴 연결용)
+  assert.match(renderer, /dialogCatchUp:\{codex:window\.TriadRecentContext\.crossAgentPacket\(state\.messages,'codex',names\)/);
 });

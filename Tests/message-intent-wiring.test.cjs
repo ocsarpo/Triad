@@ -11,13 +11,13 @@ test('렌더러는 대화성 경량 경로와 재개 세션 최근맥락 생략�
   assert.match(renderer, /submit_contribution도 하지 말고/);
   // #3: 재개 세션이면 recentContext를 비운다 (자동 회전 제거 — 세션 존재+정책만 판단)
   assert.match(renderer, /const willResume=!!\(state\.sessions\?\.\[agent\]&&cfg\.sessionPolicy!=='alwaysNew'\)/);
-  assert.match(renderer, /recentContexts\[agent\]=willResume\?'':packet;/);
+  assert.match(renderer, /recentContexts\[agent\]=\(willResume&&!firstSinceBoot\)\?'':packet;/);
 });
 
 test('세션 재개 실패 자동 재시도는 send 시점에 캡처한 직전 맥락을 재주입한다 (재시작 기억상실 방지)', () => {
   const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html'), 'utf8');
   // 재개 예정이던 턴은 fallback 패킷을 따로 보관
-  assert.match(renderer, /fallbackContexts\[agent\]=willResume\?packet:'';/);
+  assert.match(renderer, /fallbackContexts\[agent\]=\(willResume&&!firstSinceBoot\)\?packet:'';/);
   // 즉시 실행·대기열 배치 양쪽 모두 pending까지 전달
   assert.match(renderer, /images,fallbackContext:fallbackContexts\[agent\]/);
   assert.match(renderer, /fallbackContexts:clone\(options\.fallbackContexts\|\|\{\}\)/);
@@ -45,3 +45,5 @@ test('패키저는 message-intent 모듈을 앱 리소스로 복사한다', () =
   const packager = fs.readFileSync(path.join(__dirname, '../scripts/package-app.sh'), 'utf8');
   assert.match(packager, /Resources\/message-intent\.js/);
 });
+
+// 협업 모드 자체가 제거되어 강등 로직도 소멸 (방 하나 — 독립이 기본).

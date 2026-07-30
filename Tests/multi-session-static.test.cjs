@@ -44,10 +44,8 @@ test('슬롯 라벨(핀·알약·필터·폴더)이 provider 이름을 따라간
   // 태그 버튼(라벨+#a/#b) · 중지 버튼 · 협업 시작/종합 셀렉터도 반영
   assert.match(renderer, /const tagCodex=document\.querySelector\('\.tag\.codex'\);if\(tagCodex\)\{tagCodex\.textContent=names\.codex;tagCodex\.dataset\.tag='#a';\}/);
   assert.match(renderer, /set\('#stop-codex',L\('stopLabel',\{name:names\.codex\}\)\)/);
-  assert.match(renderer, /set\('#collab-lead option\[value="codex"\]',names\.codex\)/);
-  // 에이전트 모드: 스스로 끝낼 수 있으면 보드 없이 바로 답, 최종 답변은 반드시 채팅에
-  assert.match(renderer, /이 작업을 스스로 끝낼 수 있으면 공유 보드 기록 없이 바로 사용자에게 줄 최종 답변을 이 응답 본문\(채팅\)에 작성하세요/);
-  assert.match(renderer, /최종 답변은 반드시 이 응답 본문\(채팅\)에 사용자에게 직접 작성하세요/);
+  // 통합: 독립 실행이 ask_agent 상호 호출을 포함 (구 에이전트 협업 프로토콜 제거)
+  assert.match(renderer, /ask_agent 도구로 요청하세요\(답변은 이 실행 안으로 돌아옵니다\)/);
   // recomputeNames가 라벨 동기화까지 호출
   assert.match(renderer, /names\.claude = providerName\(pp\)[\s\S]{0,80}syncSlotLabels\(\)/);
 });

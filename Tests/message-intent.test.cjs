@@ -72,3 +72,4 @@ test('inquiry 경계: 빈 값·평서문 지시·초과 길이는 아님', () =>
   assert.ok(long.length > intent.INQUIRY_MAX_LENGTH);
   assert.equal(intent.isInquiry(long), false);
 });
+

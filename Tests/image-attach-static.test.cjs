@@ -55,10 +55,10 @@ test('협업 흐름은 이미지를 flow에 실어 매 턴 두 AI에게 전달�
   // startCollaboration이 images를 받아 orchestration에 저장
   assert.match(renderer, /function startCollaboration\(objective, runCollaboration=state\.collaboration, conversationId=state\.activeConversationId, settings=effectiveAgentConfigs\(\), referencePacket=\[\], images=\[\], review=false\)/);
   assert.match(renderer, /const flowImages=clone\(images\|\|\[\]\)/);
-  assert.match(renderer, /images:flowImages,reviewRequested:!!review,crossContext\}/);
-  // 협업(agent) + 대화(dialog) 턴 실행기가 flow.images를 dispatch에 넘긴다.
+  assert.match(renderer, /referencePacket:clone\(referencePacket\),images:flowImages,/);
+  // 대화(dialog) 턴 실행기가 flow.images를 dispatch에 넘긴다 (유일한 오케스트레이션).
   const turnMatches = renderer.match(/collaboration:flow\.collaboration,images:flow\.images\|\|\[\]\}/g) || [];
-  assert.equal(turnMatches.length, 2);
+  assert.equal(turnMatches.length, 1);
   // 대기열에도 이미지를 보존한다.
   assert.match(renderer, /images:clone\(options\.images\|\|\[\]\)/); // independentBatch
   assert.match(renderer, /images:clone\(images\|\|\[\]\),review:!!review,createdAt/); // collaboration

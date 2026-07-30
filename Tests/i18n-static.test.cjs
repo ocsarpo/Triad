@@ -61,7 +61,7 @@ test('AI 응답은 UI 언어로 — dispatchAgent가 프롬프트 끝에 지시�
 
 test('보간 시스템 메시지는 L()로 감싼다', () => {
   assert.match(renderer, /textContent=L\('refMax3'\)/);
-  assert.match(renderer, /L\('agentStart',\{lead:names\[collaboration\.lead\]\}\)/);
+  assert.match(renderer, /L\('dialogStart',\{lead:names\[collaboration\.lead\]\}\)/);
   assert.match(renderer, /L\('sendPrepFailed',\{detail\}\)/);
 });
 
@@ -73,7 +73,7 @@ test('Phase 2: 설정·협업·상태 크롬이 사전에 있고 텍스트노드
   assert.equal(i18n.chrome('en', '계속 유지 (기본)'), 'Keep session (default)');
   // 협업 컨트롤 라벨/상태 (모드 축소: 독립 실행 + 협업, #검토 태그)
   assert.equal(i18n.chrome('en', '작업 시작'), 'Start work');
-  assert.equal(i18n.chrome('en', '각 AI가 독립적으로 응답 · #검토 교차 검토 · #대화 직접 대화'), 'Each AI answers independently · #검토 cross-review · #대화 direct AI talk');
+  assert.equal(i18n.chrome('en', '각 AI가 독립적으로 응답 · 필요하면 서로 호출 · #검토 교차 검토 · #대화 직접 대화'), 'Each AI answers independently · they call each other when needed · #검토 cross-review · #대화 direct AI talk');
   assert.equal(i18n.chrome('en', '교차 검토 대기열 등록'), 'Cross-review queued');
   // 계정 상태
   assert.equal(i18n.chrome('en', '연결 필요'), 'Not connected');
@@ -97,7 +97,7 @@ test('긴 보조 답변은 전문을 message.fullText에 보관하고 전문 보
   // 잘렸을 때만 full 본문 보관, 아니면 제거
   assert.match(renderer, /const answer=String\(event\.answer\|\|''\)\.trim\(\);const truncated=answer\.length>3000/);
   // 질문 메시지는 유지, 답변은 별도 메시지로 추가하고 긴 답변은 fullText 보관
-  assert.match(renderer, /const answerId=addMessage\('system',L\('handoffAnswer',\{\.\.\.fields,body:preview\}\),false\)/);
+  assert.match(renderer, /const answerId=addMessage\(to,L\('handoffAnswer',\{\.\.\.fields,body:preview\}\),false\)/);
   assert.match(renderer, /if\(truncated\)updateMessage\(answerId,m=>\{m\.fullText=L\('handoffAnswer',\{\.\.\.fields,body:answer\}\);\}\)/);
   // fullText가 있으면 전문 보기/접기 토글, 복사는 전문을 대상으로
   assert.match(renderer, /const fullBody=String\(m\.fullText\|\|\(m\.boardResult\?/);
@@ -125,7 +125,6 @@ test('메시지 영역 chrome·타임스탬프·계정 상태·시스템 메시�
   assert.equal(i18n.translate('en', 'acctClaudeMethod', { method: 'team' }), '✓ Claude team connected');
   assert.match(i18n.translate('en', 'acctClaude'), /Claude account connected/);
   // 회의실 시스템 메시지
-  assert.match(i18n.translate('en', 'handoffReturn', { from: 'A', to: 'B' }), /resuming the original task/);
   assert.match(i18n.translate('en', 'brokerToolFail'), /Could not prepare/);
   // 렌더러가 실제로 이 키/헬퍼를 사용
   assert.match(renderer, /label = m\.author === 'user' \? tc\('나'\) : m\.author === 'system' \? tc\('회의실'\)/);
@@ -143,7 +142,6 @@ test('메시지 영역 chrome·타임스탬프·계정 상태·시스템 메시�
   assert.match(renderer, /reply\.textContent=tc\('답장'\)/);
   assert.match(renderer, /return L\('acctClaude'\)/);
   assert.match(renderer, /L\('accountOf',\{name:names\[agent\]\}\)/);
-  assert.match(renderer, /addMessage\('system',L\('handoffReturn'/);
 });
 
 test('셸(main)은 자체 메시지 테이블로 메뉴·다이얼로그·오류를 지역화한다', () => {

@@ -204,7 +204,6 @@ test('자동 리드 배선: 렌더러는 auto를 해석해 실행·미리보기�
   const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html'), 'utf8');
   // 기본값 auto + 셀렉트 옵션
   assert.match(renderer, /collaboration: \{mode:'independent',lead:'auto',rounds:2/);
-  assert.match(renderer, /<option value="auto">자동 \(폴더 매칭\)<\/option>/);
   assert.match(renderer, /if\(!\['auto','codex','claude'\]\.includes\(collaboration\.lead\)\)collaboration\.lead='auto';/);
   // send: auto → resolveAutoLead(폴더 매칭) → 무승부 시 직전 리드
   assert.match(renderer, /function resolveAutoLead\(routed, cleanText\)/);
@@ -224,3 +223,5 @@ test('#대화 태그는 두-AI 직접 대화 플래그다 (라우팅 대상 아�
   assert.equal(plain(route('#debate is this design ok')).dialog, true);
   assert.equal(plain(route('그냥 질문')).dialog, false);
 });
+
+// 자연어 대화·검토 감지는 키워드 정규식이 아니라 모델 판단([[대화시작]]/[[검토요청]] 마커)로 이동.

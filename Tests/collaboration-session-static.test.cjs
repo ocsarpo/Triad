@@ -23,9 +23,9 @@ test('flow 세션은 협업 내내 캡 없이 유지된다 (자동 회전 제거
   assert.doesNotMatch(renderer, /COLLAB_SESSION_TURN_CAP/);
   assert.match(renderer, /function collabSessionStore\(flow, agent\)/);
   assert.match(renderer, /flow\.sessionTurns\[agent\]=\(flow\.sessionTurns\[agent\]\|\|0\)\+1;/);
-  // 협업 dispatch 경로가 flow 세션 store를 전달 (토론 하니스는 제거됨)
-  assert.match(renderer, /const store=collabSessionStore\(flow,task\.agent\);dispatchAgent\(task\.agent,buildAgentPrompt/);
-  assert.doesNotMatch(renderer, /buildCollaborationPrompt/);
+  // 대화(dialog) 턴이 flow 세션 store로 재개된다 (유일한 오케스트레이션)
+  assert.match(renderer, /const store=collabSessionStore\(flow,agent\);/);
+  assert.doesNotMatch(renderer, /buildCollaborationPrompt|buildAgentPrompt/);
 });
 
 test('세션 캡처는 isolated면 flow 저장소에만 쓰고 chat 세션엔 안 쓴다 (격리·rider b)', () => {
@@ -42,10 +42,7 @@ test('세션 캡처는 isolated면 flow 저장소에만 쓰고 chat 세션엔 �
   assert.match(renderer, /if\(p\?\.isolated\)\{if\(p\.sessionStore\)p\.sessionStore\[event\.agent\]=event\.session;/);
 });
 
-test('opt2: 재개 턴이면 reference packet만 생략하고 의제는 유지한다', () => {
-  const gates = renderer.match(/const resuming=!!flow\.sessions\?\.\[task\.agent\];/g) || [];
-  assert.ok(gates.length >= 1, 'buildAgentPrompt가 resuming을 판정해야 함');
-  assert.match(renderer, /const references=\(!resuming&&flow\.referencePacket\?\.length\)\?/);
-  // 의제(사용자 의제 / 사용자의 원래 작업)는 resuming과 무관하게 항상 프롬프트에 포함 (게이팅 대상 아님)
-  assert.doesNotMatch(renderer, /resuming[^;]*사용자 의제/);
+test('대화 턴은 첫 턴만 주제·규칙을 싣고 재개 턴은 상대의 말만 전달한다', () => {
+  assert.match(renderer, /const first=!flow\.sessions\?\.\[agent\];/);
+  assert.match(renderer, /:`\$\{names\[other\]\}: \$\{received\}`;/);
 });

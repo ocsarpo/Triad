@@ -147,7 +147,15 @@ function buildClaude(targetConfig, nextDepth, slot) {
 }
 
 function supportingPrompt(question, reason, context, packet, nextDepth) {
-  return `당신은 Triad에서 ${(config.agents[caller]?.provider || caller) === 'codex' ? 'Codex' : 'Claude'}가 작업 중 호출한 보조 AI입니다.\n` +
+  const norm = p => String(p || '').replace(/\/+$/, '');
+  const callerWs = norm(config.agents[caller]?.workspacePath);
+  const targetWs = norm(config.agents[target]?.workspacePath);
+  const wsLine = callerWs && targetWs
+    ? (callerWs === targetWs
+      ? `작업 환경: 요청한 AI와 같은 작업 폴더(${targetWs})를 봅니다.\n`
+      : `작업 환경: 당신의 작업 폴더 = ${targetWs} · 요청한 AI의 작업 폴더 = ${callerWs} — 서로 다른 폴더/저장소이므로 그쪽 파일·커밋은 당신에게 보이지 않는 것이 정상입니다.\n`)
+    : '';
+  return `당신은 Triad에서 ${(config.agents[caller]?.provider || caller) === 'codex' ? 'Codex' : 'Claude'}가 작업 중 호출한 협업 파트너 AI입니다. 각자 자기 작업 폴더를 맡은 대등한 분담 관계이며, 상대와 폴더·저장소가 달라도 정상입니다 — 당신의 폴더에서 확인할 수 있는 것을 답하세요.\n${wsLine}` +
     `요청한 AI에게 돌려줄 정확하고 실행 가능한 답만 작성하세요. 필요한 도구와 MCP를 실제로 사용하고, 확인하지 못한 내용은 추측하지 마세요.\n` +
     `${nextDepth < Number(config.maxDepth || 2) ? '정보가 정말 부족한 경우에만 Triad ask_agent 도구로 상대 AI에게 한 번 더 확인할 수 있습니다.\n' : '중첩 호출 한도에 도달했으므로 상대 AI를 다시 호출하지 마세요.\n'}` +
     `\n질문:\n${question}\n` +
@@ -228,9 +236,12 @@ async function askAgent(input) {
   if (depth >= Number(config.maxDepth || 2)) throw new Error('AI 간 중첩 호출 깊이 한도에 도달했습니다.');
   let packet = '';
   if (sharedBoardEnabled()) {
+    // 역할 고정 없음 — owner/reviewer/phase는 프레이밍만 오염시키므로 패킷에서 제거
+    // (예전 owner-proposal 선기록 강제도 폐지: 기록은 프로토콜 안내로만 권장).
     const board = readSharedBoard();
-    if (caller === board.owner && !String(board.proposal || '').trim()) throw new Error('작업 소유자는 ask_agent 호출 전에 공유 보드 proposal을 먼저 작성해야 합니다.');
-    packet = JSON.stringify(sharedContext.compactPacket(board, requestedSections(input?.sections)));
+    const compact = sharedContext.compactPacket(board, requestedSections(input?.sections));
+    if (compact && typeof compact === 'object') { delete compact.owner; delete compact.reviewer; delete compact.phase; }
+    packet = JSON.stringify(compact);
   }
   const budget = claimCall();
   if (!budget.allowed) throw new Error(`AI 간 호출 한도 ${budget.limit}회에 도달했습니다.`);

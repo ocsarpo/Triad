@@ -222,7 +222,7 @@ function runHelper(agent, prompt, nextDepth) {
 async function askAgent(input) {
   const question = String(input?.question || '').trim();
   const reason = String(input?.reason || '').trim();
-  const context = String(input?.context || '').trim().slice(0, 2000);
+  const context = String(input?.context || '').trim();
   if (!question) throw new Error('question은 필수입니다.');
   if (input?.to && input.to !== target) throw new Error(`${caller}는 ${target}만 호출할 수 있습니다.`);
   if (depth >= Number(config.maxDepth || 2)) throw new Error('AI 간 중첩 호출 깊이 한도에 도달했습니다.');
@@ -290,7 +290,7 @@ function askAgentTool() {
   const properties = {
     question: { type: 'string', description: '상대 AI가 수행할 구체적인 단일 질문' },
     reason: { type: 'string', description: '호출이 필요한 이유' },
-    context: { type: 'string', maxLength: 2000, description: '질문 해결에 필요한 최대 2,000자의 최소 문맥' },
+    context: { type: 'string', description: '질문 해결에 필요한 문맥(필요한 만큼)' },
     to: { type: 'string', enum: [target] }
   };
   if (sharedBoardEnabled()) properties.sections = { type: 'array', items: { type: 'string', enum: boardSections }, maxItems: boardSections.length, description: '보조 AI에 전달할 공유 보드 섹션. 생략하면 objective, constraints, proposal, evidence이며 history와 contributions는 명시 요청 때만 전달됩니다.' };

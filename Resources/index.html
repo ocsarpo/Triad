@@ -585,7 +585,7 @@
     });
     // A slot's config = provider-specific fields + slot-level prefs (folder,
     // network, session). The two slots default to provider codex / claude.
-    const slotPrefs = home => ({ speedMode:'standard', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, sessionPolicy:'auto', sessionTurnLimit:50, sessionTokenLimit:170000 });
+    const slotPrefs = home => ({ speedMode:'standard', workspacePath:home, writableRoots:`${home}/.gradle`, networkAccess:false, allowLocalBinding:true, sessionPolicy:'continue' });
     const defaults = home => ({
       codex: { ...providerDefaults().codex, ...slotPrefs(home) },
       claude: { ...providerDefaults().claude, ...slotPrefs(home) }
@@ -711,24 +711,11 @@
       return flow?.conversationId===state.activeConversationId ? flow.collaboration : state.collaboration;
     }
     function normalizeSessionSettings(config) {
+      // 자동 회전 정책 제거 — 'auto'는 '계속 유지'로 흡수, 한도 필드는 무시된다.
       return {...config,...window.TriadSessionBudget.normalizePolicy(config)};
     }
-    // One-time lift of stale session defaults.  Sessions created under the old
-    // 6-turn / 48k defaults rotated far too aggressively and discarded the CLI
-    // prompt cache each time.  Configs still sitting on the exact old defaults
-    // are pulled up to the current ones; any value the user deliberately
-    // changed is left untouched.
-    const LEGACY_SESSION_DEFAULTS={sessionTurnLimit:6,sessionTokenLimit:48000};
-    function liftLegacySessionDefaults(config){
-      if(!config||typeof config!=='object')return config;
-      if(config.sessionTurnLimit===LEGACY_SESSION_DEFAULTS.sessionTurnLimit&&config.sessionTokenLimit===LEGACY_SESSION_DEFAULTS.sessionTokenLimit){
-        const policy=window.TriadSessionBudget.DEFAULT_POLICY;
-        return {...config,sessionTurnLimit:policy.sessionTurnLimit,sessionTokenLimit:policy.sessionTokenLimit};
-      }
-      return config;
-    }
     function normalizeSessionStats(value=state.sessionStats) {
-      state.sessionStats=window.TriadSessionBudget.normalizeStats(value,state.sessions);
+      state.sessionStats=window.TriadSessionBudget.normalizeStats(value);
       for(const agent of agents){if(state.sessions?.[agent]&&!state.sessionStats[agent].sessionId)state.sessionStats[agent].sessionId=state.sessions[agent];}
       return state.sessionStats;
     }
@@ -748,8 +735,8 @@
       state.activeConversationId=conversation.id;
       state.messages=clone(removeDeferredOrphans(conversation.messages||[]));state.unread=!!conversation.unread;state.workspace=normalizeWorkspace(conversation.workspace,conversation.settings||state.settings);
       state.settings=clone(conversation.settings||state.settings);
-      if(state.settings?.codex)state.settings.codex=liftLegacySessionDefaults(state.settings.codex);
-      if(state.settings?.claude)state.settings.claude=liftLegacySessionDefaults(state.settings.claude);
+      if(state.settings?.codex)state.settings.codex=normalizeSessionSettings(state.settings.codex);
+      if(state.settings?.claude)state.settings.claude=normalizeSessionSettings(state.settings.claude);
       recomputeNames(); // per-conversation providers → refresh A/B display names
       state.collaboration=normalizeCollaboration(conversation.collaboration);
       state.defaultTarget=normalizeDefaultTarget(conversation.defaultTarget);
@@ -1298,7 +1285,7 @@
           else if(item.type==='mcp_tool_call') addTrace(agent,item.status==='failed'?'error':'success',L('traceToolDone',{tool:item.tool||item.name||''}).trim(),item);
           else addTrace(agent,'success',L('traceStepDone',{type:item.type||'event'}),item);
         } else if(data.type==='turn.completed') {addTrace(agent,'success','작업 완료',data.usage||data);recordTurnUsage(agent,data.usage,{trace:true});}
-        else if(data.type==='error') addTrace(agent,'error','Codex 오류',data.error?.message||data.message||rawLine);
+        else if(data.type==='error') { const codexErr=data.error?.message||data.message||rawLine; scheduleContextLimitRetry(agent,codexErr); addTrace(agent,'error','Codex 오류',codexErr); }
       } else {
         if(data.type==='system'&&data.subtype==='init') addTrace(agent,'info',L('traceSessionModel',{model:data.model||'Claude'}),{session_id:data.session_id,permissionMode:data.permissionMode,mcp_servers:data.mcp_servers});
         else if(data.type==='system'&&data.subtype==='status') addTrace(agent,'info',L('traceStatus',{status:data.status||data.subtype}),data);
@@ -1601,20 +1588,16 @@
       const agentConfigs=clone(options.agentConfigs||effectiveAgentConfigs());
       const collaboration=clone(options.collaboration||activeCollaboration());
       let session=isolated?(sessionStore?sessionStore[agent]||null:null):state.sessions[agent];
-      let rotationReason='';
+      // 자동 회전 없음 — CLI가 스스로 문맥을 압축·관리하므로 세션은 계속 유지한다.
+      // '항상 새 세션' 정책과 설정의 수동 초기화 버튼만 세션을 리셋한다.
       if(!isolated&&config.sessionPolicy==='alwaysNew'){
-        if(session){state.sessions[agent]=null;state.sessionStats=window.TriadSessionBudget.resetAgent(state.sessionStats,agent);rotationReason='정책: 항상 새 세션';}
+        if(session){state.sessions[agent]=null;state.sessionStats=window.TriadSessionBudget.resetAgent(state.sessionStats,agent);addTrace(agent,'info','다음 작업 새 세션','정책: 항상 새 세션');save();}
         session=null;
-      }else if(!isolated&&window.TriadSessionBudget.shouldRotate(config,state.sessionStats[agent],!!session)){
-        const stats=state.sessionStats[agent];
-        rotationReason=stats.requiresFreshSession?'자동 회전 · 기존 세션 사용량 미측정':stats.turns>=config.sessionTurnLimit?`자동 회전 · ${stats.turns}턴`: `자동 회전 · 현재 문맥 ${Math.round(stats.lastInputTokens/1000)}k`;
-        state.sessions[agent]=null;state.sessionStats=window.TriadSessionBudget.resetAgent(state.sessionStats,agent,{incrementRotation:true});session=null;
       }
-      if(rotationReason){addTrace(agent,'info','다음 작업 새 세션',rotationReason);save();}
       const runId=id();
       const responseRecordId=sharedContext?.runId?window.TriadRunReference.recordIdFor({runId:sharedContext.runId},contextDocumentId(sharedContext)):null;
       const bubbleMeta={recordId:responseRecordId,runId:sharedContext?.runId||null,documentId:contextDocumentId(sharedContext),replyAgent:agent};
-      state.pending[agent]={prompt,retried:false,isolated,sessionStore,sharedContext,usageRecorded:false,sessionId:session,runId,conversationId,config,agentConfigs,collaboration,images,bubbleMeta};
+      state.pending[agent]={prompt,retried:false,isolated,sessionStore,sharedContext,usageRecorded:false,sessionId:session,runId,conversationId,config,agentConfigs,collaboration,images,bubbleMeta,fallbackContext:options.fallbackContext||''};
       // Create the answer bubble immediately (spinner) so the user always sees
       // the agent is working — even while it's only using tools. On a handoff
       // the segment is sealed (see the broker handler) so a single bubble never
@@ -1681,7 +1664,7 @@
       return item;
     }
     function enqueueIndependentBatch(targets,prompts,sourceText,messageId,options={}) {
-      const item={id:id(),kind:'independentBatch',targets:[...targets],prompts:clone(prompts),sourceText,objective:options.objective||sourceText,messageId,conversationId:state.activeConversationId,settings:clone(effectiveAgentConfigs()),collaboration:clone(activeCollaboration()),recentContexts:clone(options.recentContexts||{}),referencePacket:clone(options.referencePacket||[]),images:clone(options.images||[]),sharedContext:options.sharedContext||null,documentId:options.documentId||contextDocumentId(options.sharedContext),createdAt:Date.now()};
+      const item={id:id(),kind:'independentBatch',targets:[...targets],prompts:clone(prompts),sourceText,objective:options.objective||sourceText,messageId,conversationId:state.activeConversationId,settings:clone(effectiveAgentConfigs()),collaboration:clone(activeCollaboration()),recentContexts:clone(options.recentContexts||{}),fallbackContexts:clone(options.fallbackContexts||{}),referencePacket:clone(options.referencePacket||[]),images:clone(options.images||[]),sharedContext:options.sharedContext||null,documentId:options.documentId||contextDocumentId(options.sharedContext),createdAt:Date.now()};
       state.queue.push(item);renderQueue();renderCollaboration();if(state.boardVisible)renderSharedBoard();
       addTrace(targets[0]||'codex','info','독립 실행 묶음 대기열 등록',{targets,position:state.queue.filter(candidate=>candidate.kind==='independentBatch').length});
       return item;
@@ -1733,7 +1716,7 @@
         addTrace(item.targets[0]||'codex','info','대기 독립 실행 시작',{targets:item.targets,remaining:state.queue.filter(candidate=>candidate.kind==='independentBatch').length});
         for(const agent of item.targets){
           const prompt=buildIndependentPrompt(agent,item.prompts[agent]||item.sourceText,independentContext,item.recentContexts?.[agent]||'',item.referencePacket||[]);
-          dispatchAgent(agent,prompt,{sharedContext:independentContext,conversationId:item.conversationId,config:item.settings?.[agent],agentConfigs:item.settings,collaboration:item.collaboration,images:item.images||[]});
+          dispatchAgent(agent,prompt,{sharedContext:independentContext,conversationId:item.conversationId,config:item.settings?.[agent],agentConfigs:item.settings,collaboration:item.collaboration,images:item.images||[],fallbackContext:item.fallbackContexts?.[agent]||''});
         }
         renderQueue();renderCollaboration();
       });
@@ -1792,9 +1775,10 @@
       const board=boardFor(flow);if(!board)return null;
       try {
         const sections=boardSectionsFor(task);
-        return sections.length?window.TriadSharedContext.compactPacket(board,{sections,maxCharacters:4000}):window.TriadSharedContext.manifest(board);
+        // manifest 대신 빈 섹션을 걷어낸 인덱스 — 빈 보드는 null(스냅샷 생략).
+        return sections.length?window.TriadSharedContext.compactPacket(board,{sections,maxCharacters:4000}):promptBoardIndex(board);
       }
-      catch(error) { addTrace(task.agent,'error','공유 보드 패킷 준비 실패',error.message);return window.TriadSharedContext.manifest(board); }
+      catch(error) { addTrace(task.agent,'error','공유 보드 패킷 준비 실패',error.message);return promptBoardIndex(board); }
     }
     function buildCollaborationPrompt(task) {
       const flow=state.orchestration;const board=boardFor(flow);const packet=boardPacket(task,flow);
@@ -1811,7 +1795,11 @@
       const other=task.agent===board?.owner?board?.reviewer:board?.owner;
       const otherName=other?(names[other]||other):'상대 AI';
       const relabel=(p)=>(p&&typeof p==='object')?{...p,...(p.owner?{owner:names[p.owner]||p.owner}:{}),...(p.reviewer?{reviewer:names[p.reviewer]||p.reviewer}:{})}:p;
-      const common=`사용자 의제:\n${flow.objective}${references}\n\n당신=${names[task.agent]} (${role}), 상대=${otherName}. 상대나 검토자를 'Codex'/'Claude' 같은 슬롯 코드가 아니라 이 표시 이름으로 지칭하세요.\n\n공유 보드는 프로젝트가 아니라 Triad가 관리합니다. 전체 채팅 기록이나 다른 AI의 원문 답변을 요청하거나 반복하지 마세요. 필요한 프로젝트 근거는 직접 필요한 파일·라인만 읽으세요.\n\n공유 보드 단계: ${task.phase}\n공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(relabel(packet))}`;
+      // 재개 세션이면 불변 정책 문단(슬롯 코드 지칭·보드 관리 규칙)도 생략 —
+      // 첫 턴 히스토리에 이미 있다. 의제·역할·단계·스냅샷은 항상 유지.
+      const policy=resuming?'':` 상대나 검토자를 'Codex'/'Claude' 같은 슬롯 코드가 아니라 이 표시 이름으로 지칭하세요.\n\n공유 보드는 프로젝트가 아니라 Triad가 관리합니다. 전체 채팅 기록이나 다른 AI의 원문 답변을 요청하거나 반복하지 마세요. 필요한 프로젝트 근거는 직접 필요한 파일·라인만 읽으세요. 사용자에게 보이는 답변에서는 보드·기록 절차를 언급하지 마세요.`;
+      const snapshot=packet?`\n공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(relabel(packet))}`:'';
+      const common=`사용자 의제:\n${flow.objective}${references}\n\n당신=${names[task.agent]} (${role}), 상대=${otherName}.${policy}\n\n공유 보드 단계: ${task.phase}${snapshot}`;
       if(task.kind==='proposal')return `${common}\n\ninline에는 제약만 있습니다. 필요한 경우 shared_context_read로 필요한 섹션만 읽으세요. 먼저 shared_context_update 도구로 proposal과 필요한 constraints/evidence를 작성하세요. 그 뒤 사용자에게는 실행 가능한 제안과 근거만 간결하게 설명하세요.`;
       if(task.kind==='verdict')return `${common}\n\nshared_context_read로 proposal과 evidence만 읽고 반례·누락만 검토하세요. submit_verdict 도구로 agree | disagree | conditional 중 하나와 최대 3개의 findings를 기록하세요. agree라면 새 동의 라운드를 시작하지 마세요. 사용자에게는 판정과 핵심 근거를 한두 문장으로 설명하세요('agree' 한 단어로 끝내지 마세요).`;
       if(task.kind==='resolve')return `${common}\n\nshared_context_read로 verdict와 disputes만 읽고 해결하세요. 필요한 변경은 shared_context_update로 proposal/evidence에 반영하고, 해결 결과를 짧게 남기세요.`;
@@ -1820,16 +1808,19 @@
     function agentHandoffProtocol(agent, disabled=false) {
       if(disabled)return '위임 한도에 도달했습니다. 상대 AI에게 추가 질문을 요청하지 말고 현재 정보로 사용자에게 줄 최선의 결과를 이 응답 본문(채팅)에 직접 완성해 작성하세요.';
       const other=agent==='codex'?'claude':'codex';
-      return `에이전트 협업 모드입니다. 이 작업을 스스로 끝낼 수 있으면 공유 보드 기록 없이 바로 사용자에게 줄 최종 답변을 이 응답 본문(채팅)에 작성하세요. ${names[other]}의 정보·검토·도구 사용이 꼭 필요한 단일 쟁점이 있을 때만, 그때 shared_context_update로 proposal과 필요한 evidence를 보드에 기록하고 ask_agent를 호출하세요(필요한 보드 section만 지정). 도구 결과가 돌아오면 같은 작업을 계속해 마무리하세요. ask_agent를 사용했다면 아래 인계 마커는 출력하지 마세요.\n**최종 답변은 반드시 이 응답 본문(채팅)에 사용자에게 직접 작성하세요. shared_context_update로 공유 보드에만 기록하고 끝내면 안 됩니다 — 보드 기록은 답변을 대신하지 않습니다.**\nask_agent 도구가 제공되지 않거나 호출할 수 없을 때만 답변 맨 끝에 아래 호환 형식으로 요청하세요. JSON 밖의 마커 문구를 바꾸지 마세요.\n[[TRIAD_HANDOFF]]\n{"to":"${other}","question":"상대가 수행할 구체적인 단일 질문","reason":"위임이 필요한 이유"}\n[[/TRIAD_HANDOFF]]`;
+      return `에이전트 협업 모드입니다. 이 작업을 스스로 끝낼 수 있으면 공유 보드 기록 없이 바로 사용자에게 줄 최종 답변을 이 응답 본문(채팅)에 작성하세요. ${names[other]}의 정보·검토·도구 사용이 꼭 필요한 단일 쟁점이 있을 때만 shared_context_update로 proposal과 필요한 evidence를 기록하고 ask_agent를 호출한 뒤, 결과를 반영해 같은 작업을 마무리하세요.\n**최종 답변은 반드시 이 응답 본문(채팅)에 사용자에게 직접 작성하세요 — 보드 기록은 답변을 대신하지 않습니다. 답변에서 보드·기록 절차를 언급하지 마세요.**\nask_agent 도구를 쓸 수 없을 때만 답변 맨 끝에 정확히 이 형식으로 요청하세요: [[TRIAD_HANDOFF]]{"to":"${other}","question":"상대가 수행할 단일 질문","reason":"이유"}[[/TRIAD_HANDOFF]]`;
     }
     function buildAgentPrompt(task) {
       const flow=state.orchestration;
-      const packet=boardPacket(task,flow);const board=boardFor(flow);
+      const board=boardFor(flow);
       // opt2: 재개 세션이면 reference packet 생략(의제·역할은 유지).
       const resuming=!!flow.sessions?.[task.agent];
       const references=(!resuming&&flow.referencePacket?.length)?`\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(flow.referencePacket)}\n`:'';
       // 안정 prefix(작업·참고·역할·정책) 먼저, volatile 보드 스냅샷은 뒤로.
-      const context=`사용자의 원래 작업:\n${flow.objective}${references}\n당신의 역할: ${task.agent===board?.owner?'owner/proposer':'reviewer'}\n\n전체 채팅 기록은 제공되지 않습니다. 필요한 프로젝트 파일만 직접 읽고, 확인한 근거는 공유 보드에 짧게 기록하세요.\n\n공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(packet)}\n\n`;
+      // 빈 보드는 스냅샷 블록 자체를 생략(빈 manifest만 ~170토큰).
+      const boardIndex=promptBoardIndex(board);
+      const snapshot=boardIndex?`공유 보드 스냅샷(필요한 섹션만):\n${JSON.stringify(boardIndex)}`:'공유 보드는 아직 비어 있습니다(기록하면 상대와 공유됩니다).';
+      const context=`사용자의 원래 작업:\n${flow.objective}${references}\n당신의 역할: ${task.agent===board?.owner?'owner/proposer':'reviewer'}\n\n전체 채팅 기록은 제공되지 않습니다. 필요한 프로젝트 파일만 직접 읽고, 확인한 근거는 공유 보드에 짧게 기록하세요.\n\n${snapshot}\n\n`;
       if(task.kind==='agent_answer'){
         return `${context}${names[task.requester]}가 당신에게 다음 작업을 요청했습니다.\n질문: ${task.question}\n${task.reason?`요청 이유: ${task.reason}\n`:''}\n연결된 MCP나 작업 도구가 필요하면 실제로 사용해 확인하세요. 추측으로 조회 결과를 만들지 말고, 실패하면 실제 오류를 설명하세요. 질문에 답하면 앱이 그 답을 ${names[task.requester]}에게 자동으로 돌려줍니다.\n\n${agentHandoffProtocol(task.agent,task.noHandoff)}`;
       }
@@ -1838,6 +1829,15 @@
       }
       return `${context}당신이 이 작업의 시작 담당입니다. 직접 작업을 진행하고 사용자에게 줄 결과를 완성하세요.\n\n${agentHandoffProtocol(task.agent,task.noHandoff)}`;
     }
+    // 프롬프트에 넣는 보드 인덱스 — 빈 섹션(빈 보드 manifest만 ~170토큰)을 걷어내고,
+    // 내용 있는 섹션만 나열한다. 완전히 비었으면 null(블록 자체를 생략).
+    function promptBoardIndex(board){
+      let m=null;try{m=board?window.TriadSharedContext.manifest(board):null;}catch{}
+      if(!m)return null;
+      const sections=(m.sections||[]).filter(s=>s.name!=='objective'&&((s.characters||0)>4||(s.items||0)>0));
+      if(!sections.length)return null;
+      return {documentId:m.documentId,title:m.title,phase:m.phase,revision:m.revision,sections};
+    }
     function buildIndependentPrompt(agent, prompt, sharedContext, recentContext='', referencePacket=[]) {
       // Short greetings/acks skip the full task-run scaffold (project & board
       // reads, mandatory submit_contribution) so a "ㅎㅇ?" stays a "ㅎㅇ?".
@@ -1845,21 +1845,25 @@
         const chat=recentContext?`\n\n직전 관련 맥락(대명사·수정 지시 연결용):\n${recentContext}`:'';
         return `${prompt}${chat}\n\n이건 짧은 대화성 메시지입니다. 프로젝트 파일·git·공유 보드를 읽지 말고, submit_contribution도 하지 말고, 한두 문장으로 가볍게만 답하세요. 실제 작업 지시가 오면 그때 정식으로 진행하겠다고 안내해도 됩니다.`;
       }
-      const board=sharedContext?.board;let manifest=null;
-      try { manifest=board?window.TriadSharedContext.manifest(board):null; } catch {}
+      const board=sharedContext?.board;const boardIndex=promptBoardIndex(board);
       const related=recentContext?`\n\n직전 관련 맥락(대명사·수정 지시를 현재 요청과 연결할 때만 사용하고, 프로젝트의 현재 상태는 직접 확인하세요):\n${recentContext}`:'';const references=referencePacket.length?`\n\n사용자 지정 참고 실행 기록(압축본):\n${JSON.stringify(referencePacket)}`:'';
-      return `${prompt}${related}${references}\n\nTriad 독립 실행 공유 문서 manifest:\n${JSON.stringify(manifest)}\n\n위 제한된 직전 맥락 외 전체 transcript나 상대 AI의 원문 답변은 요청하거나 읽지 마세요. 과거 맥락이 꼭 필요할 때만 shared_context_read로 history 또는 contributions를 선택해 읽고, 그 외에는 필요한 공유 보드 섹션과 프로젝트 파일만 읽으세요. 작업을 마친 뒤 submit_contribution 도구로 runId: ${sharedContext?.runId||''}에 자신의 요약과 근거를 반드시 기록하세요. 이 실행에서는 상대 AI 호출을 하지 마세요.`;
+      const boardBlock=boardIndex?`\n\n공유 문서 인덱스(필요 섹션만 shared_context_read로 읽기):\n${JSON.stringify(boardIndex)}`:'';
+      // 질문·논의성(작업 신호 없음)이면 기여 기록을 선택으로 낮춘다 — 문구가
+      // contribution 체크 정규식(`submit_contribution 도구로 runId`)과 일치하지
+      // 않아 미기록 빨간 점도 뜨지 않는다. 작업성 메시지는 종전대로 필수 기록.
+      const inquiry=!referencePacket.length&&window.TriadMessageIntent?.isInquiry?.(prompt);
+      const record=inquiry
+        ?`결과가 다음 작업에 참고될 만하면 submit_contribution(runId: ${sharedContext?.runId||''})으로 짧게 남겨도 됩니다(선택).`
+        :`작업을 마친 뒤 submit_contribution 도구로 runId: ${sharedContext?.runId||''}에 요약과 근거를 짧게 기록하세요.`;
+      return `${prompt}${related}${references}${boardBlock}\n\n전체 transcript나 상대 AI의 원문 답변은 제공되지 않으며 요청하지 마세요. 과거 맥락이 꼭 필요할 때만 shared_context_read(history/contributions)를 사용하세요. ${record} 이 실행에서는 상대 AI를 호출하지 마세요. 사용자에게 보이는 답변에서는 보드·기록 절차를 언급하지 말고 요청 자체에 집중하세요.`;
     }
-    const COLLAB_SESSION_TURN_CAP=8;
     function collabSessionStore(flow, agent) {
-      // Flow sessions live outside the chat session's rotation/budget guard, so
-      // cap resumes per agent within a flow.  Past the cap we drop the session
-      // (the next turn starts fresh and re-primes full context via resuming=false),
-      // bounding accumulation on long debates.  Returns flow.sessions so dispatch
+      // Flow sessions resume for the whole collaboration (no turn cap) — the
+      // flow itself is bounded by rounds/handoff limits, and the CLIs manage
+      // their own context compaction.  Returns flow.sessions so dispatch
       // resumes from — and capture writes back to — the same isolated store.
       if(!flow.sessions)flow.sessions={codex:null,claude:null};
       if(!flow.sessionTurns)flow.sessionTurns={codex:0,claude:0};
-      if((flow.sessionTurns[agent]||0)>=COLLAB_SESSION_TURN_CAP){flow.sessions[agent]=null;flow.sessionTurns[agent]=0;}
       flow.sessionTurns[agent]=(flow.sessionTurns[agent]||0)+1;
       return flow.sessions;
     }
@@ -1951,13 +1955,20 @@
       const sameConversationContext=state.collaboration.mode==='independent'?independentContextForConversation(state.activeConversationId):null;
       // Capture before adding this user bubble: both immediate and queued work
       // get the same bounded, per-agent continuation packet from send time.
-      const recentContexts=Object.fromEntries(routed.targets.map(agent=>{
+      const recentContexts={};const fallbackContexts={};
+      for(const agent of routed.targets){
         // A resumed session already holds the previous turn; only inject the
         // continuation packet when a fresh/rotated session would start blind.
-        const cfg=state.settings?.[agent]||{};const stats=state.sessionStats?.[agent]||{};
-        const willResume=state.sessions?.[agent]&&cfg.sessionPolicy!=='alwaysNew'&&!window.TriadSessionBudget.shouldRotate(cfg,stats,true);
-        return [agent,willResume?'':window.TriadRecentContext.packetFor(state.messages,agent)];
-      }));
+        // When we DO plan to resume, keep the packet aside — if the CLI can't
+        // find the saved session the auto-retry starts a fresh session, and
+        // without this the retried prompt would carry no context at all
+        // (post-restart amnesia).
+        const cfg=state.settings?.[agent]||{};
+        const willResume=!!(state.sessions?.[agent]&&cfg.sessionPolicy!=='alwaysNew');
+        const packet=window.TriadRecentContext.packetFor(state.messages,agent);
+        recentContexts[agent]=willResume?'':packet;
+        fallbackContexts[agent]=willResume?packet:'';
+      }
       // Reusing a run is safe only for an immediately parallel, other-agent
       // request. A queued follow-up must become a new run after its predecessor
       // (and contribution grace period) finishes.
@@ -1978,12 +1989,12 @@
           // Do not create the next document run while a prior run is writing to
           // the same document.  A queued batch creates one fresh run only when
           // every provider is idle, then launches its selected targets together.
-          if(queued)enqueueIndependentBatch(routed.targets,routed.prompts,original,userMessageId,{objective:references.clean,sharedContext:null,documentId:requestedDocumentId,recentContexts,referencePacket,images});
+          if(queued)enqueueIndependentBatch(routed.targets,routed.prompts,original,userMessageId,{objective:references.clean,sharedContext:null,documentId:requestedDocumentId,recentContexts,fallbackContexts,referencePacket,images});
           else {
             const independentContext=reusableContext||createIndependentSharedContext(references.clean,routed.targets[0]||state.collaboration.lead);
             if(!independentContext?.board||!independentContext.documentId)throw new Error('공유 문서를 준비하지 못했습니다. 문서 목록을 새로고침한 뒤 다시 시도해주세요.');
             markMessageWorkStarted(userMessageId);
-            routed.targets.forEach(agent=>dispatchAgent(agent,buildIndependentPrompt(agent,routed.prompts[agent],independentContext,recentContexts[agent],referencePacket),{sharedContext:independentContext,images}));
+            routed.targets.forEach(agent=>dispatchAgent(agent,buildIndependentPrompt(agent,routed.prompts[agent],independentContext,recentContexts[agent],referencePacket),{sharedContext:independentContext,images,fallbackContext:fallbackContexts[agent]}));
           }
         } else if(queued)enqueueCollaboration(routed.prompt,original,userMessageId,runCollaboration,referencePacket,images);
         else {markMessageWorkStarted(userMessageId);startCollaboration(routed.prompt,runCollaboration,state.activeConversationId,effectiveAgentConfigs(),referencePacket,images);}
@@ -2031,7 +2042,8 @@
           if(state.stopRequested[agent])return;
           if (/No conversation found with session ID/i.test(message) && !state.stopRequested[agent] && !state.pending[agent]?.retried) {
             state.sessions[agent]=null; state.pending[agent].retried=true; state.retryOnTermination[agent]=true; save(); renderSettings();
-          } else recordProviderFailure(agent,message);
+          } else if (scheduleContextLimitRetry(agent,message)) { /* headless 압축 실패 → 새 세션 재시도 */ }
+          else recordProviderFailure(agent,message);
         }
       }
     }
@@ -2244,6 +2256,19 @@
         });
       },120);
     }
+    // CLI가 headless 모드에서 자체 압축에 실패하고 문맥 한도로 죽는 드문 경우의
+    // 안전망 — 무차별 회전 대신, 실제 초과 에러일 때만 새 세션 + 압축맥락으로
+    // 자동 재시도한다(회전 정책 제거의 보완).
+    function scheduleContextLimitRetry(agent, message) {
+      if(!/prompt is too long|too many tokens|context (?:window|length|limit)|exceeds? .*context|input length and `max_tokens` exceed/i.test(String(message||'')))return false;
+      if(state.stopRequested[agent])return false;
+      const p=state.pending[agent];
+      if(!p||p.retried)return false;
+      if(p.isolated){if(p.sessionStore)p.sessionStore[agent]=null;}
+      else state.sessions[agent]=null;
+      p.retried=true;p.retryReason='context';state.retryOnTermination[agent]=true;save();renderSettings();
+      return true;
+    }
     function retryAgent(agent) {
       if(state.pending[agent]?.conversationId&&state.pending[agent].conversationId!==state.activeConversationId)return withPendingConversation(agent,()=>retryAgent(agent));
       state.retryOnTermination[agent]=false; state.stderr[agent]=''; state.lineBuffers[agent]='';
@@ -2251,8 +2276,12 @@
       if (!pending) { finishAgent(agent,1); return; }
       if(state.stopRequested[agent]){finishStoppedAgent(agent);return;}
       pending.runId=id();
-      addTrace(agent,'info','저장된 세션을 찾지 못해 새 세션으로 자동 재시도');
-      post({action:'run',agent,conversationId:pending.conversationId,slotId:`${pending.conversationId}:${agent}`,prompt:pending.prompt,config:pending.config||state.settings[agent],agentConfigs:pending.agentConfigs||state.settings,collaboration:pending.collaboration||activeCollaboration(),mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,pending.sharedContext),sharedContext:pending.sharedContext||null,session:null,runId:pending.runId,images:pending.images||[]});
+      addTrace(agent,'info',pending.retryReason==='context'?'문맥 한도 초과, 새 세션으로 자동 재시도':'저장된 세션을 찾지 못해 새 세션으로 자동 재시도');
+      // The original prompt assumed a resumed session and omitted the recent
+      // context — a fresh session would start blind (post-restart amnesia).
+      // Re-attach the continuation packet captured at send time.
+      const fallback=pending.fallbackContext?`\n\n직전 관련 맥락(세션 재개 실패로 새 세션에서 시작 — 대명사·이전 지시 연결용):\n${pending.fallbackContext}`:'';
+      post({action:'run',agent,conversationId:pending.conversationId,slotId:`${pending.conversationId}:${agent}`,prompt:pending.prompt+fallback,config:pending.config||state.settings[agent],agentConfigs:pending.agentConfigs||state.settings,collaboration:pending.collaboration||activeCollaboration(),mcpEnabled:window.TriadCollaboration.shouldEnableMcp(state.orchestration,pending.sharedContext),sharedContext:pending.sharedContext||null,session:null,runId:pending.runId,images:pending.images||[]});
     }
 
     window.nativeEvent = event => {
@@ -2292,7 +2321,7 @@
           state.conversations=[migrated];state.activeConversationId=migrated.id;
         }
         const base=defaults(event.home);
-        state.settings={codex:normalizeSessionSettings(liftLegacySessionDefaults({...base.codex,...(state.settings?.codex||{})})),claude:normalizeSessionSettings(liftLegacySessionDefaults({...base.claude,...(state.settings?.claude||{})}))};
+        state.settings={codex:normalizeSessionSettings({...base.codex,...(state.settings?.codex||{})}),claude:normalizeSessionSettings({...base.claude,...(state.settings?.claude||{})})};
         state.workspace=normalizeWorkspace(loaded.find(item=>item.id===state.activeConversationId)?.workspace,state.settings,event.home);
         normalizeSessionStats(state.sessionStats||{});
         providerPaths={codex:event.codexPath||'codex',claude:event.claudePath||'claude'};
@@ -2483,8 +2512,8 @@
     function refreshProjectFiles(){agents.forEach(requestProjectFiles);}
     function sessionSummary(agent) {
       const config=state.settings?.[agent]||{};const stats=state.sessionStats?.[agent]||{};const lang=effectiveLocale();
-      const policyMap={auto:{en:'Auto',ko:'자동'},continue:{en:'Continuing',ko:'계속'},alwaysNew:{en:'Always new',ko:'항상 새'}};
-      const policy=(policyMap[config.sessionPolicy]||policyMap.auto)[lang];
+      const policyMap={continue:{en:'Continuing',ko:'계속'},alwaysNew:{en:'Always new',ko:'항상 새'}};
+      const policy=(policyMap[config.sessionPolicy]||policyMap.continue)[lang];
       const totalInput=Math.round((stats.sessionInputTokens||0)/1000);const contextInput=Math.round((stats.lastInputTokens||0)/1000);
       const fresh=state.sessions?.[agent]?'':L('sessionFresh');
       return L('sessionSummary',{policy,turns:stats.turns||0,total:totalInput,context:contextInput,fresh});
@@ -2554,15 +2583,13 @@
           <details class="settings-group" data-section="session" ${open.session?'open':''}>
             <summary>세션 <span class="settings-group-summary">${sessionSummary(agent)}</span></summary>
             <div class="settings-group-body">
-              <div class="field"><label>세션 정책</label><select data-key="sessionPolicy"><option value="auto" ${c.sessionPolicy==='auto'?'selected':''}>자동 회전 (권장)</option><option value="continue" ${c.sessionPolicy==='continue'?'selected':''}>계속 유지</option><option value="alwaysNew" ${c.sessionPolicy==='alwaysNew'?'selected':''}>항상 새 세션</option></select></div>
-              ${c.sessionPolicy==='auto'?`<div class="row"><div class="field"><label>턴 기준</label><input data-key="sessionTurnLimit" type="number" min="2" max="50" value="${c.sessionTurnLimit}"></div><div class="field"><label>현재 문맥 기준</label><input data-key="sessionTokenLimit" type="number" min="8000" max="500000" step="1000" value="${c.sessionTokenLimit}"></div></div><p class="fast-note">직전 요청의 실측 문맥이 기준(기본 170k)이거나 턴 기준(기본 50턴)에 도달한 다음 일반 작업부터 새 세션으로 시작합니다. 기본값이 높아 일반 대화는 거의 회전하지 않고 세션·프롬프트 캐시를 유지하며, 회전은 문맥이 모델 윈도우에 근접할 때의 안전장치입니다. 캐시 포함 논리 입력은 문맥 측정용이며 과금 추정이 아닙니다.</p>`:''}
+              <div class="field"><label>세션 정책</label><select data-key="sessionPolicy"><option value="continue" ${c.sessionPolicy!=='alwaysNew'?'selected':''}>계속 유지 (기본)</option><option value="alwaysNew" ${c.sessionPolicy==='alwaysNew'?'selected':''}>항상 새 세션</option></select><p class="fast-note">CLI가 스스로 문맥을 관리하므로 세션은 계속 이어집니다. 아래 요약의 토큰 수치는 참고용입니다.</p></div>
               <div class="session-row"><span>${sessionSummary(agent)}</span><button class="small-btn reset-session" ${state.running[agent]?'disabled':''}>다음 작업부터 새 세션</button></div>
             </div>
           </details>`;
         card.querySelectorAll('.settings-group').forEach(group=>group.addEventListener('toggle',()=>{state.settingsOpen[agent][group.dataset.section]=group.open;}));
         card.querySelectorAll('[data-key]').forEach(input=>input.addEventListener('change',()=>{
           const key=input.dataset.key;c[key]=(key==='networkAccess'||key==='allowLocalBinding')?input.value==='true':input.value;
-          if(key==='sessionTurnLimit'||key==='sessionTokenLimit'){Object.assign(c,window.TriadSessionBudget.normalizePolicy(c));}
           if(agent==='codex'&&input.dataset.key==='model') { const selected=state.codexModels.find(model=>model.slug===c.model); if(selected&&!selected.efforts.includes(c.effort))c.effort=selected.defaultEffort||selected.efforts[0]; }
           save(); renderSettings(); renderStatus();if(input.dataset.key==='authMode'||input.dataset.key==='executablePath')requestAuthStatus(agent);if(input.dataset.key==='workspacePath'){requestBranch(agent);requestProjectFiles(agent);}
         }));
@@ -2610,8 +2637,7 @@
     function promptEstimateLabel(agent,prompt) {
       const input=window.TriadSessionBudget.estimateTokens(prompt);const config=state.settings?.[agent]||{};
       const stats=state.sessionStats?.[agent]||{};const resume=state.sessions?.[agent]
-        && config.sessionPolicy!=='alwaysNew'
-        && !window.TriadSessionBudget.shouldRotate(config,stats,true);
+        && config.sessionPolicy!=='alwaysNew';
       const context=resume&&stats.lastInputTokens?` · 세션 문맥 약 ${stats.lastInputTokens.toLocaleString(dtLocale())} 토큰`:'';
       return `${names[agent]} ${prompt.length.toLocaleString(dtLocale())}자 · 입력 약 ${input.toLocaleString(dtLocale())} 토큰${context}`;
     }

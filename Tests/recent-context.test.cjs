@@ -62,9 +62,12 @@ test('긴 답변은 head와 tail을 보존하며 bounded packet으로 자른다'
 
 test('전송 시점 패킷은 즉시 실행과 대기열에 같은 agent별 snapshot으로 연결된다', () => {
   assert.match(renderer, /<script src="recent-context\.js"><\/script>/);
-  assert.match(renderer, /const recentContexts=Object\.fromEntries\(routed\.targets\.map\(agent=>\{/);
-  // 재개 세션이면 최근맥락을 생략(히스토리에 이미 있음), 신규/회전 세션에만 주입
-  assert.match(renderer, /willResume\?'':window\.TriadRecentContext\.packetFor\(state\.messages,agent\)/);
+  assert.match(renderer, /const recentContexts=\{\};const fallbackContexts=\{\};/);
+  // 재개 세션이면 최근맥락을 생략(히스토리에 이미 있음), 신규/회전 세션에만 주입.
+  // 재개 예정이던 턴은 fallback으로 보관 — 재개 실패 재시도 때 재주입.
+  assert.match(renderer, /const packet=window\.TriadRecentContext\.packetFor\(state\.messages,agent\)/);
+  assert.match(renderer, /recentContexts\[agent\]=willResume\?'':packet;/);
+  assert.match(renderer, /fallbackContexts\[agent\]=willResume\?packet:'';/);
   assert.match(renderer, /recentContexts:clone\(options\.recentContexts\|\|\{\}\)/);
   assert.match(renderer, /item\.recentContexts\?\.\[agent\]\|\|''/);
   assert.match(renderer, /buildIndependentPrompt\(agent,routed\.prompts\[agent\],independentContext,recentContexts\[agent\],referencePacket\)/);

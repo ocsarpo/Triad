@@ -18,11 +18,12 @@ test('dispatchAgent은 isolated일 때 sessionStore에서 재개하고 pending�
   assert.match(renderer, /state\.pending\[agent\]=\{prompt,retried:false,isolated,sessionStore,/);
 });
 
-test('flow 세션은 per-agent 턴 캡으로 회전한다 (rider a)', () => {
-  assert.match(renderer, /const COLLAB_SESSION_TURN_CAP=8;/);
+test('flow 세션은 협업 내내 캡 없이 유지된다 (자동 회전 제거)', () => {
+  // 턴 캡 제거 — flow 길이는 rounds/위임 한도로 유한하고 CLI가 문맥을 관리한다.
+  assert.doesNotMatch(renderer, /COLLAB_SESSION_TURN_CAP/);
   assert.match(renderer, /function collabSessionStore\(flow, agent\)/);
-  assert.match(renderer, /flow\.sessions\[agent\]=null;flow\.sessionTurns\[agent\]=0;/);
-  // 두 협업 dispatch 경로 모두 캡을 거쳐 sessionStore를 전달
+  assert.match(renderer, /flow\.sessionTurns\[agent\]=\(flow\.sessionTurns\[agent\]\|\|0\)\+1;/);
+  // 두 협업 dispatch 경로 모두 flow 세션 store를 전달
   assert.match(renderer, /const store=collabSessionStore\(flow,task\.agent\);dispatchAgent\(task\.agent,buildAgentPrompt/);
   assert.match(renderer, /const store=collabSessionStore\(flow,task\.agent\);dispatchAgent\(task\.agent,buildCollaborationPrompt/);
 });

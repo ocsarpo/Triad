@@ -44,3 +44,31 @@ test('MAX_LENGTH 초과는 인사말이어도 conversational 아님', () => {
   assert.ok(longGreeting.length > intent.MAX_LENGTH);
   assert.equal(intent.isConversational(longGreeting), false);
 });
+
+test('작업 신호 없는 질문·의견은 inquiry (기여 기록 선택 티어)', () => {
+  for (const value of [
+    '리액트랑 뷰 중에 뭐가 나아?', '이 방식 어떻게 생각해?', '왜 그렇게 되는 거야',
+    '지금 구조 어때?', '캐시를 쓰는 게 맞을까', 'MSA가 뭔지 궁금해서 그런데 뭐야?',
+    '몇 명이서 개발하는 게 좋아?', '네 의견은?', '어느 쪽을 추천해?'
+  ]) {
+    assert.equal(intent.isInquiry(value), true, `inquiry여야 함: ${value}`);
+  }
+});
+
+test('작업 신호가 있으면 질문형이어도 inquiry 아님 (필수 기록 유지)', () => {
+  for (const value of [
+    '이 버그 왜 나는지 분석해줄래?', '이 파일 좀 봐줄래?', '테스트 왜 깨져? 고쳐줘',
+    'src/main.kt 어떻게 생각해?', '이 쿼리 실행하면 어떻게 돼?', '커밋해도 될까?'
+  ]) {
+    assert.equal(intent.isInquiry(value), false, `작업이어야 함: ${value}`);
+  }
+});
+
+test('inquiry 경계: 빈 값·평서문 지시·초과 길이는 아님', () => {
+  assert.equal(intent.isInquiry(''), false);
+  assert.equal(intent.isInquiry(null), false);
+  assert.equal(intent.isInquiry('오늘 서버 점검 있었음'), false); // 질문 신호 없음
+  const long = '이게 맞을까? ' + '조금 더 자세히 말하면 상황이 이렇습니다. '.repeat(10);
+  assert.ok(long.length > intent.INQUIRY_MAX_LENGTH);
+  assert.equal(intent.isInquiry(long), false);
+});

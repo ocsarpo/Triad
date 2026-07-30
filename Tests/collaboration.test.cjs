@@ -79,8 +79,12 @@ test('공유 보드 프롬프트는 manifest-first이며 독립 실행에 과거
   const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html'), 'utf8');
   assert.match(renderer, /sections,maxCharacters:4000/);
   assert.match(renderer, /window\.TriadSharedContext\.manifest\(board\)/);
-  assert.match(renderer, /history 또는 contributions를 선택해 읽고/);
+  assert.match(renderer, /shared_context_read\(history\/contributions\)를 사용하세요/);
   assert.doesNotMatch(renderer, /sections:\['objective','constraints','decision'\],maxCharacters:12000/);
+  // 빈 보드 인덱스는 생략(빈 manifest ~170토큰 낭비 방지), 내용 있는 섹션만 나열
+  assert.match(renderer, /function promptBoardIndex\(board\)/);
+  assert.match(renderer, /\(s\.characters\|\|0\)>4\|\|\(s\.items\|\|0\)>0/);
+  assert.match(renderer, /const boardBlock=boardIndex\?/);
 });
 
 test('공유 문서 화면은 현재 작업과 접이식 실행 기록을 분리해 렌더한다', () => {

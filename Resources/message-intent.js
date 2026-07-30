@@ -42,5 +42,20 @@
     return GREETING.test(core);
   }
 
-  return { isConversational, MAX_LENGTH };
+  // Questions/opinions with no task signal — a middle tier between chit-chat
+  // and real work.  These runs still answer properly (files may be read) but
+  // the shared-doc contribution becomes optional, so the answer talks about
+  // the question instead of board bookkeeping.  Conservative: any TASK_HINT
+  // falls through to the full path with the mandatory record.
+  const INQUIRY_MAX_LENGTH = 200;
+  const INQUIRY_HINTS = /[?？]|어때|어떻|생각(?:해|은|이|하)|왜\s|왜$|뭐|무엇|뭔지|무슨|누구|언제|어디|얼마|몇|맞아|맞냐|맞나|을까|일까|할까|ㄹ까|는가|은가|인가|건가|냐$|냐\s|니\?|다고\?|의견|추천(?:해줘|해줄|은)?$|비교/;
+
+  function isInquiry(text) {
+    const value = String(text || '').trim();
+    if (!value || value.length > INQUIRY_MAX_LENGTH) return false;
+    if (TASK_HINTS.test(value)) return false;
+    return INQUIRY_HINTS.test(value);
+  }
+
+  return { isConversational, isInquiry, MAX_LENGTH, INQUIRY_MAX_LENGTH };
 });

@@ -45,8 +45,8 @@ test('종료 이벤트는 실행 ID로 늦은 이벤트를 무시한다', () => 
 });
 
 test('대기열 생명주기 변경의 앱 버전은 이 테스트에서 검증한다', () => {
-  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.48\.17<\/string>/);
-  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>87<\/string>/);
+  assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>0\.48\.18<\/string>/);
+  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>88<\/string>/);
 });
 
 test('독립 실행은 대상 슬롯과 공유 문서 충돌을 분리해 판단한다', () => {
@@ -58,7 +58,7 @@ test('독립 실행은 대상 슬롯과 공유 문서 충돌을 분리해 판단
   assert.match(renderer, /if\(targets\.some\(agent=>state\.running\[agent\]\)\)return true/);
   assert.match(renderer, /const sameConversationContext=state\.collaboration\.mode==='independent'\?independentContextForConversation\(state\.activeConversationId\):null/);
   assert.match(renderer, /const reusableContext=sameConversationContext&&routed\.targets\.every\(agent=>!state\.running\[agent\]\)\?sameConversationContext:null/);
-  assert.match(renderer, /enqueueIndependentBatch\(routed\.targets,routed\.prompts,original,userMessageId,\{objective:references\.clean,sharedContext:null,documentId:requestedDocumentId,recentContexts,referencePacket,images\}\)/);
+  assert.match(renderer, /enqueueIndependentBatch\(routed\.targets,routed\.prompts,original,userMessageId,\{objective:references\.clean,sharedContext:null,documentId:requestedDocumentId,recentContexts,fallbackContexts,referencePacket,images\}\)/);
   assert.match(renderer, /const independentContext=reusableContext\|\|createIndependentSharedContext/);
   assert.match(renderer, /item\.sharedContext\|\|createIndependentSharedContext/);
   assert.match(renderer, /targets\.some\(agent=>state\.running\[agent\]\)\|\|runningDocumentConflict\(item\.conversationId,documentId,item\.sharedContext\)/);

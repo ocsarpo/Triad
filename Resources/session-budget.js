@@ -4,12 +4,10 @@
   else root.TriadSessionBudget = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   const AGENTS = ['codex', 'claude'];
-  // Rotation is a last-resort guard, not a routine event: a fresh session
-  // discards the CLI prompt cache, so rotating often makes conversational use
-  // *more* expensive.  These high defaults keep normal chats on one cached,
-  // natively-resumed session; rotation only fires as the logical context nears
-  // the model window.  The CLIs auto-compact before then anyway.
-  const DEFAULT_POLICY = { sessionPolicy: 'auto', sessionTurnLimit: 50, sessionTokenLimit: 170000 };
+  // No automatic rotation: the CLIs (codex/claude) manage their own context
+  // compaction, so Triad keeps one natively-resumed, cached session per agent
+  // like the CLIs themselves do.  Stats below are informational only.
+  const DEFAULT_POLICY = { sessionPolicy: 'continue' };
 
   function estimateTokens(value) {
     const text = String(value || '');
@@ -46,49 +44,24 @@
   }
 
   function outputTokens(usage) { return numberAt(usage, ['output_tokens', 'outputTokens']); }
-  function clamp(value, fallback, minimum, maximum) {
-    const number = Number(value);
-    return Number.isInteger(number) && number >= minimum && number <= maximum ? number : fallback;
-  }
   function normalizePolicy(value = {}) {
-    return {
-      sessionPolicy: ['auto', 'continue', 'alwaysNew'].includes(value.sessionPolicy) ? value.sessionPolicy : DEFAULT_POLICY.sessionPolicy,
-      sessionTurnLimit: clamp(value.sessionTurnLimit, DEFAULT_POLICY.sessionTurnLimit, 2, 50),
-      sessionTokenLimit: clamp(value.sessionTokenLimit, DEFAULT_POLICY.sessionTokenLimit, 8000, 500000)
-    };
+    // Legacy 'auto' (rotation policy, removed) maps to 'continue'.
+    const policy = value.sessionPolicy === 'alwaysNew' ? 'alwaysNew' : DEFAULT_POLICY.sessionPolicy;
+    return { sessionPolicy: policy };
   }
-  function blankAgentStats(value = {}, options = {}) {
-    const hasMeasuredUsage = Number(value.turns) > 0
-      || Number(value.sessionInputTokens) > 0
-      || Number(value.lastInputTokens) > 0
-      || Number(value.lastOutputTokens) > 0;
-    // v0.40 introduced per-session accounting after existing CLI session IDs
-    // had already been persisted.  Treat an unmarked zero-usage resumed
-    // session as unknown rather than as a cheap, empty session: auto policy
-    // must rotate it once before using it again.
-    const requiresFreshSession = typeof value.requiresFreshSession === 'boolean'
-      ? value.requiresFreshSession
-      : !!options.hasResumeSession && !hasMeasuredUsage;
+  function blankAgentStats(value = {}) {
     return {
       turns: Math.max(0, Number(value.turns) || 0),
       sessionInputTokens: Math.max(0, Number(value.sessionInputTokens) || 0),
       lastInputTokens: Math.max(0, Number(value.lastInputTokens) || 0),
       lastOutputTokens: Math.max(0, Number(value.lastOutputTokens) || 0),
       sessionId: typeof value.sessionId === 'string' && value.sessionId ? value.sessionId : null,
-      rotations: Math.max(0, Number(value.rotations) || 0),
-      requiresFreshSession
+      rotations: Math.max(0, Number(value.rotations) || 0)
     };
   }
-  function normalizeStats(value = {}, sessions = {}) {
+  function normalizeStats(value = {}) {
     const source = value && typeof value === 'object' ? value : {};
-    const resumed = sessions && typeof sessions === 'object' ? sessions : {};
-    return Object.fromEntries(AGENTS.map(agent => {
-      const current = source[agent] || {};
-      return [agent, blankAgentStats(current, {
-        hasResumeSession: typeof resumed[agent] === 'string' && resumed[agent]
-          || typeof current.sessionId === 'string' && current.sessionId
-      })];
-    }));
+    return Object.fromEntries(AGENTS.map(agent => [agent, blankAgentStats(source[agent] || {})]));
   }
   function recordUsage(stats, agent, usage, options = {}) {
     const next = normalizeStats(stats);
@@ -101,7 +74,6 @@
     else { current.turns += 1; current.sessionInputTokens += input; }
     current.lastInputTokens = input;
     current.lastOutputTokens = output;
-    current.requiresFreshSession = false;
     if (typeof options.sessionId === 'string' && options.sessionId) current.sessionId = options.sessionId;
     return next;
   }
@@ -112,14 +84,8 @@
     const next = normalizeStats(stats);
     if (!AGENTS.includes(agent)) return next;
     const rotations = next[agent].rotations + (options.incrementRotation ? 1 : 0);
-    next[agent] = blankAgentStats({ rotations, requiresFreshSession: false });
+    next[agent] = blankAgentStats({ rotations });
     return next;
   }
-  function shouldRotate(policy, stats, hasResumeSession) {
-    const normalized = normalizePolicy(policy);
-    const current = blankAgentStats(stats);
-    return normalized.sessionPolicy === 'auto' && !!hasResumeSession
-      && (current.requiresFreshSession || current.turns >= normalized.sessionTurnLimit || current.lastInputTokens >= normalized.sessionTokenLimit);
-  }
-  return { estimateTokens, logicalInputTokens, outputTokens, normalizePolicy, normalizeStats, recordUsage, recordCompletion, resetAgent, shouldRotate, DEFAULT_POLICY };
+  return { estimateTokens, logicalInputTokens, outputTokens, normalizePolicy, normalizeStats, recordUsage, recordCompletion, resetAgent, DEFAULT_POLICY };
 });

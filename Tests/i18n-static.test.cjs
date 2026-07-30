@@ -72,7 +72,7 @@ test('Phase 2: 설정·협업·상태 크롬이 사전에 있고 텍스트노드
   assert.equal(i18n.chrome('en', '세션 정책'), 'Session policy');
   assert.equal(i18n.chrome('en', '작업 권한'), 'Permissions');
   assert.equal(i18n.chrome('en', '언어 모델'), 'Language model');
-  assert.equal(i18n.chrome('en', '자동 회전 (권장)'), 'Auto-rotate (recommended)');
+  assert.equal(i18n.chrome('en', '계속 유지 (기본)'), 'Keep session (default)');
   // 협업 컨트롤 라벨/상태
   assert.equal(i18n.chrome('en', '작업 시작'), 'Start work');
   assert.equal(i18n.chrome('en', '두 AI가 번갈아 토론'), 'The two AIs debate in turns');

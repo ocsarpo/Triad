@@ -27,6 +27,7 @@ const auth = require('./lib/auth');
 const usage = require('./lib/usage');
 const broker = require('./lib/broker');
 const models = require('./lib/models');
+const worktree = require('./lib/worktree');
 
 let win = null;
 // App language for the native menu + dialogs. OS-detected at ready; kept in
@@ -190,7 +191,7 @@ function slotIdForRequest(request, agent, conversationId, runId) {
 
 // Port of main.m:1162-1372 runAgent: — MCP broker wiring intentionally omitted
 // for the prototype (see TODO(phase2) markers).
-function runAgent(request) {
+async function runAgent(request) {
   const agent = util.stringOrNil(request.agent);
   const prompt = util.stringOrNil(request.prompt);
   const config = util.dictOrNil(request.config);
@@ -216,6 +217,14 @@ function runAgent(request) {
     emit(meta({ type: 'error', message: M('cliNotFound', { path: executable || '' }) }));
     return;
   }
+
+  // 같은-레포 충돌 격리: 모든 실행 경로가 이 지점을 지나므로 여기서 한 번만
+  // 스왑하면 spawn cwd·codex --cd·MCP 헬퍼(agentConfigs)가 전부 워크트리를 본다.
+  const isolationNote = await worktree.ensureIsolation({
+    conversationId, agent, config,
+    agentConfigs: util.dictOrNil(request.agentConfigs), emit,
+  });
+  if (running.has(slotId)) { emit(meta({ type: 'error', message: M('busy') })); return; }
 
   const workspace = util.stringOrDefault(config.workspacePath, os.homedir());
   const model = util.stringOrDefault(config.model, '');
@@ -317,6 +326,8 @@ function runAgent(request) {
     else args.push('--session-id', crypto.randomUUID().toLowerCase());
   }
 
+  if (isolationNote) promptToSend += isolationNote;
+
   const env = Object.assign({}, process.env);
   env.PATH = platform.agentPathEnv(os.homedir());
   env.TERM = 'dumb';
@@ -370,6 +381,30 @@ function stopAgent(request) {
   if (!child) return;
   try { process.kill(-child.pid, 'SIGTERM'); }
   catch { try { child.kill('SIGTERM'); } catch { /* already gone */ } }
+}
+
+async function worktreeAdoptAction(payload) {
+  const conversationId = util.stringOrNil(payload.conversationId) || '';
+  const agent = util.stringOrNil(payload.agent) || '';
+  try {
+    const result = await worktree.adopt(conversationId, agent);
+    emit({ type: 'worktreeAdoptResult', conversationId, agent, applied: result.applied, empty: result.empty, conflicts: result.conflicts });
+    emit({ type: 'worktreeState', conversationId, worktrees: { [agent]: null } });
+  } catch (error) {
+    emit({ type: 'worktreeError', conversationId, agent, message: (error && error.message) || '채택 실패' });
+  }
+}
+
+async function worktreeDiscardAction(payload) {
+  const conversationId = util.stringOrNil(payload.conversationId) || '';
+  const agent = util.stringOrNil(payload.agent) || '';
+  try {
+    await worktree.discard(conversationId, agent);
+    emit({ type: 'worktreeDiscardResult', conversationId, agent });
+    emit({ type: 'worktreeState', conversationId, worktrees: { [agent]: null } });
+  } catch (error) {
+    emit({ type: 'worktreeError', conversationId, agent, message: (error && error.message) || '폐기 실패' });
+  }
 }
 
 // ---- other actions ---------------------------------------------------------
@@ -504,7 +539,9 @@ function dispatch(payload) {
     case 'deleteToken': return deleteTokenAction(payload);
     case 'tokenStatus': return emit({ type: 'tokenStatus', status: tokenStore.status() });
     case 'saveConversation': return conversationStore.saveConversation(payload.conversation);
-    case 'deleteConversation': return conversationStore.deleteConversation(payload.id);
+    case 'deleteConversation': void worktree.cleanupConversation(util.stringOrNil(payload.id) || ''); return conversationStore.deleteConversation(payload.id);
+    case 'worktreeAdopt': return void worktreeAdoptAction(payload);
+    case 'worktreeDiscard': return void worktreeDiscardAction(payload);
     case 'listSharedDocuments': return emit({ type: 'sharedDocuments', documents: sharedDocs.listDocuments() });
     case 'saveSharedDocument': return saveSharedDocumentAction(payload);
     case 'deleteSharedDocument': return deleteSharedDocumentAction(payload);
@@ -529,6 +566,6 @@ ipcMain.on('triad:post', (event, payload) => {
 });
 
 app.on('before-quit', () => { ptyStop(); });
-app.whenReady().then(() => { try { appLang = detectLang(app.getLocale()); } catch { /* keep en */ } createWindow(); setupMenu(); });
+app.whenReady().then(() => { worktree.configure({ userDataDir: app.getPath('userData'), gitBin: platform.gitBin() }); void worktree.gcOrphans(); try { appLang = detectLang(app.getLocale()); } catch { /* keep en */ } createWindow(); setupMenu(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

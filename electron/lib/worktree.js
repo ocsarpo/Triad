@@ -109,7 +109,43 @@ async function ensure(conversationId, slot, root) {
   return { ...reg[key], created: true };
 }
 
+const OTHER = { codex: 'claude', claude: 'codex' };
+function publicEntry(entry) { return { path: entry.path, branch: entry.branch, root: entry.root, createdAt: entry.createdAt }; }
+
+// send()가 두 슬롯을 같은 틱에 디스패치하므로 ensure 경합을 전역 체인으로 직렬화.
+let chain = Promise.resolve();
+function serialized(work) {
+  const next = chain.then(work, work);
+  chain = next.then(() => {}, () => {});
+  return next;
+}
+
+async function ensureIsolation({ conversationId, agent, config, agentConfigs, emit }) {
+  try {
+    if (!conversationId || !config || !OTHER[agent]) return '';
+    const other = OTHER[agent];
+    const wsSelf = typeof config.workspacePath === 'string' ? config.workspacePath : '';
+    const wsOther = typeof agentConfigs?.[other]?.workspacePath === 'string' ? agentConfigs[other].workspacePath : '';
+    if (!wsSelf || !wsOther) return '';
+    const rootSelf = await resolveRoot(wsSelf);
+    if (!rootSelf) return '';
+    if (await resolveRoot(wsOther) !== rootSelf) return '';
+    const { mine, theirs } = await serialized(async () => ({
+      mine: await ensure(conversationId, agent, rootSelf),
+      theirs: await ensure(conversationId, other, rootSelf),
+    }));
+    config.workspacePath = mine.path;
+    if (agentConfigs?.[agent]) agentConfigs[agent].workspacePath = mine.path;
+    if (agentConfigs?.[other]) agentConfigs[other].workspacePath = theirs.path;
+    if (typeof emit === 'function') emit({ type: 'worktreeState', conversationId, worktrees: { [agent]: publicEntry(mine), [other]: publicEntry(theirs) } });
+    return `\n\n[작업 환경 — 격리 워크트리] 이 실행은 원본 폴더(${rootSelf}) 보호를 위해 격리 git 워크트리(${mine.path}, 브랜치 ${mine.branch})에서 진행됩니다.${mine.created ? ' 워크트리는 방금 원본의 최신 상태(커밋 전 변경 포함) 기준으로 준비되었습니다.' : ''} 파일 변경은 워크트리에만 기록되고, 사용자가 '채택'하면 원본에 반영됩니다. 경로 차이는 신경 쓰지 말고 평소처럼 작업하세요.`;
+  } catch (error) {
+    if (typeof emit === 'function') emit({ type: 'worktreeWarning', conversationId, agent, message: `격리 실패 — 원본에서 직접 작업합니다: ${(error && error.message) || error}` });
+    return '';
+  }
+}
+
 module.exports = {
-  configure, resolveRoot, ensure,
+  configure, resolveRoot, ensure, ensureIsolation,
   _registry: loadRegistry, _saveRegistry: saveRegistry,
 };

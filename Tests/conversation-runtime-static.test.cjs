@@ -33,7 +33,7 @@ test('브랜치·파일 목록·diff 캐시는 대화별 런타임에 두고 요
   assert.match(renderer,/'branchStatus','projectFiles','diff'/);
   assert.match(renderer,/action:'gitBranch',agent,workspace,conversationId:state\.activeConversationId/);
   assert.match(renderer,/action:'projectFiles',agent,workspace,conversationId:state\.activeConversationId/);
-  assert.match(renderer,/action:'projectDiff',agent,workspace:effectiveWorkspacePath\(agent\),conversationId:state\.activeConversationId/);
+  assert.match(renderer,/action:'projectDiff',agent,workspace:wt\?\.path\|\|effectiveWorkspacePath\(agent\),conversationId:state\.activeConversationId/);
   assert.match(renderer,/event\?\.conversationId&&event\.conversationId!==state\.activeConversationId/);
   assert.match(renderer,/if\(!isBackgroundRuntime\(\)\)renderDiff\(\)/);
   assert.match(renderer,/if\(!isBackgroundRuntime\(\)\)renderSettings\(\)/);

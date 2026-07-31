@@ -78,6 +78,7 @@
       border: 1px solid var(--line); border-radius: 12px; background: var(--card);
     }
     .agent-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #37a862; flex: none; }
+    .wt-badge { font-size: 12px; margin-left: 4px; cursor: help; }
     .agent-pill.running .dot { background: #e69a2e; box-shadow: 0 0 0 4px rgba(230,154,46,.15); }
     .agent-pill strong { display: block; font-size: 12px; line-height: 1.2; }
     .agent-pill small { display: block; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; }
@@ -398,8 +399,8 @@
         <div class="brand"><h1>Triad</h1><p>나 · Codex · Claude — 멘션 기반 AI 작업방</p></div>
         <div class="head-controls">
           <button class="update-banner" id="update-banner" hidden></button>
-          <div class="agent-pill" id="pill-codex"><span class="dot"></span><div><strong>Codex</strong><small id="summary-codex"></small><small class="usage-summary" id="usage-codex"></small></div></div>
-          <div class="agent-pill" id="pill-claude"><span class="dot"></span><div><strong>Claude</strong><small id="summary-claude"></small><small class="usage-summary" id="usage-claude"></small></div></div>
+          <div class="agent-pill" id="pill-codex"><span class="dot"></span><div><strong>Codex</strong><small id="summary-codex"></small><small class="usage-summary" id="usage-codex"></small></div><span id="wt-codex" class="wt-badge" hidden>🌿</span></div>
+          <div class="agent-pill" id="pill-claude"><span class="dot"></span><div><strong>Claude</strong><small id="summary-claude"></small><small class="usage-summary" id="usage-claude"></small></div><span id="wt-claude" class="wt-badge" hidden>🌿</span></div>
           <button class="usage-refresh" id="refresh-usage" title="사용량 새로고침">↻</button>
           <button class="trace-toggle" id="diff-toggle">변경 사항</button>
           <button class="trace-toggle" id="board-toggle">공유 보드</button>
@@ -410,7 +411,7 @@
       <div class="chat-workspace">
         <div class="message-pane"><main class="messages" id="messages"></main><button class="scroll-bottom" id="scroll-bottom" hidden>↓ 맨 아래</button></div>
         <section class="diff-pane" id="diff-pane" aria-label="프로젝트 변경 사항" hidden>
-          <div class="diff-head"><h2 id="diff-title">변경 사항</h2><select id="diff-agent"><option value="codex">Codex 폴더</option><option value="claude">Claude 폴더</option></select><span class="diff-workspace" id="diff-workspace"></span><span class="spacer"></span><button class="small-btn" id="diff-refresh">↻</button><button class="small-btn" id="diff-close">닫기</button></div>
+          <div class="diff-head"><h2 id="diff-title">변경 사항</h2><select id="diff-agent"><option value="codex">Codex 폴더</option><option value="claude">Claude 폴더</option></select><span class="diff-workspace" id="diff-workspace"></span><span class="spacer"></span><span id="wt-actions" hidden><button class="small-btn" id="wt-adopt" title="워크트리 변경을 원본 작업 폴더에 반영">🌿 채택</button><button class="small-btn" id="wt-discard" title="워크트리 변경을 모두 버림">폐기</button></span><button class="small-btn" id="diff-refresh">↻</button><button class="small-btn" id="diff-close">닫기</button></div>
           <div class="diff-body"><nav class="diff-file-list" id="diff-file-list" aria-label="변경 파일 목록"></nav><pre class="diff-content" id="diff-content"></pre></div>
         </section>
         <section class="board-pane" id="board-pane" aria-label="에이전트 공유 문서" hidden>
@@ -518,7 +519,7 @@
       running: { codex: false, claude: false },
       responseIds: {}, lineBuffers: { codex: '', claude: '' }, stderr: { codex: '', claude: '' },
       brokerMessages:{},
-      clipboardRequests:{}, copyFeedback:{}, pendingImages:[], expandedTexts:{},
+      clipboardRequests:{}, copyFeedback:{}, pendingImages:[], expandedTexts:{}, worktrees:{},
       localePref: localStorage.getItem('triad.locale')||'auto',
       pending: {}, retryOnTermination: { codex:false, claude:false }, stopRequested: { codex:false, claude:false },
       tokenStatus: { codex: false, claude: false },
@@ -691,6 +692,9 @@
     function effectiveWorkspacePath(agent, settings=state.settings, workspace=state.workspace) {
       const normalized=normalizeWorkspace(workspace,settings);return normalized.separate?settings?.[agent]?.workspacePath||normalized.commonPath:normalized.commonPath||settings?.[agent]?.workspacePath||'';
     }
+    // 같은-레포 충돌 격리(메인 runAgent가 스왑) 상태의 렌더러 미러 — 배지·diff
+    // 경로·채택 버튼 표시용. 실제 경로 교체는 메인이 하므로 여기 값은 표시 전용.
+    function activeWorktree(agent){ return state.worktrees?.[state.activeConversationId]?.[agent]||null; }
     // 상호작용 프롬프트용 작업 환경 라인 — 두 에이전트가 "같은 저장소겠지"로
     // 가정하다 로그 대조 핑퐁을 벌이는 걸 막는다. 다른 폴더면 양쪽 경로와
     // "상대 폴더는 안 보이는 게 정상"을 명시하고, 같으면 한 줄로 끝.
@@ -699,6 +703,8 @@
       const norm=p=>String(p||'').replace(/\/+$/,'');
       const mine=norm(effectiveWorkspacePath(agent));const theirs=norm(effectiveWorkspacePath(other));
       if(!mine||!theirs)return '';
+      const conv=state.worktrees?.[state.activeConversationId];
+      if(conv?.[agent]&&conv?.[other])return `\n작업 환경: 당신과 ${names[other]}는 같은 저장소(${conv[agent].root})를 서로 다른 격리 워크트리에서 작업합니다(당신: ${conv[agent].path}). 상대 워크트리의 파일 변경은 당신에게 보이지 않는 것이 정상이고, 원본 반영은 사용자의 채택으로 이뤄집니다.`;
       if(mine===theirs)return `\n작업 환경: 당신과 ${names[other]}는 같은 작업 폴더(${mine})를 봅니다.`;
       return `\n작업 환경: 당신의 작업 폴더 = ${mine} · ${names[other]}의 작업 폴더 = ${theirs} — 서로 다른 폴더/저장소입니다. 상대 폴더의 파일·커밋·브랜치는 당신에게 보이지 않는 것이 정상이며, 그쪽 확인이 필요하면 상대에게 요청하세요.`;
     }
@@ -1025,11 +1031,14 @@
     }
     function refreshProjectDiff(agent=state.diff.agent) {
       if(!state.settings?.[agent])return;state.diff.agent=agent;state.diff.loading=true;state.diff.error='';if(!isBackgroundRuntime())renderDiff();
-      post({action:'projectDiff',agent,workspace:effectiveWorkspacePath(agent),conversationId:state.activeConversationId});
+      const wt=activeWorktree(agent);
+      post({action:'projectDiff',agent,workspace:wt?.path||effectiveWorkspacePath(agent),conversationId:state.activeConversationId});
     }
     function renderDiff() {
       const pane=document.getElementById('diff-pane');const content=document.getElementById('diff-content');const fileList=document.getElementById('diff-file-list');const chat=document.querySelector('.chat');if(!pane||!content||!fileList||!chat)return;
       pane.hidden=!state.diff.visible;chat.classList.toggle('diff-open',state.diff.visible);document.getElementById('diff-agent').value=state.diff.agent;
+      const wtActions=document.getElementById('wt-actions');
+      if(wtActions){const wt=activeWorktree(state.diff.agent);wtActions.hidden=!wt;const busy=!!state.running[state.diff.agent];document.getElementById('wt-adopt').disabled=busy;document.getElementById('wt-discard').disabled=busy;}
       const toggle=document.getElementById('diff-toggle');if(toggle)toggle.textContent=state.diff.visible?'변경 사항 닫기':'변경 사항';
       document.getElementById('diff-workspace').textContent=state.diff.workspace||effectiveWorkspacePath(state.diff.agent)||'';
       const previousFileScroll=fileList.scrollTop;content.innerHTML='';fileList.innerHTML='';document.getElementById('diff-title').textContent='변경 사항';
@@ -2325,6 +2334,21 @@
         if(!event.success){state.accountStatus[event.agent]={...state.accountStatus[event.agent],checking:false,busy:false,connected:false,message:event.message||tc('인증 작업 실패')};renderSettings();addTrace(event.agent,'error','계정 인증 실패',event.message||'');alert(event.message||tc('계정 인증에 실패했습니다.'));}
         else addTrace(event.agent,'success',event.operation==='logout'?'CLI 계정 로그아웃':'CLI 계정 연결 완료');
       }
+      else if(event.type==='worktreeState'){
+        const current=state.worktrees[event.conversationId]||{};
+        for(const [slot,entry] of Object.entries(event.worktrees||{})){ if(entry)current[slot]=entry; else delete current[slot]; }
+        if(Object.keys(current).length)state.worktrees[event.conversationId]=current; else delete state.worktrees[event.conversationId];
+        if(!isBackgroundRuntime()){renderStatus(false);if(state.diff.visible)renderDiff();}
+      }
+      else if(event.type==='worktreeWarning'){withConversation(event.conversationId,()=>{addTrace(event.agent||'codex','error','워크트리 격리 실패',event.message||'');addMessage('system',`⚠️ ${event.message||'격리 실패 — 원본에서 직접 작업합니다.'}`);save();});}
+      else if(event.type==='worktreeAdoptResult'){withConversation(event.conversationId,()=>{
+        const who=names[event.agent]||event.agent;
+        if(event.empty)addMessage('system',`🌿 ${who}의 워크트리에 채택할 변경이 없어 정리만 했습니다.`);
+        else if(event.conflicts?.length)addMessage('system',`🌿 ${who}의 작업을 원본에 채택했지만 ${event.conflicts.length}개 파일에서 충돌이 났습니다. 충돌 마커(<<<<<<<)를 확인해 정리하세요:\n${event.conflicts.join('\n')}`);
+        else addMessage('system',`🌿 ${who}의 작업을 원본 작업 폴더에 채택했습니다. 변경 사항을 확인한 뒤 평소처럼 커밋하세요.`);
+        save();});refreshProjectDiff(event.agent);}
+      else if(event.type==='worktreeDiscardResult'){withConversation(event.conversationId,()=>{addMessage('system',`🌿 ${names[event.agent]||event.agent}의 격리 워크트리를 폐기했습니다.`);save();});refreshProjectDiff(event.agent);}
+      else if(event.type==='worktreeError'){withConversation(event.conversationId,()=>{addMessage('system',`⚠️ 워크트리 작업 실패: ${event.message||''}`);save();});}
       else if(event.type==='diffResult') {state.diff={...state.diff,loading:false,agent:event.agent||state.diff.agent,text:event.text||'',error:event.error||'',workspace:event.workspace||'',truncated:!!event.truncated,selectedFileId:null};if(!isBackgroundRuntime())renderDiff();}
       else if(event.type==='branchResult') {
         if(effectiveWorkspacePath(event.agent)===event.workspace){state.branchStatus[event.agent]={loading:false,kind:event.kind||'unknown',label:event.label||'확인 불가',workspace:event.workspace};if(!isBackgroundRuntime())renderSettings();}
@@ -2341,6 +2365,8 @@
         document.getElementById(`pill-${agent}`).classList.toggle('running',state.running[agent]);
         const c=state.settings[agent]; document.getElementById(`summary-${agent}`).textContent=`${c.model} · ${c.effort} · ${c.speedMode}`;
         document.getElementById(`stop-${agent}`).hidden=!state.running[agent];
+        const wtBadge=document.getElementById(`wt-${agent}`);
+        if(wtBadge){const wt=activeWorktree(agent);wtBadge.hidden=!wt;if(wt)wtBadge.title=`격리 워크트리에서 작업 중\n${wt.path}\n브랜치 ${wt.branch}`;}
       }
       renderCollaboration();
       if(renderConversationList)renderConversations();
@@ -2697,6 +2723,8 @@
     document.getElementById('diff-close').onclick=closeDiff;
     document.getElementById('diff-refresh').onclick=()=>refreshProjectDiff();
     document.getElementById('diff-agent').onchange=event=>refreshProjectDiff(event.target.value);
+    document.getElementById('wt-adopt').onclick=()=>{const agent=state.diff.agent;if(!activeWorktree(agent)||state.running[agent])return;if(!confirm(`${names[agent]}의 워크트리 변경을 원본 작업 폴더에 채택할까요?`))return;post({action:'worktreeAdopt',conversationId:state.activeConversationId,agent});};
+    document.getElementById('wt-discard').onclick=()=>{const agent=state.diff.agent;if(!activeWorktree(agent)||state.running[agent])return;if(!confirm(`${names[agent]}의 워크트리 변경을 모두 버릴까요? 되돌릴 수 없습니다.`))return;post({action:'worktreeDiscard',conversationId:state.activeConversationId,agent});};
     document.getElementById('diff-content').addEventListener('scroll',syncDiffFileFromScroll,{passive:true});
     document.getElementById('board-toggle').onclick=openBoard;
     document.getElementById('board-new').onclick=()=>createSharedDocument();

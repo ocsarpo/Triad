@@ -23,7 +23,7 @@ test('실제 실행과 큐는 중앙 effective workspace 설정의 snapshot을 �
   assert.match(renderer,/const agentConfigs=clone\(options\.agentConfigs\|\|effectiveAgentConfigs\(\)\)/);
   assert.match(renderer,/settings:clone\(effectiveAgentConfigs\(\)\)/);
   assert.match(renderer,/const workspace=effectiveWorkspacePath\(agent\)/);
-  assert.match(renderer,/workspace:effectiveWorkspacePath\(agent\),conversationId:state\.activeConversationId/);
+  assert.match(renderer,/workspace:wt\?\.path\|\|effectiveWorkspacePath\(agent\),conversationId:state\.activeConversationId/);
 });
 
 test('공통 모드 UI는 공통 picker만 활성화하고 에이전트별 workspace control만 비활성화한다',()=>{

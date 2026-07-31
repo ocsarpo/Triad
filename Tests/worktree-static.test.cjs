@@ -25,3 +25,27 @@ test('worktreeAdopt/worktreeDiscard 액션과 대화 삭제 정리·부팅 GC가
   assert.match(main, /worktree\.configure\(\{ userDataDir: app\.getPath\('userData'\), gitBin: platform\.gitBin\(\) \}\)/);
   assert.match(main, /void worktree\.gcOrphans\(\)/);
 });
+
+const renderer = fs.readFileSync(path.join(__dirname, '../Resources/index.html'), 'utf8');
+
+test('렌더러가 worktree 이벤트 5종을 처리하고 diff 요청이 워크트리 경로를 우선한다', () => {
+  for (const type of ['worktreeState', 'worktreeWarning', 'worktreeAdoptResult', 'worktreeDiscardResult', 'worktreeError']) {
+    assert.match(renderer, new RegExp(`event\\.type==='${type}'`));
+  }
+  assert.match(renderer, /activeWorktree\(agent\)/);
+  assert.match(renderer, /wt\?\.path\|\|effectiveWorkspacePath\(agent\)/);
+});
+
+test('채택/폐기 버튼이 confirm 후 IPC로 나가고 실행 중엔 비활성화된다', () => {
+  assert.match(renderer, /action:'worktreeAdopt'/);
+  assert.match(renderer, /action:'worktreeDiscard'/);
+  assert.match(renderer, /id="wt-adopt"/);
+  assert.match(renderer, /id="wt-discard"/);
+  assert.match(renderer, /wt-adopt'\)\.disabled=busy/);
+});
+
+test('격리 중엔 workspaceContextLine이 워크트리 상황을 설명하고 슬롯 배지가 있다', () => {
+  assert.match(renderer, /서로 다른 격리 워크트리/);
+  assert.match(renderer, /id="wt-codex"/);
+  assert.match(renderer, /id="wt-claude"/);
+});

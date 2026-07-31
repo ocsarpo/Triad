@@ -145,7 +145,64 @@ async function ensureIsolation({ conversationId, agent, config, agentConfigs, em
   }
 }
 
+async function adopt(conversationId, slot) {
+  const reg = loadRegistry();
+  const entry = reg[`${conversationId}:${slot}`];
+  if (!entry) throw new Error('격리 워크트리가 없습니다.');
+  // 현재 상태 봉인 → 베이스라인 대비 델타만 패치로 뽑는다(사용자 dirty 스냅샷은
+  // 베이스라인 안에 있으므로 중복 반영되지 않는다).
+  await runGitImpl(['add', '-A'], entry.path);
+  await runGitImpl(gitIdentity(['commit', '--no-verify', '--allow-empty', '-m', `triad: ${slot} 작업 채택`]), entry.path);
+  const head = (await runGitImpl(['rev-parse', 'HEAD'], entry.path)).output.trim();
+  const diff = await runGitImpl(['diff', '--binary', `${entry.baseline}..${head}`], entry.path);
+  if (!diff.data.length) { await discard(conversationId, slot); return { applied: false, empty: true, conflicts: [] }; }
+  const apply = await runGitImpl(['apply', '--3way', '--whitespace=nowarn'], entry.root, diff.data);
+  if (apply.code !== 0) {
+    const unmerged = await runGitImpl(['diff', '--name-only', '--diff-filter=U'], entry.root);
+    const conflicts = unmerged.output.split('\n').filter(Boolean);
+    // 충돌 파일도 안 남았으면 아예 적용 실패 — 원본 무변경, 워크트리 보존.
+    if (!conflicts.length) throw new Error(`패치를 적용하지 못했습니다: ${(apply.error || '').trim().slice(0, 400)}`);
+    await discard(conversationId, slot);
+    return { applied: true, empty: false, conflicts };
+  }
+  await discard(conversationId, slot);
+  return { applied: true, empty: false, conflicts: [] };
+}
+
+async function discard(conversationId, slot) {
+  const reg = loadRegistry();
+  const key = `${conversationId}:${slot}`;
+  const entry = reg[key];
+  if (!entry) return false;
+  await runGitImpl(['worktree', 'remove', '--force', entry.path], entry.root);
+  fs.rmSync(entry.path, { recursive: true, force: true });
+  await runGitImpl(['worktree', 'prune'], entry.root);
+  await runGitImpl(['branch', '-D', entry.branch], entry.root);
+  delete reg[key];
+  saveRegistry();
+  return true;
+}
+
+async function cleanupConversation(conversationId) {
+  const reg = loadRegistry();
+  for (const key of Object.keys(reg)) {
+    if (reg[key].conversationId === conversationId) await discard(conversationId, reg[key].slot);
+  }
+}
+
+async function gcOrphans() {
+  const reg = loadRegistry();
+  for (const key of Object.keys(reg)) {
+    const entry = reg[key];
+    if (fs.existsSync(path.join(entry.path, '.git'))) continue;
+    await runGitImpl(['worktree', 'prune'], entry.root);
+    delete reg[key];
+  }
+  saveRegistry();
+}
+
 module.exports = {
   configure, resolveRoot, ensure, ensureIsolation,
+  adopt, discard, cleanupConversation, gcOrphans,
   _registry: loadRegistry, _saveRegistry: saveRegistry,
 };

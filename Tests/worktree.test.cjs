@@ -152,6 +152,68 @@ test('ensureIsolation: 동시 호출도 슬롯당 워크트리를 한 번만 만
   assert.equal(adds.length, 2); // codex용 1 + claude용 1 (4가 아님)
 });
 
+async function adoptSetup(t, applyResult, diffData = Buffer.from('diff --git a/f b/f\n')) {
+  const root = tmpDir(t, 'triad-wt-root-');
+  const calls = [];
+  worktree.configure({
+    userDataDir: tmpDir(t, 'triad-wt-data-'),
+    runGitImpl: async (args, cwd, input) => {
+      calls.push({ args, cwd, input });
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return { code: 0, output: root + '\n', error: '', data: Buffer.alloc(0) };
+      if (args[0] === 'worktree' && args[1] === 'add') { fs.mkdirSync(path.join(args[2], '.git'), { recursive: true }); return { code: 0, output: '', error: '', data: Buffer.alloc(0) }; }
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { code: 0, output: 'headsha\n', error: '', data: Buffer.alloc(0) };
+      if (args[0] === 'diff' && args.includes('--binary')) return { code: 0, output: diffData.toString(), error: '', data: diffData };
+      if (args[0] === 'apply') return applyResult;
+      if (args[0] === 'diff' && args.includes('--diff-filter=U')) return { code: 0, output: 'src/conflict.js\n', error: '', data: Buffer.alloc(0) };
+      return { code: 0, output: '', error: '', data: Buffer.alloc(0) };
+    },
+  });
+  await worktree.ensure('c1', 'codex', root);
+  return { root, calls };
+}
+
+test('adopt: 패치를 원본에 --3way로 적용하고 워크트리를 정리한다', async t => {
+  const { root, calls } = await adoptSetup(t, { code: 0, output: '', error: '', data: Buffer.alloc(0) });
+  const result = await worktree.adopt('c1', 'codex');
+  assert.deepEqual(result, { applied: true, empty: false, conflicts: [] });
+  const apply = calls.find(c => c.args[0] === 'apply');
+  assert.ok(apply.args.includes('--3way'));
+  assert.equal(apply.cwd, root);           // 원본에서 적용
+  assert.ok(apply.input && apply.input.length); // 패치는 stdin으로
+  assert.equal(worktree._registry()['c1:codex'], undefined); // 채택 후 레지스트리 정리
+});
+
+test('adopt: 3way 충돌이면 충돌 파일 목록을 돌려주고 정리한다', async t => {
+  await adoptSetup(t, { code: 1, output: '', error: 'Applied patch to src/conflict.js with conflicts.', data: Buffer.alloc(0) });
+  const result = await worktree.adopt('c1', 'codex');
+  assert.equal(result.applied, true);
+  assert.deepEqual(result.conflicts, ['src/conflict.js']);
+});
+
+test('adopt: 델타가 비어 있으면 적용 없이 정리만 한다', async t => {
+  const { calls } = await adoptSetup(t, { code: 0, output: '', error: '', data: Buffer.alloc(0) }, Buffer.alloc(0));
+  const result = await worktree.adopt('c1', 'codex');
+  assert.equal(result.empty, true);
+  assert.ok(!calls.some(c => c.args[0] === 'apply'));
+});
+
+test('discard: 워크트리 제거·브랜치 삭제·레지스트리 정리', async t => {
+  const { calls } = await adoptSetup(t, { code: 0, output: '', error: '', data: Buffer.alloc(0) });
+  assert.equal(await worktree.discard('c1', 'codex'), true);
+  assert.ok(calls.some(c => c.args[0] === 'worktree' && c.args[1] === 'remove'));
+  assert.ok(calls.some(c => c.args[0] === 'branch' && c.args[1] === '-D'));
+  assert.equal(worktree._registry()['c1:codex'], undefined);
+  assert.equal(await worktree.discard('c1', 'codex'), false); // 이미 없음
+});
+
+test('gcOrphans: 디렉토리가 사라진 항목을 레지스트리에서 걷어낸다', async t => {
+  await adoptSetup(t, { code: 0, output: '', error: '', data: Buffer.alloc(0) });
+  const entry = worktree._registry()['c1:codex'];
+  fs.rmSync(entry.path, { recursive: true, force: true });
+  await worktree.gcOrphans();
+  assert.equal(worktree._registry()['c1:codex'], undefined);
+});
+
 test('레지스트리는 userData/worktrees.json에 저장되고 재로드된다', async t => {
   const dataDir = tmpDir(t, 'triad-wt-data-');
   worktree.configure({ userDataDir: dataDir, runGitImpl: async () => ({ code: 0, output: '', error: '', data: Buffer.alloc(0) }) });

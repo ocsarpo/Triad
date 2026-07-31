@@ -164,7 +164,7 @@ async function adoptSetup(t, applyResult, diffData = Buffer.from('diff --git a/f
       if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { code: 0, output: 'headsha\n', error: '', data: Buffer.alloc(0) };
       if (args[0] === 'diff' && args.includes('--binary')) return { code: 0, output: diffData.toString(), error: '', data: diffData };
       if (args[0] === 'apply') return applyResult;
-      if (args[0] === 'diff' && args.includes('--diff-filter=U')) return { code: 0, output: 'src/conflict.js\n', error: '', data: Buffer.alloc(0) };
+      if (args[0] === 'ls-files' && args.includes('-u')) return { code: 0, output: '100644 abc 1\tsrc/conflict.js\n100644 def 2\tsrc/conflict.js\n', error: '', data: Buffer.alloc(0) };
       return { code: 0, output: '', error: '', data: Buffer.alloc(0) };
     },
   });

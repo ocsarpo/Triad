@@ -21,11 +21,11 @@ function configure(options = {}) {
   registry = null; // 위치가 바뀌었을 수 있으니 다음 접근 때 다시 읽는다
 }
 
-// git-ops.js runGit 미러 + 패치 스트리밍용 stdin input 지원.
-function runGit(args, cwd, input = null) {
+// git-ops.js runGit 미러 + 패치 스트리밍용 stdin input·환경변수(임시 인덱스) 지원.
+function runGit(args, cwd, input = null, extraEnv = null) {
   return new Promise(resolve => {
     let child;
-    try { child = spawn(settings.gitBin, args, { cwd }); }
+    try { child = spawn(settings.gitBin, args, { cwd, env: extraEnv ? { ...process.env, ...extraEnv } : undefined }); }
     catch (error) { resolve({ code: -1, output: '', error: (error && error.message) || 'git 실행 실패', data: Buffer.alloc(0) }); return; }
     const stdoutChunks = []; const stderrChunks = [];
     child.stdout.on('data', chunk => stdoutChunks.push(chunk));
@@ -156,14 +156,26 @@ async function adopt(conversationId, slot) {
   const head = (await runGitImpl(['rev-parse', 'HEAD'], entry.path)).output.trim();
   const diff = await runGitImpl(['diff', '--binary', `${entry.baseline}..${head}`], entry.path);
   if (!diff.data.length) { await discard(conversationId, slot); return { applied: false, empty: true, conflicts: [] }; }
-  const apply = await runGitImpl(['apply', '--3way', '--whitespace=nowarn'], entry.root, diff.data);
-  if (apply.code !== 0) {
-    const unmerged = await runGitImpl(['diff', '--name-only', '--diff-filter=U'], entry.root);
-    const conflicts = unmerged.output.split('\n').filter(Boolean);
-    // 충돌 파일도 안 남았으면 아예 적용 실패 — 원본 무변경, 워크트리 보존.
-    if (!conflicts.length) throw new Error(`패치를 적용하지 못했습니다: ${(apply.error || '').trim().slice(0, 400)}`);
-    await discard(conversationId, slot);
-    return { applied: true, empty: false, conflicts };
+  // apply --3way는 --index를 함축해 "워킹트리 == 인덱스"를 요구한다 — 사용자
+  // dirty 상태에서는 즉시 거부("does not match index"). 임시 인덱스에 현재
+  // 워킹트리를 스테이징해 그 기준으로 적용하면 3-way가 동작하면서도 실제
+  // 인덱스(사용자 스테이징)는 무변화로 남는다.
+  const tmpIndex = path.join(settings.userDataDir, `adopt-index-${process.pid}-${crypto.randomBytes(4).toString('hex')}`);
+  const env = { GIT_INDEX_FILE: tmpIndex };
+  try {
+    fs.mkdirSync(settings.userDataDir, { recursive: true });
+    await runGitImpl(['add', '-A'], entry.root, null, env);
+    const apply = await runGitImpl(['apply', '--3way', '--whitespace=nowarn'], entry.root, diff.data, env);
+    if (apply.code !== 0) {
+      const unmerged = await runGitImpl(['ls-files', '-u'], entry.root, null, env);
+      const conflicts = [...new Set(unmerged.output.split('\n').filter(Boolean).map(line => line.split('\t')[1]).filter(Boolean))];
+      // 충돌 파일도 안 남았으면 아예 적용 실패 — 원본 무변경, 워크트리 보존.
+      if (!conflicts.length) throw new Error(`패치를 적용하지 못했습니다: ${(apply.error || '').trim().slice(0, 400)}`);
+      await discard(conversationId, slot);
+      return { applied: true, empty: false, conflicts };
+    }
+  } finally {
+    fs.rmSync(tmpIndex, { force: true });
   }
   await discard(conversationId, slot);
   return { applied: true, empty: false, conflicts: [] };

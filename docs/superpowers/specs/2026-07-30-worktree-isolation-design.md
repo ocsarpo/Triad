@@ -27,10 +27,12 @@ ask_agent가 모든 런에서 열려 있으므로(v0.48.20 ONE ROOM) 단일 타�
 
 ### 데이터 흐름
 
-1. **감지** — 렌더러가 디스패치 직전 `worktree:ensure` IPC 한 번으로 두 슬롯의
-   workspacePath + conversationId를 전달. 메인이 `git rev-parse --show-toplevel`로
-   두 루트를 해석해 **같으면** 슬롯별 워크트리 경로 쌍을, 다르거나 비-git이면 원본
-   경로를 그대로 반환.
+1. **감지** — 메인 `runAgent()`가 실행 요청을 받을 때마다(모든 경로 — 직접 전송·
+   큐·재시도·대화 — 가 이 지점으로 수렴) `worktree.ensureIsolation()`으로 두 슬롯의
+   workspacePath 루트를 `git rev-parse --show-toplevel`로 해석해 **같으면** 슬롯별
+   워크트리를 확보하고, 다르거나 비-git이면 아무것도 하지 않는다. (구현 중 정제:
+   렌더러 디스패치 직전 IPC 방식은 config 캡처 지점이 3곳+라 누락 위험 — 메인 단일
+   지점 스왑으로 변경.)
 2. **생성** (최초 1회, 이후 재사용)
    - 위치: `app.getPath('userData')/worktrees/<레포해시>/<대화ID8>-<슬롯>`
      (사용자 레포 안을 오염시키지 않음)
@@ -40,10 +42,12 @@ ask_agent가 모든 런에서 열려 있으므로(v0.48.20 ONE ROOM) 단일 타�
    - **베이스라인 커밋**: 워크트리 브랜치 안에서만 `add -A && commit`.
      이후 에이전트 델타 = 베이스라인 대비 diff. 베이스라인 SHA·경로·대화 키는
      userData의 레지스트리 JSON에 기록
-3. **경로 스왑** — 렌더러가 그 런의 effective config에서 `workspacePath`만 워크트리
-   경로로 교체. 이 값이 그대로 spawn cwd/`--cd`(main.js:220,344)와 MCP 헬퍼 설정
-   (triad-mcp-server.cjs `agents[slot].workspacePath`)으로 흐르므로 본체 런과
-   ask_agent 헬퍼가 자동으로 같은 워크트리를 본다.
+3. **경로 스왑** — 메인이 요청의 `config.workspacePath`와
+   `request.agentConfigs[*].workspacePath`를 in-place 교체. 이 값이 그대로 spawn
+   cwd/`--cd`와 MCP 헬퍼 설정(triad-mcp-server.cjs `agents[slot].workspacePath`)으로
+   흐르므로 본체 런과 ask_agent 헬퍼가 자동으로 같은 워크트리를 본다. 렌더러는
+   `worktreeState` 이벤트로 미러(`state.worktrees`)만 유지해 배지·diff·채택 UI를
+   표시한다.
 4. **프롬프트** — 기존 workspace-context 라인에 "격리 워크트리에서 작업 중 — 원본
    반영은 사용자 채택으로" 한 줄 추가.
 
@@ -51,8 +55,10 @@ ask_agent가 모든 런에서 열려 있으므로(v0.48.20 ONE ROOM) 단일 타�
 
 1. 워크트리에서 `add -A && commit` (현재 상태 봉인)
 2. 패치 = `git diff --binary <베이스라인>..HEAD`
-3. 원본에서 `git apply --3way` — 원본 브랜치·히스토리·스테이징 무변화, 작업 카피에
-   변경만 얹힘. 사용자가 평소 도구로 검토·커밋
+3. 원본에서 `git apply --3way` — 단, `--3way`는 `--index`를 함축해 dirty 워킹트리를
+   거부하므로 **임시 인덱스(GIT_INDEX_FILE)에 워킹트리를 스테이징한 뒤 적용**한다.
+   원본 브랜치·히스토리·실제 스테이징 무변화, 작업 카피에 변경만 얹힘. 사용자가
+   평소 도구로 검토·커밋
 4. 3-way 충돌: 채택은 완료하되 충돌 파일 목록을 채팅에 표시(마커는 파일에 남음).
    패치 전체 적용 불가면 원본 무변경 + 에러 메시지
 5. 채택/폐기 후 워크트리 제거, **다음 런 전 재생성**(새 HEAD + 새 dirty 스냅샷).
@@ -86,3 +92,7 @@ ask_agent가 모든 런에서 열려 있으므로(v0.48.20 ONE ROOM) 단일 타�
   이미 그 역할
 - 리드 에이전트 자동 병합 — 사용자 채택으로 확정했으므로 없음
 - Windows 경로 처리 — Electron 마이그레이션의 Windows 단계에서 함께
+
+---
+
+구현: 2026-07-31, 계획 docs/superpowers/plans/2026-07-31-worktree-isolation.md
